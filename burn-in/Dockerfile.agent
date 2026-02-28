@@ -1,0 +1,15 @@
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+ARG TARGETOS TARGETARCH
+ARG VERSION=dev
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -ldflags="-s -w -X main.version=$VERSION" \
+    -o /burnin-agent ./cmd/agent
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates tzdata \
+    smartmontools e2fsprogs e2fsprogs-extra fdisk gdisk
+COPY --from=builder /burnin-agent /usr/local/bin/burnin-agent
+EXPOSE 9200
+ENTRYPOINT ["burnin-agent"]

@@ -2,7 +2,6 @@ package jobs
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -10,71 +9,40 @@ import (
 	"github.com/pineapple/vigil-addons/burn-in/internal/drive"
 )
 
-// Phase constants for the burn-in pipeline.
-const (
-	PhasePreflight     = "PRE-FLIGHT"
-	PhaseSmartShort    = "SMART_SHORT"
-	PhaseBadblocks     = "BADBLOCKS"
-	PhaseSmartExtended = "SMART_EXTENDED"
-	PhaseComplete      = "COMPLETE"
-)
-
-// Severity levels for telemetry log frames.
-const (
-	SeverityInfo    = "info"
-	SeverityWarning = "warning"
-	SeverityError   = "error"
-)
-
 // BurninParams holds the configuration for a single burn-in job.
 type BurninParams struct {
-	BlockSize        int  `json:"block_size"`
-	ConcurrentBlocks int  `json:"concurrent_blocks"`
-	AbortOnError     bool `json:"abort_on_error"`
+	BlockSize        int    `json:"block_size"`
+	ConcurrentBlocks int    `json:"concurrent_blocks"`
+	AbortOnError     bool   `json:"abort_on_error"`
 	LogDir           string `json:"log_dir"`
 }
 
 // BurninResult holds the final outcome of a burn-in job.
 type BurninResult struct {
-	Passed        bool               `json:"passed"`
-	FailReason    string             `json:"fail_reason,omitempty"`
-	DriveInfo     *drive.DriveInfo   `json:"drive_info"`
+	Passed        bool                 `json:"passed"`
+	FailReason    string               `json:"fail_reason,omitempty"`
+	DriveInfo     *drive.DriveInfo     `json:"drive_info"`
 	Baseline      *drive.SmartSnapshot `json:"baseline_snapshot"`
 	FinalSnapshot *drive.SmartSnapshot `json:"final_snapshot"`
 	FinalDelta    *drive.SmartDelta    `json:"final_delta"`
-	BadblockErrs  int                `json:"badblock_errors"`
-	ShortTest     *drive.TestResult  `json:"short_test"`
-	LongTest      *drive.TestResult  `json:"long_test"`
-	TotalDuration time.Duration      `json:"total_duration"`
-}
-
-// TelemetrySink is the interface for emitting telemetry frames during a job.
-// This decouples the orchestrator from the concrete HubTelemetry client.
-type TelemetrySink interface {
-	SendProgress(jobID, command, phase, phaseDetail string, percent, speedMbps float64, tempC int, elapsedSec, etaSec int64, badblockErrs int, smartDeltas json.RawMessage) error
-	SendLog(jobID, severity, message string) error
+	BadblockErrs  int                  `json:"badblock_errors"`
+	ShortTest     *drive.TestResult    `json:"short_test"`
+	LongTest      *drive.TestResult    `json:"long_test"`
+	TotalDuration time.Duration        `json:"total_duration"`
 }
 
 // RunBurnin executes the full five-phase burn-in pipeline for a single drive.
 // It blocks until completion or context cancellation.
 func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParams, sink TelemetrySink, logger *slog.Logger) (*BurninResult, error) {
-	start := time.Now()
 	result := &BurninResult{Passed: true}
-
-	emit := &emitter{
-		sink:    sink,
-		jobID:   jobID,
-		command: "burnin",
-		start:   start,
-		logger:  logger,
-	}
+	emit := newEmitter(sink, jobID, "burnin", logger)
 
 	// ── Phase 1: PRE-FLIGHT ─────────────────────────────────────────────
 	emit.phase(PhasePreflight, "resolving device", 0)
 
 	driveInfo, err := drive.ResolveDrive(devicePath)
 	if err != nil {
-		return nil, emit.fail(result, PhasePreflight, "device resolution failed: %v", err)
+		return nil, failJob(emit, result, PhasePreflight, "device resolution failed: %v", err)
 	}
 	result.DriveInfo = driveInfo
 
@@ -82,14 +50,14 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	emit.phase(PhasePreflight, "safety check", 5)
 
 	if err := drive.IsSafeTarget(driveInfo.Path); err != nil {
-		return nil, emit.fail(result, PhasePreflight, "safety check failed: %v", err)
+		return nil, failJob(emit, result, PhasePreflight, "safety check failed: %v", err)
 	}
 
 	emit.phase(PhasePreflight, "baseline SMART snapshot", 10)
 
 	baseline, err := drive.TakeSnapshot(driveInfo.Path)
 	if err != nil {
-		return nil, emit.fail(result, PhasePreflight, "baseline snapshot failed: %v", err)
+		return nil, failJob(emit, result, PhasePreflight, "baseline snapshot failed: %v", err)
 	}
 	result.Baseline = baseline
 
@@ -105,7 +73,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 
 	shortResult, err := drive.RunShortTest(ctx, driveInfo.Path)
 	if err != nil {
-		return nil, emit.fail(result, PhaseSmartShort, "short test failed: %v", err)
+		return nil, failJob(emit, result, PhaseSmartShort, "short test failed: %v", err)
 	}
 	result.ShortTest = shortResult
 
@@ -137,7 +105,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 
 	if params.LogDir != "" {
 		if err := drive.EnsureLogDir(params.LogDir); err != nil {
-			return nil, emit.fail(result, PhaseBadblocks, "cannot create log dir: %v", err)
+			return nil, failJob(emit, result, PhaseBadblocks, "cannot create log dir: %v", err)
 		}
 	}
 
@@ -150,7 +118,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, emit.fail(result, PhaseBadblocks, "badblocks failed: %v", err)
+		return nil, failJob(emit, result, PhaseBadblocks, "badblocks failed: %v", err)
 	}
 
 	result.BadblockErrs = bbResult.Errors
@@ -161,7 +129,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 			result.Passed = false
 			result.FailReason = fmt.Sprintf("badblocks found %d error(s)", bbResult.Errors)
 			emit.phaseComplete(PhaseBadblocks)
-			return result, emit.fail(result, PhaseBadblocks, "%s", result.FailReason)
+			return result, failJob(emit, result, PhaseBadblocks, "%s", result.FailReason)
 		}
 	} else {
 		emit.log(SeverityInfo, "badblocks completed with zero errors")
@@ -178,7 +146,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 
 	longResult, err := drive.RunLongTest(ctx, driveInfo.Path)
 	if err != nil {
-		return nil, emit.fail(result, PhaseSmartExtended, "extended test failed: %v", err)
+		return nil, failJob(emit, result, PhaseSmartExtended, "extended test failed: %v", err)
 	}
 	result.LongTest = longResult
 
@@ -208,7 +176,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	}
 
 	// ── Phase 5: COMPLETE ───────────────────────────────────────────────
-	result.TotalDuration = time.Since(start)
+	result.TotalDuration = time.Since(emit.start)
 
 	// Determine pass/fail.
 	if !shortResult.Passed || (longResult != nil && !longResult.Passed) {
@@ -232,10 +200,10 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 
 	if result.Passed {
 		emit.log(SeverityInfo, "burn-in PASSED for %s (%s) in %s", driveInfo.Path, driveInfo.Serial, result.TotalDuration.Round(time.Second))
-		emit.jobComplete(result)
+		emit.emitComplete("burn-in passed", result.BadblockErrs, result.FinalDelta)
 	} else {
 		emit.log(SeverityError, "burn-in FAILED for %s (%s): %s", driveInfo.Path, driveInfo.Serial, result.FailReason)
-		emit.jobFailed(result)
+		emit.emitComplete(result.FailReason, result.BadblockErrs, result.FinalDelta)
 	}
 
 	emit.phaseComplete(PhaseComplete)
@@ -243,77 +211,13 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	return result, nil
 }
 
-// emitter wraps TelemetrySink with convenience methods for the orchestrator.
-type emitter struct {
-	sink    TelemetrySink
-	jobID   string
-	command string
-	start   time.Time
-	logger  *slog.Logger
-}
-
-func (e *emitter) elapsed() int64 {
-	return int64(time.Since(e.start).Seconds())
-}
-
-func (e *emitter) phase(phase, detail string, percent float64) {
-	e.progress(phase, detail, percent, 0, 0, 0, nil)
-}
-
-func (e *emitter) progress(phase, detail string, percent, speedMbps float64, tempC int, badblockErrs int, smartDeltas json.RawMessage) {
-	if e.sink == nil {
-		return
-	}
-	if err := e.sink.SendProgress(e.jobID, e.command, phase, detail, percent, speedMbps, tempC, e.elapsed(), 0, badblockErrs, smartDeltas); err != nil {
-		e.logger.Warn("failed to transmit progress", "error", err, "phase", phase)
-	}
-}
-
-func (e *emitter) log(severity, format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
-	e.logger.Info(msg, "job_id", e.jobID, "severity", severity)
-	if e.sink == nil {
-		return
-	}
-	if err := e.sink.SendLog(e.jobID, severity, msg); err != nil {
-		e.logger.Warn("failed to transmit log", "error", err)
-	}
-}
-
-func (e *emitter) phaseComplete(phase string) {
-	e.log(SeverityInfo, "phase %s complete", phase)
-}
-
-func (e *emitter) smartWarning(delta *drive.SmartDelta) {
-	data, err := json.Marshal(delta.Deltas)
-	if err != nil {
-		return
-	}
-	e.progress("SMART_WARNING", "attribute degradation detected", 0, 0, 0, 0, data)
-}
-
-func (e *emitter) jobComplete(result *BurninResult) {
-	var deltaJSON json.RawMessage
-	if result.FinalDelta != nil {
-		deltaJSON, _ = json.Marshal(result.FinalDelta.Deltas)
-	}
-	e.progress(PhaseComplete, "burn-in passed", 100, 0, 0, result.BadblockErrs, deltaJSON)
-}
-
-func (e *emitter) jobFailed(result *BurninResult) {
-	var deltaJSON json.RawMessage
-	if result.FinalDelta != nil {
-		deltaJSON, _ = json.Marshal(result.FinalDelta.Deltas)
-	}
-	e.progress(PhaseComplete, result.FailReason, 100, 0, 0, result.BadblockErrs, deltaJSON)
-}
-
-func (e *emitter) fail(result *BurninResult, phase, format string, args ...any) error {
+// failJob marks the result as failed, emits telemetry, and returns an error.
+func failJob(emit *emitter, result *BurninResult, phase, format string, args ...any) error {
 	msg := fmt.Sprintf(format, args...)
 	result.Passed = false
 	result.FailReason = msg
-	result.TotalDuration = time.Since(e.start)
-	e.log(SeverityError, "%s", msg)
-	e.jobFailed(result)
+	result.TotalDuration = time.Since(emit.start)
+	emit.log(SeverityError, "%s", msg)
+	emit.emitComplete(msg, result.BadblockErrs, result.FinalDelta)
 	return fmt.Errorf("[%s] %s", phase, msg)
 }

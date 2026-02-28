@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -43,7 +44,7 @@ func LoadAgentConfig() (*AgentConfig, error) {
 	}
 
 	if path := os.Getenv("BURNIN_CONFIG_FILE"); path != "" {
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(filepath.Clean(path))
 		if err != nil {
 			return nil, fmt.Errorf("reading config file: %w", err)
 		}

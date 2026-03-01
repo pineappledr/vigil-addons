@@ -1,0 +1,282 @@
+{
+  "name": "burnin-preclear",
+  "version": "1.0.0",
+  "description": "Disk burn-in, SMART testing, and pre-clear formatting tool for new and repurposed drives.",
+  "pages": [
+    {
+      "id": "dashboard",
+      "title": "Dashboard",
+      "icon": "activity",
+      "components": [
+        {
+          "type": "progress",
+          "id": "active-jobs",
+          "title": "Active Jobs",
+          "config": {
+            "multi": true,
+            "show_phase": true,
+            "show_eta": true,
+            "show_speed": true,
+            "show_temperature": true
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "smart-deltas",
+          "title": "SMART Attribute Deltas",
+          "config": {
+            "highlight_deltas": true,
+            "critical_ids": [5, 196, 197, 198],
+            "columns": [
+              { "key": "id", "label": "ID" },
+              { "key": "name", "label": "Attribute" },
+              { "key": "baseline", "label": "Baseline" },
+              { "key": "current", "label": "Current" },
+              { "key": "delta", "label": "Delta" }
+            ]
+          }
+        },
+        {
+          "type": "chart",
+          "id": "temperature-chart",
+          "title": "Drive Temperature",
+          "config": {
+            "chart_type": "line",
+            "x_axis": "time",
+            "y_axis": "temp_c",
+            "y_label": "Temperature (°C)",
+            "thresholds": [
+              { "value": 45, "color": "#f59e0b", "label": "Warning" },
+              { "value": 55, "color": "#ef4444", "label": "Critical" }
+            ],
+            "max_points": 360
+          }
+        },
+        {
+          "type": "log-viewer",
+          "id": "dashboard-logs",
+          "title": "Recent Activity",
+          "config": {
+            "max_lines": 200,
+            "levels": ["info", "warn", "error"],
+            "show_timestamp": true,
+            "show_source": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "new-job",
+      "title": "New Job",
+      "icon": "plus-circle",
+      "components": [
+        {
+          "type": "form",
+          "id": "job-form",
+          "title": "Start New Job",
+          "config": {
+            "fields": [
+              {
+                "name": "command",
+                "label": "Job Type",
+                "type": "select",
+                "required": true,
+                "options": [
+                  { "value": "burnin", "label": "Burn-in Only" },
+                  { "value": "preclear", "label": "Pre-clear Only" },
+                  { "value": "full", "label": "Full (Burn-in + Pre-clear)" }
+                ]
+              },
+              {
+                "name": "agent_id",
+                "label": "Agent",
+                "type": "select",
+                "required": true,
+                "source": "addon_agents",
+                "placeholder": "Select an agent..."
+              },
+              {
+                "name": "target",
+                "label": "Target Drive",
+                "type": "select",
+                "required": true,
+                "source": "agent_drives",
+                "depends_on": "agent_id",
+                "placeholder": "Select a drive..."
+              },
+              {
+                "name": "block_size",
+                "label": "Block Size (bytes)",
+                "type": "number",
+                "default": 4096,
+                "visible_when": { "command": ["burnin", "full"] }
+              },
+              {
+                "name": "concurrent_blocks",
+                "label": "Concurrent Blocks",
+                "type": "number",
+                "default": 65536,
+                "visible_when": { "command": ["burnin", "full"] }
+              },
+              {
+                "name": "abort_on_error",
+                "label": "Abort on first error",
+                "type": "toggle",
+                "default": true,
+                "visible_when": { "command": ["burnin", "full"] }
+              },
+              {
+                "name": "file_system",
+                "label": "File System",
+                "type": "select",
+                "required": true,
+                "default": "ext4",
+                "options": [
+                  { "value": "ext4", "label": "ext4" },
+                  { "value": "xfs", "label": "XFS" },
+                  { "value": "btrfs", "label": "Btrfs" },
+                  { "value": "fat32", "label": "FAT32" },
+                  { "value": "linux-swap", "label": "Linux Swap" },
+                  { "value": "raw", "label": "Raw (ZFS / Unformatted)" }
+                ],
+                "visible_when": { "command": ["preclear", "full"] }
+              },
+              {
+                "name": "reserved_percent",
+                "label": "Reserved Space (%)",
+                "type": "number",
+                "default": 0,
+                "min": 0,
+                "max": 50,
+                "visible_when": { "command": ["preclear", "full"] }
+              },
+              {
+                "name": "confirm_destructive",
+                "label": "I understand this operation will DESTROY ALL DATA on the selected drive.",
+                "type": "checkbox",
+                "required": true,
+                "security_gate": true
+              }
+            ],
+            "action": "execute",
+            "submit_label": "Start Job"
+          }
+        }
+      ]
+    },
+    {
+      "id": "agents",
+      "title": "Agents",
+      "icon": "server",
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "agent-list",
+          "title": "Registered Agents",
+          "config": {
+            "source": "addon_agents",
+            "columns": [
+              { "key": "status", "label": "Status", "format": "status_dot" },
+              { "key": "agent_id", "label": "Agent ID" },
+              { "key": "hostname", "label": "Hostname" },
+              { "key": "arch", "label": "Architecture" },
+              { "key": "drive_count", "label": "Drives" },
+              { "key": "last_seen_at", "label": "Last Seen", "format": "relative_time" },
+              { "key": "_actions", "label": "", "format": "actions", "actions": [{ "type": "delete", "id_key": "agent_id", "label": "Delete agent" }] }
+            ],
+            "expandable": true,
+            "expand_key": "drives",
+            "sortable": true,
+            "default_sort": { "key": "agent_id", "direction": "asc" }
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "drive-inventory",
+          "title": "Drive Inventory",
+          "config": {
+            "source": "agent_drives",
+            "columns": [
+              { "key": "agent_id", "label": "Agent" },
+              { "key": "model", "label": "Model" },
+              { "key": "serial", "label": "Serial" },
+              { "key": "capacity", "label": "Capacity", "format": "bytes" },
+              { "key": "path", "label": "Path" }
+            ]
+          }
+        },
+        {
+          "type": "deploy-wizard",
+          "id": "add-burnin-agent",
+          "title": "Add Burn-in Agent",
+          "config": {
+            "target_label": "Agent",
+            "docker": {
+              "image": "ghcr.io/pineappledr/vigil-addons-burnin-agent",
+              "default_tag": "latest",
+              "container_name": "burnin-agent",
+              "ports": ["9200:9200"],
+              "privileged": true,
+              "volumes": ["/dev:/dev"],
+              "environment": {
+                "BURNIN_HUB_URL": { "source": "prefill", "key": "hub_url", "label": "Hub URL", "hint": "The URL where burn-in agents can reach the Hub" },
+                "BURNIN_HUB_PSK": { "source": "prefill", "key": "hub_psk", "label": "Pre-Shared Key", "hint": "Auto-generated by the Hub. Find it at /var/lib/vigil-hub/hub.psk inside the Hub container" },
+                "BURNIN_AGENT_ID": { "source": "user_input", "label": "Agent ID", "placeholder": "burnin-agent-01" },
+                "BURNIN_AGENT_LISTEN": { "source": "literal", "value": ":9200" },
+                "TZ": { "source": "literal", "value": "${TZ:-UTC}" }
+              },
+              "platforms": {
+                "linux": {
+                  "label": "Standard Linux",
+                  "hint": "Copy the docker-compose.yml to deploy the burn-in agent on a standard Linux host."
+                }
+              }
+            },
+            "prefill_endpoint": "/api/deploy-info"
+          }
+        }
+      ]
+    },
+    {
+      "id": "history",
+      "title": "History",
+      "icon": "clock",
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "job-history",
+          "title": "Job History",
+          "config": {
+            "source": "job_history",
+            "columns": [
+              { "key": "job_id", "label": "Job ID" },
+              { "key": "command", "label": "Type" },
+              { "key": "agent_id", "label": "Agent" },
+              { "key": "target", "label": "Drive" },
+              { "key": "status", "label": "Status" },
+              { "key": "started_at", "label": "Started", "format": "datetime" },
+              { "key": "elapsed", "label": "Duration", "format": "duration" },
+              { "key": "verdict", "label": "Verdict" }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "started_at", "direction": "desc" },
+            "filterable": true,
+            "filter_keys": ["command", "agent_id", "status"]
+          }
+        },
+        {
+          "type": "log-viewer",
+          "id": "history-logs",
+          "title": "Job Logs",
+          "config": {
+            "max_lines": 1000,
+            "levels": ["info", "warn", "error"],
+            "show_timestamp": true,
+            "show_source": true,
+            "filterable_by_job": true
+          }
+        }
+      ]
+    }
+  ]
+}

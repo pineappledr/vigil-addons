@@ -1,0 +1,383 @@
+# Vigil Add-on Developer Guide
+
+This guide explains how to build, package, and publish a new add-on for the [Vigil](https://github.com/pineappledr/vigil) monitoring platform.
+
+---
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [JSON UI Manifest](#json-ui-manifest)
+3. [WebSocket Communication Protocol](#websocket-communication-protocol)
+4. [Multi-Architecture Builds](#multi-architecture-builds)
+5. [CI/CD Pipeline Conventions](#cicd-pipeline-conventions)
+6. [Development Workflow](#development-workflow)
+
+---
+
+## Overview
+
+A Vigil add-on is a standalone Go daemon (or any language that can speak WebSocket + JSON) that:
+
+1. **Registers** with the Vigil server by posting its JSON UI manifest to `POST /api/addons`.
+2. **Connects** via a persistent WebSocket at `ws://<vigil-server>/api/addons/ws?addon_id=<ID>`.
+3. **Streams** telemetry frames (progress, logs, notifications, heartbeats) to the Vigil server.
+4. **Renders** its UI dynamically in the Vigil dashboard via the manifest -- no frontend code required.
+
+Authentication uses a Bearer token provided during add-on registration in the Vigil dashboard.
+
+---
+
+## JSON UI Manifest
+
+Every add-on must provide a JSON manifest that declares its name, version, and UI layout. The Vigil dashboard renders this manifest dynamically.
+
+### Structure
+
+```json
+{
+  "name": "my-addon",
+  "version": "1.0.0",
+  "description": "What this add-on does",
+  "pages": [
+    {
+      "id": "dashboard",
+      "title": "Dashboard",
+      "icon": "activity",
+      "components": [
+        {
+          "type": "progress",
+          "id": "job-progress",
+          "title": "Active Jobs",
+          "config": { ... }
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Top-Level Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Unique identifier for the add-on |
+| `version` | string | yes | Semantic version |
+| `description` | string | yes | Brief description |
+| `pages` | array | yes | UI pages to render in the dashboard |
+
+### Page Object
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | yes | Unique page identifier |
+| `title` | string | yes | Tab label in the dashboard |
+| `icon` | string | no | Icon name (Lucide icon set) |
+| `components` | array | yes | Components rendered on this page |
+
+### Supported Component Types
+
+| Type | Purpose | Key Config Options |
+|------|---------|-------------------|
+| `form` | Input forms with validation, field dependencies, and security gates | `fields[]`, `action`, `submit_label` |
+| `progress` | Job progress bars with phase tracking, ETA, and throughput | `multi`, `show_phase`, `show_eta`, `show_speed`, `show_temperature` |
+| `chart` | Chart.js-based data visualization (line, bar, etc.) | `chart_type`, `x_axis`, `y_axis`, `thresholds[]`, `max_points` |
+| `smart-table` | Data tables with sorting, filtering, and expandable rows | `columns[]`, `source`, `sortable`, `filterable`, `expandable` |
+| `log-viewer` | Real-time streaming log viewer with level filtering | `max_lines`, `levels[]`, `show_timestamp`, `filterable_by_job` |
+
+### Form Field Types
+
+| Type | Description |
+|------|-------------|
+| `select` | Dropdown. Use `source` for dynamic options (`addon_agents`, `agent_drives`) |
+| `number` | Numeric input with optional `min`/`max` |
+| `text` | Free-text input |
+| `toggle` | Boolean toggle switch |
+| `checkbox` | Checkbox. Set `security_gate: true` for destructive confirmation |
+
+### Conditional Visibility
+
+Fields can be shown or hidden based on other field values using `depends_on` (for cascading dropdowns) or `visible_when` (for conditional sections):
+
+```json
+{
+  "name": "block_size",
+  "label": "Block Size",
+  "type": "number",
+  "visible_when": { "command": ["burnin", "full"] }
+}
+```
+
+### Limits
+
+| Constraint | Limit |
+|------------|-------|
+| Maximum pages | 20 |
+| Maximum total components | 50 |
+| Maximum form fields per form | 100 |
+| Maximum manifest size | 256 KiB |
+
+---
+
+## WebSocket Communication Protocol
+
+### Connection
+
+Connect to the Vigil server at:
+
+```
+ws://<vigil-server>/api/addons/ws?addon_id=<ID>
+```
+
+Include the Bearer token in the WebSocket handshake:
+
+```
+Authorization: Bearer <agent_token>
+```
+
+### Frame Envelope
+
+All frames use the same envelope structure:
+
+```json
+{
+  "type": "<frame_type>",
+  "payload": { ... }
+}
+```
+
+### Frame Types
+
+#### Heartbeat
+
+Sent at a regular interval (default: 30 seconds) to keep the connection alive.
+
+```json
+{
+  "type": "heartbeat",
+  "payload": null
+}
+```
+
+**Requirements:**
+- Send at least every 60 seconds. The server expects activity within 90 seconds before marking the connection as dead.
+- After 3 missed intervals, the add-on status transitions to `degraded` and an `addon_degraded` event is emitted.
+- The server sends WebSocket pings every 30 seconds; respond to pongs automatically (most WebSocket libraries handle this).
+
+#### Progress
+
+Reports job execution progress. The Vigil dashboard renders this as a live progress bar.
+
+```json
+{
+  "type": "progress",
+  "payload": {
+    "agent_id": "agent-01",
+    "job_id": "burnin-sda-20260228T143000",
+    "command": "burnin",
+    "phase": "BADBLOCKS",
+    "phase_detail": "pattern 2/4",
+    "percent": 37.5,
+    "speed_mbps": 185.2,
+    "temp_c": 38,
+    "elapsed_sec": 3600,
+    "eta_sec": 5400,
+    "badblocks_errors": 0,
+    "smart_deltas": null
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `agent_id` | string | Identifier of the agent running the job |
+| `job_id` | string | Unique job identifier |
+| `command` | string | Job type (`burnin`, `preclear`, `full`) |
+| `phase` | string | Current pipeline phase |
+| `phase_detail` | string | Human-readable sub-phase detail |
+| `percent` | float | Overall completion (0.0 - 100.0) |
+| `speed_mbps` | float | Current throughput in MB/s |
+| `temp_c` | int | Drive temperature in Celsius |
+| `elapsed_sec` | int | Seconds since job start |
+| `eta_sec` | int | Estimated seconds remaining |
+| `badblocks_errors` | int | Cumulative bad block count |
+| `smart_deltas` | object | SMART attribute delta map (attribute ID to change) |
+
+#### Log
+
+Streams log messages to the Vigil dashboard log viewer.
+
+```json
+{
+  "type": "log",
+  "payload": {
+    "agent_id": "agent-01",
+    "job_id": "burnin-sda-20260228T143000",
+    "severity": "info",
+    "message": "SMART short test completed without error",
+    "timestamp": "2026-02-28T14:35:00Z"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `severity` | string | `info`, `warning`, or `error` |
+| `message` | string | Log message text |
+| `timestamp` | string | RFC 3339 timestamp |
+
+#### Notification
+
+Structured events that trigger alert dispatch through Vigil's notification channels (email, Discord, Telegram, etc.).
+
+```json
+{
+  "type": "notification",
+  "payload": {
+    "event_type": "burnin_passed",
+    "severity": "info",
+    "source": "burnin-hub",
+    "message": "Burn-in passed for WD Red 8TB (serial WD-ABC123)",
+    "timestamp": "2026-02-28T18:00:00Z"
+  }
+}
+```
+
+### Event Types
+
+| Event Type | Severity | Description |
+|------------|----------|-------------|
+| `job_started` | info | A new job has begun |
+| `phase_complete` | info | A pipeline phase finished successfully |
+| `burnin_passed` | info | Full burn-in cycle completed with no errors |
+| `job_complete` | info | Job finished successfully |
+| `job_failed` | critical | Job encountered an unrecoverable error |
+| `smart_warning` | warning | SMART attribute degradation detected |
+| `temp_alert` | warning/critical | Drive temperature exceeded threshold |
+| `addon_degraded` | warning | Server-generated: add-on missed heartbeats |
+| `addon_online` | info | Server-generated: add-on recovered from degraded |
+
+### Protocol Constraints
+
+| Constraint | Value |
+|------------|-------|
+| Maximum frame size | 64 KB |
+| Heartbeat interval | Configurable, default 30s |
+| Heartbeat timeout | 90s (server-side) |
+| Reconnect backoff | Exponential: 2s base, 2x factor, 60s cap |
+| Write deadline | 10s per frame |
+| Pong timeout | 60s |
+
+---
+
+## Multi-Architecture Builds
+
+All official add-ons must produce binaries and container images for both `linux/amd64` and `linux/arm64`.
+
+### Dockerfile Template
+
+Use a multi-stage build with platform arguments:
+
+```dockerfile
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+ARG TARGETOS TARGETARCH
+ARG VERSION=dev
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -ldflags="-s -w -X main.version=$VERSION" \
+    -o /addon ./cmd/addon
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates tzdata
+COPY --from=builder /addon /usr/local/bin/addon
+ENTRYPOINT ["addon"]
+```
+
+### Build Command
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t ghcr.io/pineappledr/vigil-my-addon:latest \
+  --push .
+```
+
+### Binary Cross-Compilation
+
+```bash
+VERSION="1.0.0"
+LDFLAGS="-s -w -X main.version=$VERSION"
+
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/addon-linux-amd64 ./cmd/addon
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/addon-linux-arm64 ./cmd/addon
+```
+
+---
+
+## CI/CD Pipeline Conventions
+
+Each add-on in the monorepo has its own GitHub Actions workflow with path filtering. The pipeline follows five stages:
+
+| Stage | Trigger | Actions |
+|-------|---------|---------|
+| **Test & Lint** | All pushes and PRs | `go vet`, `go test -race`, coverage report, build check |
+| **Security Scan** | All pushes and PRs | `govulncheck`, `gosec`, Trivy container scanning |
+| **PR Preview** | Pull requests only | Build and publish preview images tagged `pr-<number>` |
+| **Dev Build** | Feature branch push | Cross-compile binaries, publish dev release, push dev-tagged images |
+| **Latest Build** | Push to `main` | Multi-arch build, push `latest`-tagged images |
+| **Release** | Version tag (`v*`) | Multi-arch build, push versioned images, create GitHub Release with binaries and checksums |
+
+### Path Filtering
+
+Workflows only trigger when files within the add-on's directory change:
+
+```yaml
+on:
+  push:
+    paths:
+      - 'burn-in/**'
+      - '.github/workflows/burnin.yml'
+```
+
+### Container Registry
+
+All images are published to GitHub Container Registry (GHCR):
+
+```
+ghcr.io/pineappledr/vigil-addons-<addon>-<component>:<tag>
+```
+
+---
+
+## Development Workflow
+
+1. **Clone** the repository:
+   ```bash
+   git clone https://github.com/pineappledr/vigil-addons.git
+   cd vigil-addons
+   ```
+
+2. **Create** your add-on directory:
+   ```bash
+   mkdir my-addon
+   cd my-addon
+   go mod init github.com/pineapple/vigil-addons/my-addon
+   ```
+
+3. **Implement** the core components:
+   - `cmd/addon/main.go` -- Entry point, config loading, graceful shutdown
+   - `manifest.json` -- UI manifest (embed with `//go:embed`)
+   - WebSocket client for telemetry streaming
+   - Your domain-specific logic
+
+4. **Create** Dockerfiles for each component (if multi-tier).
+
+5. **Add** a GitHub Actions workflow at `.github/workflows/my-addon.yml` following the conventions above.
+
+6. **Test** locally against a running Vigil server:
+   - Register the add-on from the Vigil dashboard
+   - Run your daemon with the generated token and add-on ID
+   - Verify the manifest renders correctly and telemetry frames appear in real-time
+
+7. **Open** a pull request with your add-on, tests, and documentation.

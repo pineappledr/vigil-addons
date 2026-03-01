@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -101,6 +103,15 @@ func LoadHubConfig() (*HubConfig, error) {
 		}
 	}
 
+	// Auto-generate AgentPSK if not provided.
+	if cfg.Hub.AgentPSK == "" {
+		psk, err := loadOrGeneratePSK(cfg.Hub.DataDir)
+		if err != nil {
+			return nil, fmt.Errorf("auto-generating agent PSK: %w", err)
+		}
+		cfg.Hub.AgentPSK = psk
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("config validation: %w", err)
 	}
@@ -122,9 +133,6 @@ func (c *HubConfig) validate() error {
 	if c.Vigil.URL == "" {
 		missing = append(missing, "vigil.url")
 	}
-	if c.Hub.AgentPSK == "" {
-		missing = append(missing, "hub.agent_psk")
-	}
 	if c.Hub.Listen == "" {
 		missing = append(missing, "hub.listen")
 	}
@@ -133,6 +141,40 @@ func (c *HubConfig) validate() error {
 		return fmt.Errorf("required config missing: %s", strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+// loadOrGeneratePSK loads an existing PSK from {dataDir}/hub.psk, or generates
+// a new 32-byte hex-encoded key and persists it for future restarts.
+func loadOrGeneratePSK(dataDir string) (string, error) {
+	pskPath := filepath.Join(dataDir, "hub.psk")
+
+	// Try to load existing PSK.
+	data, err := os.ReadFile(filepath.Clean(pskPath))
+	if err == nil {
+		psk := strings.TrimSpace(string(data))
+		if psk != "" {
+			return psk, nil
+		}
+	}
+
+	// Generate a new 32-byte random PSK.
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generating random PSK: %w", err)
+	}
+	psk := hex.EncodeToString(buf)
+
+	// Ensure the data directory exists.
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return "", fmt.Errorf("creating data directory: %w", err)
+	}
+
+	// Write the PSK file.
+	if err := os.WriteFile(pskPath, []byte(psk+"\n"), 0o600); err != nil {
+		return "", fmt.Errorf("writing PSK file: %w", err)
+	}
+
+	return psk, nil
 }
 
 func parseInt(s string) (int, error) {

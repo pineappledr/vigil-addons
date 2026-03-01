@@ -25,6 +25,7 @@ type VigilConfig struct {
 
 type HubServer struct {
 	Listen            string        `json:"listen"`
+	AdvertiseURL      string        `json:"advertise_url"`
 	HeartbeatInterval time.Duration `json:"heartbeat_interval"`
 	AgentPSK          string        `json:"agent_psk"`
 	DataDir           string        `json:"data_dir"`
@@ -79,6 +80,9 @@ func LoadHubConfig() (*HubConfig, error) {
 			return nil, fmt.Errorf("invalid BURNIN_HUB_HEARTBEAT_INTERVAL: %w", err)
 		}
 		cfg.Hub.HeartbeatInterval = d
+	}
+	if v := os.Getenv("BURNIN_HUB_ADVERTISE_URL"); v != "" {
+		cfg.Hub.AdvertiseURL = v
 	}
 	if v := os.Getenv("BURNIN_HUB_AGENT_PSK"); v != "" {
 		cfg.Hub.AgentPSK = v

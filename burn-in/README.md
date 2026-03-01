@@ -254,6 +254,7 @@ All configuration uses environment variables. Vigil-related variables use the `V
 | `VIGIL_AGENT_TOKEN` | | no | Bearer token for Vigil registration (from the Vigil "Add Add-on" dialog) |
 | `VIGIL_SERVER_PUBKEY` | | no | Path to Vigil server Ed25519 public key (see [Getting the Server Public Key](#getting-the-server-public-key)) |
 | `BURNIN_HUB_LISTEN` | `:9100` | no | Hub listen address |
+| `BURNIN_HUB_ADVERTISE_URL` | | no | Externally-reachable Hub URL (used by the deploy wizard to pre-fill agent config) |
 | `BURNIN_HUB_AGENT_PSK` | | **yes** | Pre-shared key for agent authentication |
 | `BURNIN_HUB_DATA_DIR` | `/var/lib/vigil-hub` | no | Directory for persistent data (agent registry) |
 | `BURNIN_HUB_HEARTBEAT_INTERVAL` | `30s` | no | Heartbeat interval to Vigil (Go duration) |

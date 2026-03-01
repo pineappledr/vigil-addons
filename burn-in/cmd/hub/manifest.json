@@ -184,6 +184,36 @@
               { "key": "path", "label": "Path" }
             ]
           }
+        },
+        {
+          "type": "deploy-wizard",
+          "id": "add-burnin-agent",
+          "title": "Add Burn-in Agent",
+          "config": {
+            "target_label": "Agent",
+            "docker": {
+              "image": "ghcr.io/pineappledr/vigil-addons-burnin-agent",
+              "default_tag": "latest",
+              "container_name": "burnin-agent",
+              "ports": ["9200:9200"],
+              "privileged": true,
+              "volumes": ["/dev:/dev"],
+              "environment": {
+                "BURNIN_HUB_URL": { "source": "prefill", "key": "hub_url", "label": "Hub URL" },
+                "BURNIN_HUB_PSK": { "source": "prefill", "key": "hub_psk", "label": "Pre-Shared Key" },
+                "BURNIN_AGENT_ID": { "source": "user_input", "label": "Agent ID", "placeholder": "burnin-agent-01" },
+                "BURNIN_AGENT_LISTEN": { "source": "literal", "value": ":9200" },
+                "TZ": { "source": "literal", "value": "${TZ:-UTC}" }
+              },
+              "platforms": {
+                "linux": {
+                  "label": "Standard Linux",
+                  "hint": "Copy the docker-compose.yml to deploy the burn-in agent on a standard Linux host."
+                }
+              }
+            },
+            "prefill_endpoint": "/api/deploy-info"
+          }
         }
       ]
     },

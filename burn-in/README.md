@@ -149,13 +149,23 @@ apk add smartmontools e2fsprogs e2fsprogs-extra util-linux gptfdisk
 
 > **Note:** The **Hub** binary has no external tool dependencies — it only coordinates agents over the network.
 
-### Docker Compose (Recommended)
+### Step 1: Register the Add-on in Vigil
 
-Create a `docker-compose.yml` on the host where drives are physically connected:
+1. Open the Vigil dashboard and navigate to **Add-ons**.
+2. Click **Add Add-on**.
+3. Select the **Docker** tab.
+4. Fill in:
+   - **Name**: `Burn-In`
+   - **Docker Image**: `ghcr.io/pineappledr/vigil-addons-burnin-hub`
+5. Note the auto-populated **Server URL**, **Public Key**, and **Token** — these are your `VIGIL_URL`, `VIGIL_SERVER_PUBKEY`, and `VIGIL_AGENT_TOKEN` values.
+6. Click **Copy docker compose** to get a pre-filled `docker-compose.yml`.
+
+### Step 2: Deploy the Hub
+
+Take the copied docker-compose, add your Hub-specific configuration, and deploy it:
 
 ```yaml
 services:
-  # ── Tier 2: Hub (one instance) ──────────────────────────
   burnin-hub:
     image: ghcr.io/pineappledr/vigil-addons-burnin-hub:latest
     container_name: burnin-hub
@@ -163,32 +173,13 @@ services:
     ports:
       - "9100:9100"
     environment:
-      VIGIL_URL: "http://vigil-server:9080"
-      VIGIL_AGENT_TOKEN: "your-vigil-addon-token"
-      BURNIN_HUB_AGENT_PSK: "a-strong-shared-secret"
+      VIGIL_URL: "http://vigil-server:9080"          # from the Add Add-on dialog
+      VIGIL_AGENT_TOKEN: "your-vigil-addon-token"     # from the Add Add-on dialog
+      BURNIN_HUB_AGENT_PSK: "a-strong-shared-secret"  # generate with: openssl rand -hex 32
+      BURNIN_HUB_ADVERTISE_URL: "http://192.168.1.50:9100"  # externally-reachable Hub URL
       BURNIN_HUB_DATA_DIR: "/data"
     volumes:
       - burnin-hub-data:/data
-
-  # ── Tier 3: Agent (one per physical host) ───────────────
-  burnin-agent:
-    image: ghcr.io/pineappledr/vigil-addons-burnin-agent:latest
-    container_name: burnin-agent
-    restart: unless-stopped
-    privileged: true                          # REQUIRED: direct disk access
-    ports:
-      - "9200:9200"
-    environment:
-      BURNIN_HUB_URL: "http://burnin-hub:9100"
-      BURNIN_HUB_PSK: "a-strong-shared-secret"
-      BURNIN_AGENT_ID: "agent-host01"
-      BURNIN_AGENT_LISTEN: ":9200"
-    volumes:
-      - /dev:/dev                             # REQUIRED: pass through block devices
-    devices:
-      - /dev/sda
-      - /dev/sdb
-      # List each drive, or use privileged + /dev mount for full access
 
 volumes:
   burnin-hub-data:
@@ -197,6 +188,44 @@ volumes:
 ```bash
 docker compose up -d
 ```
+
+Once the Hub starts, it will register with Vigil and appear in the Add-ons list. Go back to the Vigil dialog, enter the **Add-on URL** (e.g., `http://192.168.1.50:9100`), and click **Register Add-on**.
+
+### Step 3: Deploy Agents
+
+Each physical host with drives to test needs a burn-in agent. You can add agents from the Vigil dashboard:
+
+1. Open the **Burn-In** add-on in Vigil.
+2. Navigate to the **Agents** tab.
+3. The **Add Burn-in Agent** section shows your Hub URL and PSK pre-filled.
+4. Enter an **Agent ID** (e.g., `agent-nas-01`).
+5. Click **Copy docker compose**.
+6. Deploy on the target host:
+
+```yaml
+services:
+  burnin-agent:
+    image: ghcr.io/pineappledr/vigil-addons-burnin-agent:latest
+    container_name: burnin-agent
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "9200:9200"
+    environment:
+      BURNIN_HUB_URL: "http://192.168.1.50:9100"     # auto-filled from Hub
+      BURNIN_HUB_PSK: "a-strong-shared-secret"        # auto-filled from Hub
+      BURNIN_AGENT_ID: "agent-nas-01"
+      BURNIN_AGENT_LISTEN: ":9200"
+      TZ: ${TZ:-UTC}
+    volumes:
+      - /dev:/dev
+```
+
+```bash
+docker compose up -d
+```
+
+The agent will discover local drives, register with the Hub, and appear in the Agents table.
 
 > **Why `privileged: true`?** The agent needs raw access to block devices for `smartctl`, `badblocks`, `sgdisk`, `mkfs.ext4`, and `mount` operations. Without privileged mode, these operations will fail with permission errors.
 
@@ -221,23 +250,40 @@ For testing drives across multiple physical servers, run one Hub and multiple Ag
 └─────┘  └─────┘
 ```
 
-Each agent registers with the Hub independently. The Hub aggregates all telemetry upstream.
+Repeat [Step 3](#step-3-deploy-agents) on each host. Each agent registers with the Hub independently. The Hub aggregates all telemetry upstream.
 
 ### Pre-compiled Binaries
 
 Retrieve the latest release for your architecture from the [Releases](https://github.com/pineappledr/vigil-addons/releases) page.
 
 ```bash
-# Install the Hub
+# Hub
 chmod +x burnin-hub-linux-amd64
 sudo mv burnin-hub-linux-amd64 /usr/local/bin/burnin-hub
 
-# Install the Agent
+# Agent (requires system packages — see System Requirements above)
 chmod +x burnin-agent-linux-amd64
 sudo mv burnin-agent-linux-amd64 /usr/local/bin/burnin-agent
 ```
 
-The Agent host requires these system packages: `smartmontools`, `e2fsprogs`, `fdisk`, `gdisk`.
+Run the Hub:
+
+```bash
+export VIGIL_URL="http://vigil-server:9080"
+export VIGIL_AGENT_TOKEN="your-token"
+export BURNIN_HUB_AGENT_PSK="$(openssl rand -hex 32)"
+export BURNIN_HUB_ADVERTISE_URL="http://192.168.1.50:9100"
+burnin-hub
+```
+
+Run an Agent:
+
+```bash
+export BURNIN_HUB_URL="http://192.168.1.50:9100"
+export BURNIN_HUB_PSK="same-psk-as-hub"
+export BURNIN_AGENT_ID="agent-host01"
+burnin-agent
+```
 
 ---
 

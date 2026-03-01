@@ -112,8 +112,42 @@ Runs the burn-in pipeline first. If burn-in passes, automatically transitions in
 ### Prerequisites
 
 - A running [Vigil](https://github.com/pineappledr/vigil) v3.0+ server
-- Docker and Docker Compose on each host
+- Docker and Docker Compose on each host (if using Docker deployment)
 - Drives to test must be visible as block devices under `/dev/`
+- Linux (amd64 or arm64)
+- Root/sudo access (required for direct disk operations)
+
+### System Requirements (Binary Install)
+
+If you are running the binaries directly instead of Docker, the **Agent** host needs the following packages installed:
+
+| Package | Provides | Used For |
+|---------|----------|----------|
+| `smartmontools` | `smartctl` | Drive identification, SMART attribute monitoring, short/long self-tests |
+| `e2fsprogs` | `mkfs.ext4` | Formatting partitions with ext4 (pre-clear pipeline) |
+| `e2fsprogs-extra` | `dumpe2fs` | Verifying ext4 filesystem metadata integrity (pre-clear pipeline) |
+| `gptfdisk` | `sgdisk` | Wiping and creating GPT partition tables (pre-clear pipeline) |
+| `util-linux` | `mount`, `umount` | Mounting/unmounting filesystems for verification (pre-clear pipeline) |
+
+**Optional:**
+
+| Package | Provides | Used For |
+|---------|----------|----------|
+| `zfsutils-linux` | `zpool` | Detecting drives that are part of an active ZFS pool (safety check). Gracefully skipped if not installed. |
+
+Install on **Debian/Ubuntu**:
+
+```bash
+sudo apt install smartmontools e2fsprogs gptfdisk util-linux
+```
+
+Install on **Alpine** (used by the Docker images):
+
+```bash
+apk add smartmontools e2fsprogs e2fsprogs-extra util-linux gptfdisk
+```
+
+> **Note:** The **Hub** binary has no external tool dependencies — it only coordinates agents over the network.
 
 ### Docker Compose (Recommended)
 

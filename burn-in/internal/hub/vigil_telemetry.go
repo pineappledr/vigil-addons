@@ -63,7 +63,7 @@ type NotificationPayload struct {
 // TelemetryClient manages the persistent WebSocket connection to the Vigil server.
 type TelemetryClient struct {
 	serverURL     string
-	addonID       string
+	addonID       int64
 	agentToken    string
 	heartbeatInt  time.Duration
 	logger        *slog.Logger
@@ -73,7 +73,7 @@ type TelemetryClient struct {
 }
 
 // NewTelemetryClient creates an upstream telemetry client.
-func NewTelemetryClient(serverURL, addonID, agentToken string, heartbeatInterval time.Duration, logger *slog.Logger) *TelemetryClient {
+func NewTelemetryClient(serverURL string, addonID int64, agentToken string, heartbeatInterval time.Duration, logger *slog.Logger) *TelemetryClient {
 	return &TelemetryClient{
 		serverURL:    serverURL,
 		addonID:      addonID,
@@ -220,5 +220,5 @@ func (t *TelemetryClient) wsURL() string {
 	base := t.serverURL
 	base = strings.Replace(base, "https://", "wss://", 1)
 	base = strings.Replace(base, "http://", "ws://", 1)
-	return fmt.Sprintf("%s%s?addon_id=%s", base, wsPath, t.addonID)
+	return fmt.Sprintf("%s%s?addon_id=%d", base, wsPath, t.addonID)
 }

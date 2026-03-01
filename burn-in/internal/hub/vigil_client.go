@@ -31,7 +31,7 @@ type VigilClient struct {
 
 // RegistrationResponse is the response from a successful addon registration.
 type RegistrationResponse struct {
-	AddonID   string `json:"addon_id"`
+	AddonID   int64  `json:"addon_id"`
 	SessionID string `json:"session_id"`
 }
 

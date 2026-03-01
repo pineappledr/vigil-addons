@@ -121,21 +121,18 @@ jobs:
           tags: burnin-agent:scan
           cache-from: type=gha
 
+      - name: Install Trivy
+        run: |
+          sudo apt-get install -y wget apt-transport-https gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update && sudo apt-get install -y trivy
+
       - name: Trivy scan - Hub image
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: burnin-hub:scan
-          exit-code: '1'
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
+        run: trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed burnin-hub:scan
 
       - name: Trivy scan - Agent image
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: burnin-agent:scan
-          exit-code: '1'
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
+        run: trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed burnin-agent:scan
 
   # ─────────────────────────────────────────────────────────────────────────
   # PR PREVIEW - Build preview images for pull requests

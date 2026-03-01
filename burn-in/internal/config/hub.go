@@ -103,6 +103,19 @@ func LoadHubConfig() (*HubConfig, error) {
 		}
 	}
 
+	// Default AdvertiseURL to http://hostname:port if not set.
+	if cfg.Hub.AdvertiseURL == "" {
+		hostname, _ := os.Hostname()
+		if hostname == "" {
+			hostname = "localhost"
+		}
+		port := strings.TrimPrefix(cfg.Hub.Listen, ":")
+		if port == "" || port == cfg.Hub.Listen {
+			port = "9100"
+		}
+		cfg.Hub.AdvertiseURL = fmt.Sprintf("http://%s:%s", hostname, port)
+	}
+
 	// Auto-generate AgentPSK if not provided.
 	if cfg.Hub.AgentPSK == "" {
 		psk, err := loadOrGeneratePSK(cfg.Hub.DataDir)

@@ -9,7 +9,8 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata \
-    smartmontools e2fsprogs e2fsprogs-extra util-linux gptfdisk
+    smartmontools e2fsprogs e2fsprogs-extra util-linux gptfdisk \
+    xfsprogs btrfs-progs dosfstools
 COPY --from=builder /burnin-agent /usr/local/bin/burnin-agent
 EXPOSE 9200
 ENTRYPOINT ["burnin-agent"]

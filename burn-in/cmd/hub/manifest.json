@@ -126,6 +126,22 @@
                 "visible_when": { "command": ["burnin", "full"] }
               },
               {
+                "name": "file_system",
+                "label": "File System",
+                "type": "select",
+                "required": true,
+                "default": "ext4",
+                "options": [
+                  { "value": "ext4", "label": "ext4" },
+                  { "value": "xfs", "label": "XFS" },
+                  { "value": "btrfs", "label": "Btrfs" },
+                  { "value": "fat32", "label": "FAT32" },
+                  { "value": "linux-swap", "label": "Linux Swap" },
+                  { "value": "raw", "label": "Raw (ZFS / Unformatted)" }
+                ],
+                "visible_when": { "command": ["preclear", "full"] }
+              },
+              {
                 "name": "reserved_percent",
                 "label": "Reserved Space (%)",
                 "type": "number",

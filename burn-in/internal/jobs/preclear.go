@@ -11,6 +11,7 @@ import (
 
 // PreclearParams holds the configuration for a single pre-clear job.
 type PreclearParams struct {
+	FileSystem  string `json:"file_system"`
 	ReservedPct int    `json:"reserved_pct"`
 	LogDir      string `json:"log_dir"`
 }
@@ -67,7 +68,12 @@ func RunPreclear(ctx context.Context, jobID, devicePath string, params PreclearP
 	// ── Phase 2: PARTITION ──────────────────────────────────────────────
 	emit.phase(PhasePartition, "wiping partition table", 15)
 
-	partResult, err := drive.PartitionGPT(ctx, driveInfo.Path)
+	fileSystem := params.FileSystem
+	if fileSystem == "" {
+		fileSystem = "ext4"
+	}
+
+	partResult, err := drive.PartitionGPT(ctx, driveInfo.Path, fileSystem, params.ReservedPct)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -84,13 +90,13 @@ func RunPreclear(ctx context.Context, jobID, devicePath string, params PreclearP
 	}
 
 	// ── Phase 3: FORMAT ─────────────────────────────────────────────────
-	emit.phase(PhaseFormat, "formatting ext4", 30)
+	emit.phase(PhaseFormat, fmt.Sprintf("formatting %s", fileSystem), 30)
 
-	fmtResult, err := drive.FormatExt4(ctx, partResult.Partition, params.ReservedPct, func(progress drive.FormatProgress) {
+	fmtResult, err := drive.FormatPartition(ctx, partResult.Partition, fileSystem, params.ReservedPct, func(progress drive.FormatProgress) {
 		// Map format progress (0-100%) into the overall 30-70% band.
 		overallPercent := 30.0 + progress.Percent*0.4
 		emit.progress(PhaseFormat, progress.Phase, overallPercent, 0, 0, 0, nil)
-	})
+	}, logger)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -99,7 +105,7 @@ func RunPreclear(ctx context.Context, jobID, devicePath string, params PreclearP
 	}
 	result.Format = fmtResult
 
-	emit.log(SeverityInfo, "ext4 formatted: %s reserved=%d%%", fmtResult.Partition, fmtResult.ReservedPct)
+	emit.log(SeverityInfo, "%s formatted: %s reserved=%d%%", fmtResult.Filesystem, fmtResult.Partition, fmtResult.ReservedPct)
 	emit.phaseComplete(PhaseFormat)
 
 	if err := ctx.Err(); err != nil {

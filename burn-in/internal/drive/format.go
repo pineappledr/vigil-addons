@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -12,7 +13,7 @@ import (
 	"syscall"
 )
 
-// FormatProgress holds parsed state from a running mkfs.ext4 process.
+// FormatProgress holds parsed state from a running mkfs process.
 type FormatProgress struct {
 	Phase   string  // Current formatting phase (e.g., "writing inode tables", "creating journal").
 	Percent float64 // Estimated completion percentage.
@@ -25,8 +26,64 @@ type FormatResult struct {
 	ReservedPct int   `json:"reserved_pct"`
 }
 
-// FormatCallback is invoked on each progress update parsed from mkfs.ext4 output.
+// FormatCallback is invoked on each progress update parsed from mkfs output.
 type FormatCallback func(progress FormatProgress)
+
+// FormatPartition formats the given partition with the specified filesystem.
+// For "raw", no formatting is performed (the partition is left unformatted
+// for ZFS pool creation). Progress is streamed via the callback.
+func FormatPartition(ctx context.Context, partition, fileSystem string, reservedPct int, onProgress FormatCallback, logger *slog.Logger) (*FormatResult, error) {
+	if !isValidDevicePath(partition) {
+		return nil, fmt.Errorf("invalid partition path: %q", partition)
+	}
+
+	switch fileSystem {
+	case "ext4":
+		return formatExt4(ctx, partition, reservedPct, onProgress)
+	case "xfs":
+		return formatSimple(ctx, partition, "xfs", "mkfs.xfs", "-f", partition)
+	case "btrfs":
+		return formatSimple(ctx, partition, "btrfs", "mkfs.btrfs", "-f", partition)
+	case "fat32":
+		return formatSimple(ctx, partition, "fat32", "mkfs.fat", "-F", "32", partition)
+	case "linux-swap":
+		return formatSimple(ctx, partition, "linux-swap", "mkswap", partition)
+	case "raw":
+		logger.Info("formatting skipped for raw/ZFS partition", "partition", partition)
+		return &FormatResult{
+			Partition:  partition,
+			Filesystem: "raw",
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported filesystem: %q", fileSystem)
+	}
+}
+
+// formatSimple runs a single mkfs command without progress parsing.
+func formatSimple(ctx context.Context, partition, fsName string, cmdName string, args ...string) (*FormatResult, error) {
+	cmd := exec.CommandContext(ctx, cmdName, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	cleanup := context.AfterFunc(ctx, func() {
+		if cmd.Process != nil {
+			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+	})
+	defer cleanup()
+
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s failed: %s", cmdName, strings.TrimSpace(string(output)))
+	}
+
+	return &FormatResult{
+		Partition:  partition,
+		Filesystem: fsName,
+	}, nil
+}
 
 // mkfs progress regex matches lines like:
 //
@@ -36,13 +93,9 @@ var mkfsProgressRegex = regexp.MustCompile(
 	`(Writing inode tables|Creating journal|Writing superblocks).*?(\d+)/(\d+)`,
 )
 
-// FormatExt4 formats the given partition with ext4 using the specified
+// formatExt4 formats the given partition with ext4 using the specified
 // reserved block percentage. It streams progress via the callback.
-func FormatExt4(ctx context.Context, partition string, reservedPct int, onProgress FormatCallback) (*FormatResult, error) {
-	if !isValidDevicePath(partition) {
-		return nil, fmt.Errorf("invalid partition path: %q", partition)
-	}
-
+func formatExt4(ctx context.Context, partition string, reservedPct int, onProgress FormatCallback) (*FormatResult, error) {
 	if reservedPct < 0 || reservedPct > 50 {
 		return nil, fmt.Errorf("reserved percentage must be 0-50, got %d", reservedPct)
 	}
@@ -137,9 +190,9 @@ func parseMkfsOutput(r io.Reader, onProgress FormatCallback) {
 		base   float64
 		weight float64
 	}{
-		"Writing inode tables":   {0, 70},
-		"Creating journal":       {70, 15},
-		"Writing superblocks":    {85, 15},
+		"Writing inode tables": {0, 70},
+		"Creating journal":     {70, 15},
+		"Writing superblocks":  {85, 15},
 	}
 
 	for scanner.Scan() {

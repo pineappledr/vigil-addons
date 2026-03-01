@@ -16,10 +16,26 @@ type PartitionResult struct {
 	TableType string `json:"table_type"`
 }
 
+// gptTypeCode maps a filesystem name to its GPT partition type hex code.
+func gptTypeCode(fileSystem string) string {
+	switch fileSystem {
+	case "fat32":
+		return "EF00" // EFI System
+	case "linux-swap":
+		return "8200" // Linux Swap
+	case "raw":
+		return "BF00" // Solaris/ZFS
+	default:
+		return "8300" // Linux Filesystem (ext4, xfs, btrfs)
+	}
+}
+
 // PartitionGPT wipes the existing partition table on the device and creates
-// a fresh GPT layout with a single partition spanning the entire drive.
-// It uses sgdisk for deterministic, scriptable GPT operations.
-func PartitionGPT(ctx context.Context, devicePath string) (*PartitionResult, error) {
+// a fresh GPT layout with a single partition. The partition type is set
+// according to the target filesystem. For "raw" partitions, reservedPct
+// controls how much space is left unallocated at the end of the drive
+// (important for ZFS replacement compatibility).
+func PartitionGPT(ctx context.Context, devicePath, fileSystem string, reservedPct int) (*PartitionResult, error) {
 	if !isValidDevicePath(devicePath) {
 		return nil, fmt.Errorf("invalid device path: %q", devicePath)
 	}
@@ -29,21 +45,37 @@ func PartitionGPT(ctx context.Context, devicePath string) (*PartitionResult, err
 		return nil, fmt.Errorf("safety check before partitioning: %w", err)
 	}
 
+	if fileSystem == "" {
+		fileSystem = "ext4"
+	}
+	typeCode := gptTypeCode(fileSystem)
+
 	// Step 1: Zap all GPT and MBR data structures.
 	if err := runSgdisk(ctx, devicePath, "--zap-all"); err != nil {
 		return nil, fmt.Errorf("wiping partition table: %w", err)
 	}
 
-	// Step 2: Create a single partition spanning the full device.
-	// -n 1:0:0  → partition 1, first available sector to last available sector.
-	// -t 1:8300 → Linux filesystem type.
-	if err := runSgdisk(ctx, devicePath, "--new=1:0:0", "--typecode=1:8300"); err != nil {
+	// Step 2: Create the partition.
+	var newArg string
+	if fileSystem == "raw" && reservedPct > 0 {
+		// For raw/ZFS: reduce partition size by reservedPct, leaving
+		// unallocated space at the end of the drive. sgdisk's relative
+		// sizing with -<percentage>% computes the end sector.
+		endSpec := fmt.Sprintf("-%d%%", reservedPct)
+		newArg = fmt.Sprintf("--new=1:0:%s", endSpec)
+	} else {
+		// Span the entire device: first available sector to last.
+		newArg = "--new=1:0:0"
+	}
+
+	typeArg := fmt.Sprintf("--typecode=1:%s", typeCode)
+	if err := runSgdisk(ctx, devicePath, newArg, typeArg); err != nil {
 		return nil, fmt.Errorf("creating GPT partition: %w", err)
 	}
 
 	// Step 3: Verify the table.
 	if err := runSgdisk(ctx, devicePath, "--verify"); err != nil {
-		// Verification failure is non-fatal but logged — some drives report
+		// Verification failure is non-fatal — some drives report
 		// benign alignment warnings.
 		_ = err
 	}

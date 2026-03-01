@@ -129,8 +129,18 @@ func (t *TelemetryClient) connectAndServe(ctx context.Context) error {
 	}()
 
 	conn.SetReadLimit(maxMessageSize)
-	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(pongWait))
+
+	// Set initial read deadline — the server sends pings every 30s,
+	// so we allow up to pongWait (60s) before considering it dead.
+	conn.SetReadDeadline(time.Now().Add(pongWait))
+
+	// Handle pings FROM the Vigil server: extend the read deadline and
+	// reply with a pong (the default handler only sends pong but doesn't
+	// touch the deadline).
+	conn.SetPingHandler(func(appData string) error {
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		return conn.WriteControl(websocket.PongMessage,
+			[]byte(appData), time.Now().Add(writeWait))
 	})
 
 	t.mu.Lock()
@@ -140,10 +150,16 @@ func (t *TelemetryClient) connectAndServe(ctx context.Context) error {
 	t.logger.Info("upstream websocket connected")
 
 	// Heartbeat loop in a separate goroutine.
+	// If the heartbeat write fails, close the connection to unblock ReadMessage.
 	heartCtx, heartCancel := context.WithCancel(ctx)
 	defer heartCancel()
 
-	go t.heartbeatLoop(heartCtx, conn)
+	go func() {
+		t.heartbeatLoop(heartCtx, conn)
+		// Heartbeat loop exited (write failure or context cancelled).
+		// Close the connection so the read loop below unblocks.
+		conn.Close()
+	}()
 
 	// Read loop — keeps the connection alive and detects closure.
 	for {

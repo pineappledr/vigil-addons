@@ -61,13 +61,13 @@ func LoadHubConfig() (*HubConfig, error) {
 	}
 
 	// Environment variables override file values.
-	if v := os.Getenv("BURNIN_VIGIL_URL"); v != "" {
+	if v := os.Getenv("VIGIL_URL"); v != "" {
 		cfg.Vigil.URL = v
 	}
-	if v := os.Getenv("BURNIN_VIGIL_AGENT_TOKEN"); v != "" {
+	if v := os.Getenv("VIGIL_AGENT_TOKEN"); v != "" {
 		cfg.Vigil.AgentToken = v
 	}
-	if v := os.Getenv("BURNIN_VIGIL_SERVER_PUBKEY"); v != "" {
+	if v := os.Getenv("VIGIL_SERVER_PUBKEY"); v != "" {
 		cfg.Vigil.ServerPubkey = v
 	}
 	if v := os.Getenv("BURNIN_HUB_LISTEN"); v != "" {

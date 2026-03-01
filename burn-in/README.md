@@ -11,10 +11,11 @@ A production-grade drive qualification daemon for the [Vigil](https://github.com
 
 1. [Architecture](#architecture)
 2. [Execution Pipelines](#execution-pipelines)
-3. [Deployment](#deployment)
-4. [Configuration Reference](#configuration-reference)
-5. [API Reference](#api-reference)
-6. [Security Model](#security-model)
+3. [Job Parameters](#job-parameters)
+4. [Deployment](#deployment)
+5. [Configuration Reference](#configuration-reference)
+6. [API Reference](#api-reference)
+7. [Security Model](#security-model)
 
 ---
 
@@ -104,6 +105,53 @@ Prepares a drive for immediate use in a storage pool by partitioning, formatting
 ### Full (`full`)
 
 Runs the burn-in pipeline first. If burn-in passes, automatically transitions into the pre-clear pipeline using the same job ID and context. If burn-in fails, the job stops immediately without touching the partition table.
+
+---
+
+## Job Parameters
+
+When starting a new job from the Vigil dashboard, the following parameters control the burn-in and pre-clear behavior:
+
+### Common Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **Job Type** | select | yes | `burnin` (burn-in only), `preclear` (pre-clear only), or `full` (burn-in then pre-clear) |
+| **Agent** | select | yes | The burn-in agent to execute the job on. Agents are auto-discovered from the Hub's registry. |
+| **Target Drive** | select | yes | The drive to test. Populated from the selected agent's discovered drives. Drives are identified by `/dev/disk/by-id/` path for stability across reboots. |
+| **Confirm Destructive** | checkbox | yes | Safety gate — you must acknowledge that the operation will destroy all data on the selected drive. Triggers a multi-step confirmation (password + type "CONFIRM"). |
+
+### Burn-in Parameters
+
+These parameters apply to `burnin` and `full` job types. They control the `badblocks` phase, which is the longest and most I/O-intensive part of the pipeline.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| **Block Size (bytes)** | `4096` | The size of each data block written to and read back from the disk during the destructive write+verify test. **4096 bytes (4 KB)** matches the physical sector size of modern drives (both HDD and SSD). Using the native sector size ensures each physical sector is individually tested. Smaller values increase test granularity but take longer; larger values (e.g., 65536) speed up testing at the cost of less precise error localization. For most users, the default is optimal. |
+| **Concurrent Blocks** | `65536` | How many blocks are held in memory and processed in parallel. This controls the I/O buffer size: `block_size × concurrent_blocks` = total buffer. At defaults, this is `4096 × 65536 = 256 MB`. Higher values keep the drive's command queue full, maximizing throughput and ensuring the drive is under sustained stress. Lower values reduce RAM usage, which may be useful on memory-constrained systems. The value does not affect test accuracy — only speed and memory usage. |
+| **Abort on first error** | `true` | If enabled, the burn-in job stops immediately when the first bad block is detected. If disabled, the job continues through all 8 passes (4 patterns × write + read-back) and reports the total error count at the end. Disabling this is useful to assess the overall health of a drive with known issues. |
+
+#### How Block Size and Concurrent Blocks Interact
+
+```
+Total buffer = block_size × concurrent_blocks
+
+Examples:
+  4096 × 65536  = 256 MB   ← default, good for most systems
+  4096 × 32768  = 128 MB   ← lower RAM usage
+  4096 × 131072 = 512 MB   ← faster on drives with large caches
+  65536 × 4096  = 256 MB   ← same RAM, but 64KB blocks (less granular)
+```
+
+The badblocks phase writes 4 different patterns to every block on the disk, then reads each one back to verify. This means the **entire disk capacity is written and read 4 times** (8 total passes). For a 10 TB drive at typical HDD speeds (~200 MB/s), this takes approximately **55 hours**.
+
+### Pre-clear Parameters
+
+These parameters apply to `preclear` and `full` job types.
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| **Reserved Space (%)** | `0` | 0–50 | Percentage of the formatted partition reserved for the root user (passed to `mkfs.ext4 -m`). Setting this to 0 makes the entire disk available to normal users. A small value (1–5%) is recommended for system drives; 0% is typical for data-only drives in a NAS or storage pool. |
 
 ---
 
@@ -336,9 +384,10 @@ All configuration uses environment variables. Vigil-related variables use the `V
 |--------|------|------|-------------|
 | `GET` | `/health` | none | Liveness check |
 | `POST` | `/api/agents/register` | PSK | Agent registration with drive inventory |
-| `GET` | `/api/agents` | PSK | List registered agents |
+| `GET` | `/api/agents` | none | List registered agents (used by Vigil proxy for UI) |
 | `POST` | `/api/execute` | PSK | Forward a signed command to an agent |
 | `GET` | `/api/agents/{id}/telemetry` | PSK | WebSocket: agent telemetry stream |
+| `GET` | `/api/deploy-info` | none | Returns Hub URL and PSK for the deploy wizard |
 
 ### Agent Endpoints
 
@@ -363,6 +412,18 @@ All configuration uses environment variables. Vigil-related variables use the `V
   },
   "signature": "<base64-encoded-ed25519-signature>"
 }
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `agent_id` | string | Target agent to execute the command on |
+| `command` | string | One of `burnin`, `preclear`, or `full` |
+| `target` | string | Block device path (preferably `/dev/disk/by-id/...` for stability) |
+| `params.block_size` | int | Block size in bytes for badblocks (see [Job Parameters](#job-parameters)) |
+| `params.concurrent_blocks` | int | Number of concurrent blocks for I/O buffering |
+| `params.abort_on_error` | bool | Stop on first bad block if true |
+| `params.reserved_pct` | int | Reserved space percentage for mkfs.ext4 (pre-clear only) |
+| `signature` | string | Base64-encoded Ed25519 signature over the payload |
 ```
 
 ---

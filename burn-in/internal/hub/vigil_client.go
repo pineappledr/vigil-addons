@@ -13,11 +13,10 @@ import (
 )
 
 const (
-	backoffBase    = 2 * time.Second
-	backoffMax     = 60 * time.Second
-	backoffFactor  = 2.0
-	maxRetries     = 0 // 0 = unlimited retries
-	registerPath   = "/api/addons/connect"
+	backoffBase   = 2 * time.Second
+	backoffMax    = 60 * time.Second
+	backoffFactor = 2.0
+	registerPath  = "/api/addons/connect"
 )
 
 // VigilClient handles registration and communication with the Vigil server.

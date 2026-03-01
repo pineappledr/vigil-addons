@@ -115,8 +115,13 @@ func (t *HubTelemetry) connectAndServe(ctx context.Context) error {
 	}()
 
 	conn.SetReadLimit(maxMessageSize)
-	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetReadDeadline(time.Now().Add(pongWait))
+
+	// Handle pings FROM the Hub: extend the read deadline and reply with pong.
+	conn.SetPingHandler(func(appData string) error {
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		return conn.WriteControl(websocket.PongMessage,
+			[]byte(appData), time.Now().Add(writeWait))
 	})
 
 	t.mu.Lock()
@@ -125,7 +130,6 @@ func (t *HubTelemetry) connectAndServe(ctx context.Context) error {
 
 	t.logger.Info("hub telemetry websocket connected")
 
-	// Reset backoff on successful connection.
 	// Read loop — keeps the connection alive and detects closure.
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {

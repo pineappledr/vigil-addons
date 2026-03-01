@@ -116,6 +116,16 @@ func (r *AgentRegistry) Register(reg AgentRegistration) *AgentRecord {
 	return existing
 }
 
+// TouchLastSeen updates the LastSeenAt timestamp for the given agent.
+func (r *AgentRegistry) TouchLastSeen(agentID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if rec, ok := r.agents[agentID]; ok {
+		rec.LastSeenAt = time.Now().UTC()
+	}
+}
+
 // Get returns a single agent record, or nil if not found.
 func (r *AgentRegistry) Get(agentID string) *AgentRecord {
 	r.mu.RLock()

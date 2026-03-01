@@ -94,6 +94,9 @@ func (a *Aggregator) HandleAgentTelemetry(w http.ResponseWriter, r *http.Request
 
 	a.logger.Info("agent telemetry connected", "agent_id", agentID)
 
+	// Mark agent as seen on connect.
+	a.registry.TouchLastSeen(agentID)
+
 	ac := &agentConn{agentID: agentID, conn: conn}
 
 	a.mu.Lock()
@@ -138,8 +141,39 @@ type agentFrame struct {
 	Timestamp    string          `json:"timestamp,omitempty"`
 }
 
+const agentPingInterval = 30 * time.Second
+
 func (a *Aggregator) readLoop(ac *agentConn) {
 	ac.conn.SetReadLimit(maxMessageSize)
+	ac.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+
+	// Extend read deadline and touch registry on pong from agent.
+	ac.conn.SetPongHandler(func(string) error {
+		ac.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		a.registry.TouchLastSeen(ac.agentID)
+		return nil
+	})
+
+	// Ping loop — keeps the agent connection alive and drives LastSeenAt.
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(agentPingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				if err := ac.conn.WriteControl(
+					websocket.PingMessage, nil,
+					time.Now().Add(10*time.Second),
+				); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	defer close(done)
 
 	for {
 		_, msg, err := ac.conn.ReadMessage()
@@ -150,6 +184,9 @@ func (a *Aggregator) readLoop(ac *agentConn) {
 			return
 		}
 
+		// Reset read deadline on any data frame.
+		ac.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+
 		var frame agentFrame
 		if err := json.Unmarshal(msg, &frame); err != nil {
 			a.logger.Warn("invalid telemetry frame from agent", "agent_id", ac.agentID, "error", err)
@@ -158,6 +195,9 @@ func (a *Aggregator) readLoop(ac *agentConn) {
 
 		// Enforce agent_id tagging — always use the authenticated connection's ID.
 		frame.AgentID = ac.agentID
+
+		// Keep the agent's last-seen timestamp fresh.
+		a.registry.TouchLastSeen(ac.agentID)
 
 		a.processFrame(frame)
 	}

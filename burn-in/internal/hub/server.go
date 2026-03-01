@@ -43,6 +43,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	s.mux.HandleFunc("GET /api/deploy-info", s.handleDeployInfo)
 	s.mux.HandleFunc("POST /api/agents/register", s.requirePSK(s.handleRegisterAgent))
+	s.mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
 	s.mux.HandleFunc("POST /api/execute", s.router.HandleExecute)
 	s.mux.HandleFunc("GET /api/agents/{id}/telemetry", s.aggregator.HandleAgentTelemetry)
 }
@@ -92,8 +93,24 @@ func (s *Server) handleDeployInfo(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleListAgents(w http.ResponseWriter, _ *http.Request) {
-	agents := s.registry.List()
+	// TODO: pass actual busy agents from job manager when available
+	agents := s.registry.ListViews(nil)
 	writeJSON(w, http.StatusOK, agents)
+}
+
+func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "agent id is required"})
+		return
+	}
+
+	if !s.registry.Delete(agentID) {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "agent not found"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "agent_id": agentID})
 }
 
 type errorResponse struct {

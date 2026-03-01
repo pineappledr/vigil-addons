@@ -34,6 +34,30 @@ type AgentRecord struct {
 	LastSeenAt   time.Time `json:"last_seen_at"`
 }
 
+// agentStatusThreshold is how long since last heartbeat before an agent is "offline".
+const agentStatusThreshold = 2 * time.Minute
+
+// AgentView is the API representation of an agent, including computed status.
+type AgentView struct {
+	AgentRecord
+	Status string `json:"status"` // "online", "offline", "busy"
+}
+
+// toView converts an AgentRecord to an AgentView with computed status.
+func (r *AgentRecord) toView(busyAgents map[string]bool) AgentView {
+	status := "offline"
+	if time.Since(r.LastSeenAt) < agentStatusThreshold {
+		status = "online"
+	}
+	if busyAgents != nil && busyAgents[r.AgentID] {
+		status = "busy"
+	}
+	return AgentView{
+		AgentRecord: *r,
+		Status:      status,
+	}
+}
+
 // AgentRegistry manages the fleet of registered burn-in agents.
 type AgentRegistry struct {
 	mu       sync.RWMutex
@@ -102,6 +126,37 @@ func (r *AgentRegistry) Get(agentID string) *AgentRecord {
 	}
 	cp := *rec
 	return &cp
+}
+
+// Delete removes an agent from the registry. Returns true if the agent existed.
+func (r *AgentRegistry) Delete(agentID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, ok := r.agents[agentID]; !ok {
+		return false
+	}
+
+	delete(r.agents, agentID)
+	r.logger.Info("agent deleted", "agent_id", agentID)
+
+	if err := r.persistLocked(); err != nil {
+		r.logger.Error("failed to persist agent registry after delete", "error", err)
+	}
+
+	return true
+}
+
+// ListViews returns all registered agents with computed status.
+func (r *AgentRegistry) ListViews(busyAgents map[string]bool) []AgentView {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]AgentView, 0, len(r.agents))
+	for _, rec := range r.agents {
+		out = append(out, rec.toView(busyAgents))
+	}
+	return out
 }
 
 // List returns all registered agents.

@@ -160,11 +160,13 @@
           "config": {
             "source": "addon_agents",
             "columns": [
+              { "key": "status", "label": "Status", "format": "status_dot" },
               { "key": "agent_id", "label": "Agent ID" },
               { "key": "hostname", "label": "Hostname" },
               { "key": "arch", "label": "Architecture" },
               { "key": "drive_count", "label": "Drives" },
-              { "key": "last_seen_at", "label": "Last Seen", "format": "relative_time" }
+              { "key": "last_seen_at", "label": "Last Seen", "format": "relative_time" },
+              { "key": "_actions", "label": "", "format": "actions", "actions": [{ "type": "delete", "id_key": "agent_id", "label": "Delete agent" }] }
             ],
             "expandable": true,
             "expand_key": "drives"

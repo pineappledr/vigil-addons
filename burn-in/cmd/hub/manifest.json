@@ -169,7 +169,9 @@
               { "key": "_actions", "label": "", "format": "actions", "actions": [{ "type": "delete", "id_key": "agent_id", "label": "Delete agent" }] }
             ],
             "expandable": true,
-            "expand_key": "drives"
+            "expand_key": "drives",
+            "sortable": true,
+            "default_sort": { "key": "agent_id", "direction": "asc" }
           }
         },
         {

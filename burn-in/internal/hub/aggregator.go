@@ -199,6 +199,12 @@ func (a *Aggregator) readLoop(ac *agentConn) {
 		// Enforce agent_id tagging — always use the authenticated connection's ID.
 		frame.AgentID = ac.agentID
 
+		a.logger.Debug("agent frame received",
+			"agent_id", ac.agentID,
+			"type", frame.Type,
+			"job_id", frame.JobID,
+		)
+
 		// Keep the agent's last-seen timestamp fresh.
 		a.registry.TouchLastSeen(ac.agentID)
 
@@ -212,14 +218,30 @@ func (a *Aggregator) processFrame(frame agentFrame) {
 	a.mu.Unlock()
 
 	if upstream == nil {
+		a.logger.Warn("frame dropped: upstream not configured",
+			"agent_id", frame.AgentID,
+			"type", frame.Type,
+			"job_id", frame.JobID,
+		)
 		return
 	}
 
 	switch frame.Type {
 	case "progress":
+		a.logger.Info("relaying progress frame upstream",
+			"agent_id", frame.AgentID,
+			"job_id", frame.JobID,
+			"phase", frame.Phase,
+			"percent", frame.Percent,
+		)
 		a.forwardProgress(upstream, frame)
 		a.evaluateProgress(upstream, frame)
 	case "log":
+		a.logger.Info("relaying log frame upstream",
+			"agent_id", frame.AgentID,
+			"job_id", frame.JobID,
+			"severity", frame.Severity,
+		)
 		a.forwardLog(upstream, frame)
 		a.evaluateLog(upstream, frame)
 	default:
@@ -243,7 +265,12 @@ func (a *Aggregator) forwardProgress(upstream *TelemetryClient, frame agentFrame
 		SmartDeltas:  frame.SmartDeltas,
 	}
 	if err := upstream.SendProgress(p); err != nil {
-		a.logger.Warn("failed to relay progress upstream", "agent_id", frame.AgentID, "error", err)
+		a.logger.Warn("failed to relay progress upstream",
+			"agent_id", frame.AgentID,
+			"job_id", frame.JobID,
+			"phase", frame.Phase,
+			"error", err,
+		)
 	}
 }
 
@@ -260,7 +287,11 @@ func (a *Aggregator) forwardLog(upstream *TelemetryClient, frame agentFrame) {
 		Timestamp: ts,
 	}
 	if err := upstream.SendLog(l); err != nil {
-		a.logger.Warn("failed to relay log upstream", "agent_id", frame.AgentID, "error", err)
+		a.logger.Warn("failed to relay log upstream",
+			"agent_id", frame.AgentID,
+			"job_id", frame.JobID,
+			"error", err,
+		)
 	}
 }
 

@@ -91,8 +91,19 @@ func run(logger *slog.Logger) error {
 			cfg.Hub.HeartbeatInterval,
 			logger,
 		)
-		aggregator.SetUpstream(telemetry)
-		telemetry.Run(ctx) // blocks until ctx is cancelled
+
+		// Start the WS connection in the background; wait for it to
+		// become ready before wiring it into the aggregator so that
+		// no frames are dropped during the initial dial.
+		go telemetry.Run(ctx)
+
+		select {
+		case <-telemetry.Ready():
+			logger.Info("upstream telemetry pipeline ready, enabling aggregator relay")
+			aggregator.SetUpstream(telemetry)
+		case <-ctx.Done():
+			return
+		}
 	}()
 
 	// Start HTTP server.

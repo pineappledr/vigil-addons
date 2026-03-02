@@ -68,8 +68,10 @@ type TelemetryClient struct {
 	heartbeatInt  time.Duration
 	logger        *slog.Logger
 
-	mu   sync.Mutex
-	conn *websocket.Conn
+	mu    sync.Mutex
+	conn  *websocket.Conn
+	ready chan struct{} // closed once the first connection succeeds
+	once  sync.Once
 }
 
 // NewTelemetryClient creates an upstream telemetry client.
@@ -80,7 +82,15 @@ func NewTelemetryClient(serverURL string, addonID int64, agentToken string, hear
 		agentToken:   agentToken,
 		heartbeatInt: heartbeatInterval,
 		logger:       logger,
+		ready:        make(chan struct{}),
 	}
+}
+
+// Ready returns a channel that is closed when the first upstream connection
+// is established. Callers can select on this to delay operations until the
+// telemetry pipeline is active.
+func (t *TelemetryClient) Ready() <-chan struct{} {
+	return t.ready
 }
 
 // Run connects to the Vigil server and maintains the connection indefinitely.
@@ -147,7 +157,13 @@ func (t *TelemetryClient) connectAndServe(ctx context.Context) error {
 	t.conn = conn
 	t.mu.Unlock()
 
-	t.logger.Info("upstream websocket connected")
+	// Signal that the upstream pipeline is ready for the first time.
+	t.once.Do(func() { close(t.ready) })
+
+	t.logger.Info("upstream websocket connected",
+		"addon_id", t.addonID,
+		"url", wsURL,
+	)
 
 	// Heartbeat loop in a separate goroutine.
 	// If the heartbeat write fails, close the connection to unblock ReadMessage.
@@ -217,9 +233,23 @@ func (t *TelemetryClient) send(frameType string, payload any) error {
 	t.mu.Unlock()
 
 	if conn == nil {
+		t.logger.Warn("upstream frame dropped: websocket not connected",
+			"frame_type", frameType,
+			"payload_size", len(data),
+		)
 		return fmt.Errorf("upstream websocket not connected")
 	}
-	return t.writeFrame(conn, frame)
+
+	if err := t.writeFrame(conn, frame); err != nil {
+		t.logger.Warn("upstream frame write failed",
+			"frame_type", frameType,
+			"error", err,
+		)
+		return err
+	}
+
+	t.logger.Debug("upstream frame sent", "frame_type", frameType, "payload_size", len(data))
+	return nil
 }
 
 func (t *TelemetryClient) writeFrame(conn *websocket.Conn, frame TelemetryFrame) error {

@@ -32,6 +32,9 @@ type JobDispatcher interface {
 	StartJob(cmd JobCommand) (string, error)
 }
 
+// JobHistoryFunc returns all job records (active + completed) as a JSON-marshalable slice.
+type JobHistoryFunc func() any
+
 // JobCommand is the inbound command for job dispatch.
 // Mirrors the structure expected by the job manager.
 type JobCommand struct {
@@ -46,6 +49,7 @@ type AgentAPI struct {
 	serverPubkey ed25519.PublicKey
 	logger       *slog.Logger
 	dispatcher   JobDispatcher
+	historyFn    JobHistoryFunc
 
 	mu         sync.Mutex
 	activeJobs map[string]JobCancelFunc
@@ -56,6 +60,11 @@ type AgentAPI struct {
 // AgentAPI needs JobManager for dispatch).
 func (a *AgentAPI) SetJobDispatcher(d JobDispatcher) {
 	a.dispatcher = d
+}
+
+// SetJobHistoryFunc injects the function used to retrieve all job records.
+func (a *AgentAPI) SetJobHistoryFunc(fn JobHistoryFunc) {
+	a.historyFn = fn
 }
 
 // NewAgentAPI creates the agent API server.
@@ -86,6 +95,7 @@ func (a *AgentAPI) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", a.handleHealth)
 	mux.HandleFunc("POST /api/execute", a.handleExecute)
+	mux.HandleFunc("GET /api/jobs/history", a.handleJobHistory)
 	mux.HandleFunc("DELETE /api/jobs/{id}", a.handleAbortJob)
 	return mux
 }
@@ -108,7 +118,25 @@ func (a *AgentAPI) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (a *AgentAPI) handleJobHistory(w http.ResponseWriter, _ *http.Request) {
+	if a.historyFn == nil {
+		a.logger.Error("job history provider not configured")
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "job history not available"})
+		return
+	}
+
+	records := a.historyFn()
+	a.logger.Info("job history requested")
+	writeJSON(w, http.StatusOK, records)
+}
+
 func (a *AgentAPI) handleExecute(w http.ResponseWriter, r *http.Request) {
+	a.logger.Info("execute endpoint hit",
+		"method", r.Method,
+		"remote_addr", r.RemoteAddr,
+		"content_length", r.ContentLength,
+	)
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxPayloadSize))
 	if err != nil {
 		a.logger.Error("failed to read execute payload", "error", err)
@@ -116,41 +144,60 @@ func (a *AgentAPI) handleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.logger.Info("execute payload received", "body_size", len(body))
+
 	// Verify Ed25519 signature before processing.
 	if a.serverPubkey != nil {
+		a.logger.Info("verifying ed25519 signature")
 		if err := a.verifySignature(body); err != nil {
-			a.logger.Warn("signature verification failed", "error", err)
+			a.logger.Warn("signature verification failed",
+				"error", err,
+				"pubkey_len", len(a.serverPubkey),
+			)
 			writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "invalid signature"})
 			return
 		}
+		a.logger.Info("signature verification passed")
+	} else {
+		a.logger.Warn("signature verification skipped (no pubkey configured)")
 	}
 
 	var payload ExecutePayload
 	if err := json.Unmarshal(body, &payload); err != nil {
+		a.logger.Error("execute payload JSON parse failed", "error", err)
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON payload"})
 		return
 	}
 
 	if payload.Command == "" {
+		a.logger.Warn("execute rejected: missing command field")
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "command is required"})
 		return
 	}
 	if payload.Target == "" {
+		a.logger.Warn("execute rejected: missing target field")
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "target is required"})
 		return
 	}
 
-	a.logger.Info("execute command received",
+	a.logger.Info("execute command parsed",
 		"command", payload.Command,
 		"target", payload.Target,
 		"agent_id", payload.AgentID,
+		"has_params", len(payload.Params) > 0,
+		"has_signature", payload.Signature != "",
 	)
 
 	if a.dispatcher == nil {
-		a.logger.Error("job dispatcher not configured")
+		a.logger.Error("job dispatcher not configured — cannot process command")
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "job dispatcher not configured"})
 		return
 	}
+
+	a.logger.Info("dispatching job to manager",
+		"command", payload.Command,
+		"target", payload.Target,
+	)
 
 	jobID, err := a.dispatcher.StartJob(JobCommand{
 		AgentID: payload.AgentID,
@@ -159,12 +206,20 @@ func (a *AgentAPI) handleExecute(w http.ResponseWriter, r *http.Request) {
 		Params:  payload.Params,
 	})
 	if err != nil {
-		a.logger.Error("failed to start job", "error", err)
+		a.logger.Error("job dispatch failed",
+			"command", payload.Command,
+			"target", payload.Target,
+			"error", err,
+		)
 		writeJSON(w, http.StatusConflict, errorResponse{Error: err.Error()})
 		return
 	}
 
-	a.logger.Info("job dispatched", "job_id", jobID, "command", payload.Command)
+	a.logger.Info("job accepted and running",
+		"job_id", jobID,
+		"command", payload.Command,
+		"target", payload.Target,
+	)
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status": "accepted",
 		"job_id": jobID,

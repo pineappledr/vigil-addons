@@ -62,6 +62,7 @@ func run(logger *slog.Logger) error {
 	persist := jobs.NewJobPersistence("")
 	jobManager := jobs.NewJobManager(hubTelemetry, persist, agentAPI, logger)
 	agentAPI.SetJobDispatcher(&jobDispatcherAdapter{manager: jobManager})
+	agentAPI.SetJobHistoryFunc(func() any { return jobManager.ListAllJobs() })
 
 	httpServer := &http.Server{
 		Addr:         cfg.Agent.Listen,

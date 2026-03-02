@@ -80,6 +80,18 @@ func (p *JobPersistence) LoadState() ([]JobRecord, error) {
 	return incomplete, nil
 }
 
+// AllRecords returns every persisted job record regardless of status.
+func (p *JobPersistence) AllRecords() []JobRecord {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	records := make([]JobRecord, 0, len(p.states))
+	for _, rec := range p.states {
+		records = append(records, rec)
+	}
+	return records
+}
+
 // writeToDisk atomically writes all current job states to the state file.
 func (p *JobPersistence) writeToDisk() error {
 	records := make([]JobRecord, 0, len(p.states))

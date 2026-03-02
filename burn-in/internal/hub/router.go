@@ -52,6 +52,12 @@ var topLevelFields = map[string]bool{
 // The agent expects {agent_id, command, target, params: {...}}, so this
 // handler restructures the payload before forwarding.
 func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
+	cr.logger.Info("execute endpoint hit",
+		"method", r.Method,
+		"remote_addr", r.RemoteAddr,
+		"content_length", r.ContentLength,
+	)
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxPayloadSize))
 	if err != nil {
 		cr.logger.Error("failed to read execute payload", "error", err)
@@ -59,14 +65,28 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cr.logger.Info("execute payload received", "body_size", len(body))
+
 	var flat map[string]interface{}
 	if err := json.Unmarshal(body, &flat); err != nil {
+		cr.logger.Error("execute payload is not valid JSON", "error", err, "body_preview", truncate(string(body), 256))
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON payload"})
 		return
 	}
 
 	agentID, _ := flat["agent_id"].(string)
+	command, _ := flat["command"].(string)
+	target, _ := flat["target"].(string)
+
+	cr.logger.Info("execute payload parsed",
+		"agent_id", agentID,
+		"command", command,
+		"target", target,
+		"field_count", len(flat),
+	)
+
 	if agentID == "" {
+		cr.logger.Warn("execute rejected: missing agent_id in payload")
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "agent_id is required in payload"})
 		return
 	}
@@ -110,7 +130,10 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 
 	cr.logger.Info("routing command to agent",
 		"agent_id", agentID,
-		"target", agent.AdvertiseAddr,
+		"advertise_addr", agent.AdvertiseAddr,
+		"command", command,
+		"target", target,
+		"forwarded_size", len(forwarded),
 	)
 
 	agentResp, err := cr.forwardToAgent(r.Context(), agent.AdvertiseAddr, forwarded)
@@ -127,6 +150,8 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	defer agentResp.Body.Close()
 
 	// Relay the agent's response back to the caller.
+	cr.logger.Info("agent responded", "agent_id", agentID, "status_code", agentResp.StatusCode)
+
 	respBody, err := io.ReadAll(io.LimitReader(agentResp.Body, maxPayloadSize))
 	if err != nil {
 		cr.logger.Error("failed to retrieve agent response", "agent_id", agentID, "error", err)
@@ -137,6 +162,64 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(agentResp.StatusCode)
 	w.Write(respBody)
+}
+
+// HandleJobHistory is the HTTP handler for GET /api/jobs/history.
+// It fans out to all registered agents, collects their job records,
+// and returns a merged JSON array.
+func (cr *CommandRouter) HandleJobHistory(w http.ResponseWriter, r *http.Request) {
+	agents := cr.registry.List()
+	cr.logger.Info("retrieving job history from agents", "agent_count", len(agents))
+
+	var allRecords []json.RawMessage
+
+	for _, agent := range agents {
+		if agent.AdvertiseAddr == "" {
+			continue
+		}
+
+		raw := fmt.Sprintf("http://%s/api/jobs/history", agent.AdvertiseAddr)
+		validated, err := validateAgentURL(raw)
+		if err != nil {
+			cr.logger.Warn("invalid history target URL", "agent_id", agent.AgentID, "error", err)
+			continue
+		}
+
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, validated, nil) // #nosec
+		if err != nil {
+			continue
+		}
+
+		resp, err := cr.httpClient.Do(req) // #nosec
+		if err != nil {
+			cr.logger.Debug("history fetch failed", "agent_id", agent.AgentID, "error", err)
+			continue
+		}
+
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxPayloadSize))
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			cr.logger.Debug("agent returned non-200 for history", "agent_id", agent.AgentID, "status", resp.StatusCode)
+			continue
+		}
+
+		// Each agent returns a JSON array — merge individual records.
+		var records []json.RawMessage
+		if err := json.Unmarshal(body, &records); err != nil {
+			cr.logger.Warn("invalid history response from agent", "agent_id", agent.AgentID, "error", err)
+			continue
+		}
+
+		allRecords = append(allRecords, records...)
+		cr.logger.Info("retrieved history from agent", "agent_id", agent.AgentID, "record_count", len(records))
+	}
+
+	if allRecords == nil {
+		allRecords = []json.RawMessage{}
+	}
+
+	writeJSON(w, http.StatusOK, allRecords)
 }
 
 // HandleCancelJob is the HTTP handler for DELETE /api/jobs/{id}.
@@ -225,4 +308,12 @@ func validateAgentURL(raw string) (string, error) {
 		return "", fmt.Errorf("disallowed scheme %q in agent URL", parsed.Scheme)
 	}
 	return parsed.String(), nil
+}
+
+// truncate returns at most maxLen characters from s, appending "..." if truncated.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

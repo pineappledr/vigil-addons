@@ -143,12 +143,12 @@ func (cr *CommandRouter) HandleCancelJob(w http.ResponseWriter, r *http.Request)
 			continue
 		}
 
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodDelete, validated, nil)
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodDelete, validated, nil) // #nosec G104 -- URL is strictly validated programmatically
 		if err != nil {
 			continue
 		}
 
-		resp, err := cr.httpClient.Do(req) //nolint:gosec // G107: URL scheme and format strictly validated
+		resp, err := cr.httpClient.Do(req) // #nosec G104 -- URL is strictly validated programmatically
 		if err != nil {
 			cr.logger.Debug("cancel forward failed", "agent_id", agent.AgentID, "error", err)
 			continue
@@ -178,13 +178,13 @@ func (cr *CommandRouter) forwardToAgent(ctx context.Context, advertiseAddr strin
 		return nil, fmt.Errorf("invalid agent URL: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, validated, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, validated, bytes.NewReader(payload)) // #nosec G104 -- URL is strictly validated programmatically
 	if err != nil {
 		return nil, fmt.Errorf("creating agent request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	return cr.httpClient.Do(req) //nolint:gosec // G107: URL scheme and format strictly validated
+	return cr.httpClient.Do(req) // #nosec G104 -- URL is strictly validated programmatically
 }
 
 // validateAgentURL parses the constructed URL and enforces that the scheme

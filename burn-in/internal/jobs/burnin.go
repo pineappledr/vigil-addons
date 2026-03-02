@@ -60,6 +60,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 		// Retrieve initial temperature immediately.
 		if t, err := drive.ReadTemperature(driveInfo.Path); err == nil && t > 0 {
 			currentTempC.Store(int32(t))
+			emit.metric("temp_c", float64(t))
 		}
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -70,6 +71,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 			case <-ticker.C:
 				if t, err := drive.ReadTemperature(driveInfo.Path); err == nil && t > 0 {
 					currentTempC.Store(int32(t))
+					emit.metric("temp_c", float64(t))
 				}
 			}
 		}
@@ -168,8 +170,8 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 		overallPercent := 25.0 + progress.Percent*0.5
 		emit.progress(PhaseBadblocks, progress.Phase, overallPercent, 0, tempC, progress.Errors, liveDeltaJSON)
 
-		// Throttled local log heartbeat: every 60s or every 1% progress.
-		if now.Sub(lastBBLogTime) >= 60*time.Second || progress.Percent-lastBBLogPct >= 1.0 {
+		// Throttled local log heartbeat: every 30s or every 1% progress.
+		if now.Sub(lastBBLogTime) >= 30*time.Second || progress.Percent-lastBBLogPct >= 1.0 {
 			emit.log(SeverityInfo, "BADBLOCKS heartbeat: %.1f%% (%s) errors=%d temp=%d°C elapsed=%ds",
 				progress.Percent, progress.Phase, progress.Errors, tempC, emit.elapsed())
 			lastBBLogTime = now

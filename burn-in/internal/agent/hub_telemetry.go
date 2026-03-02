@@ -51,6 +51,15 @@ type LogFrame struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// MetricFrame is a chart data point sent to the hub for real-time charting.
+type MetricFrame struct {
+	Type      string  `json:"type"`
+	AgentID   string  `json:"agent_id"`
+	Key       string  `json:"key"`
+	Value     float64 `json:"value"`
+	Timestamp string  `json:"timestamp"`
+}
+
 // HubTelemetry manages the persistent WebSocket connection to the hub
 // for streaming telemetry frames.
 type HubTelemetry struct {
@@ -195,6 +204,18 @@ func (t *HubTelemetry) SendLog(jobID, severity, message string) error {
 		Level:     severity,
 		Message:   message,
 		Source:    t.agentID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+	return t.writeJSON(frame)
+}
+
+// SendMetric transmits a chart metric data point to the hub.
+func (t *HubTelemetry) SendMetric(key string, value float64) error {
+	frame := MetricFrame{
+		Type:      "metric",
+		AgentID:   t.agentID,
+		Key:       key,
+		Value:     value,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 	return t.writeJSON(frame)

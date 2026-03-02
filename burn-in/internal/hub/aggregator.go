@@ -158,6 +158,8 @@ type agentFrame struct {
 	Message      string          `json:"message,omitempty"`
 	Source       string          `json:"source,omitempty"`
 	Timestamp    string          `json:"timestamp,omitempty"`
+	Key          string          `json:"key,omitempty"`   // metric frames
+	Value        float64         `json:"value,omitempty"` // metric frames
 }
 
 // resolveLevel returns the log level from an agent frame, preferring "level"
@@ -269,6 +271,12 @@ func (a *Aggregator) processFrame(frame agentFrame) {
 		)
 		a.forwardLog(upstream, frame)
 		a.evaluateLog(upstream, frame)
+	case "metric":
+		a.logger.Debug("relaying metric frame upstream",
+			"agent_id", frame.AgentID,
+			"key", frame.Key,
+		)
+		a.forwardMetric(upstream, frame)
 	default:
 		a.logger.Warn("unknown frame type from agent", "agent_id", frame.AgentID, "type", frame.Type)
 	}
@@ -294,6 +302,25 @@ func (a *Aggregator) forwardProgress(upstream *TelemetryClient, frame agentFrame
 			"agent_id", frame.AgentID,
 			"job_id", frame.JobID,
 			"phase", frame.Phase,
+			"error", err,
+		)
+	}
+}
+
+func (a *Aggregator) forwardMetric(upstream *TelemetryClient, frame agentFrame) {
+	ts := frame.Timestamp
+	if ts == "" {
+		ts = time.Now().UTC().Format(time.RFC3339)
+	}
+	m := MetricPayload{
+		Key:       frame.Key,
+		Value:     frame.Value,
+		Timestamp: ts,
+	}
+	if err := upstream.SendMetric(m); err != nil {
+		a.logger.Warn("failed to relay metric upstream",
+			"agent_id", frame.AgentID,
+			"key", frame.Key,
 			"error", err,
 		)
 	}

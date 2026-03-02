@@ -33,6 +33,7 @@ const (
 type TelemetrySink interface {
 	SendProgress(jobID, command, phase, phaseDetail string, percent, speedMbps float64, tempC int, elapsedSec, etaSec int64, badblockErrs int, smartDeltas json.RawMessage) error
 	SendLog(jobID, severity, message string) error
+	SendMetric(key string, value float64) error
 }
 
 // emitter wraps TelemetrySink with convenience methods for job orchestrators.
@@ -66,8 +67,36 @@ func (e *emitter) progress(phase, detail string, percent, speedMbps float64, tem
 	if e.sink == nil {
 		return
 	}
-	if err := e.sink.SendProgress(e.jobID, e.command, phase, detail, percent, speedMbps, tempC, e.elapsed(), 0, badblockErrs, smartDeltas); err != nil {
+	etaSec := e.estimateETA(percent)
+	if err := e.sink.SendProgress(e.jobID, e.command, phase, detail, percent, speedMbps, tempC, e.elapsed(), etaSec, badblockErrs, smartDeltas); err != nil {
 		e.logger.Warn("failed to transmit progress", "error", err, "phase", phase)
+	}
+}
+
+// estimateETA calculates the remaining seconds based on elapsed time and
+// overall completion percentage. Returns 0 if estimation is not meaningful.
+func (e *emitter) estimateETA(percent float64) int64 {
+	if percent <= 0 || percent >= 100 {
+		return 0
+	}
+	elapsedSec := float64(time.Since(e.start).Seconds())
+	if elapsedSec < 5 {
+		return 0 // Too early for a meaningful estimate.
+	}
+	totalEstimate := elapsedSec / (percent / 100.0)
+	remaining := totalEstimate - elapsedSec
+	if remaining < 0 {
+		return 0
+	}
+	return int64(remaining)
+}
+
+func (e *emitter) metric(key string, value float64) {
+	if e.sink == nil {
+		return
+	}
+	if err := e.sink.SendMetric(key, value); err != nil {
+		e.logger.Warn("failed to transmit metric", "error", err, "key", key)
 	}
 }
 

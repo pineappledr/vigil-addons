@@ -61,6 +61,13 @@ type NotificationPayload struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// MetricPayload is the payload for a chart metric telemetry frame.
+type MetricPayload struct {
+	Key       string  `json:"key"`
+	Value     float64 `json:"value"`
+	Timestamp string  `json:"timestamp"`
+}
+
 // TelemetryClient manages the persistent WebSocket connection to the Vigil server.
 type TelemetryClient struct {
 	serverURL     string
@@ -217,6 +224,11 @@ func (t *TelemetryClient) SendLog(l LogPayload) error {
 // SendNotification transmits a notification frame upstream.
 func (t *TelemetryClient) SendNotification(n NotificationPayload) error {
 	return t.send("notification", n)
+}
+
+// SendMetric transmits a chart metric frame upstream.
+func (t *TelemetryClient) SendMetric(m MetricPayload) error {
+	return t.send("metric", m)
 }
 
 func (t *TelemetryClient) send(frameType string, payload any) error {

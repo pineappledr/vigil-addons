@@ -229,11 +229,17 @@ func (cr *CommandRouter) HandleJobHistory(w http.ResponseWriter, r *http.Request
 }
 
 // parseTimeRange converts a shorthand time range string into a duration.
-// Supported formats: "1h", "24h", "7d", "14d", "30d", "90d".
+// Supported formats: "5m", "15m", "1h", "6h", "24h", "7d", "14d", "30d", "90d".
 func parseTimeRange(tr string) (time.Duration, bool) {
 	switch tr {
+	case "5m":
+		return 5 * time.Minute, true
+	case "15m":
+		return 15 * time.Minute, true
 	case "1h":
 		return 1 * time.Hour, true
+	case "6h":
+		return 6 * time.Hour, true
 	case "24h":
 		return 24 * time.Hour, true
 	case "7d":

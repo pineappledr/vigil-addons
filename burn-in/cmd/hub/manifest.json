@@ -9,28 +9,6 @@
       "icon": "activity",
       "components": [
         {
-          "type": "form",
-          "id": "dashboard-toolbar",
-          "config": {
-            "layout": "inline",
-            "fields": [
-              {
-                "name": "time_range",
-                "label": "Time Range",
-                "type": "select",
-                "default": "1h",
-                "options": [
-                  { "value": "5m", "label": "Last 5 Min" },
-                  { "value": "15m", "label": "Last 15 Min" },
-                  { "value": "1h", "label": "Last 1 Hour" },
-                  { "value": "6h", "label": "Last 6 Hours" }
-                ]
-              }
-            ],
-            "submit_label": "Refresh"
-          }
-        },
-        {
           "type": "progress",
           "id": "active-jobs",
           "title": "Active Jobs",
@@ -91,7 +69,17 @@
             "max_lines": 200,
             "levels": ["info", "warn", "error"],
             "show_timestamp": true,
-            "show_source": true
+            "show_source": true,
+            "source": "log_history",
+            "time_filter": {
+              "default": "1h",
+              "options": [
+                { "value": "5m", "label": "Last 5 Min" },
+                { "value": "15m", "label": "Last 15 Min" },
+                { "value": "1h", "label": "Last 1 Hour" },
+                { "value": "6h", "label": "Last 6 Hours" }
+              ]
+            }
           }
         }
       ]

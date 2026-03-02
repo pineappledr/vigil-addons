@@ -17,7 +17,13 @@
             "show_phase": true,
             "show_eta": true,
             "show_speed": true,
-            "show_temperature": true
+            "show_temperature": true,
+            "cancel": {
+              "enabled": true,
+              "endpoint": "/api/jobs/{job_id}",
+              "method": "DELETE",
+              "confirm_message": "Cancel this job? The running operation will be aborted."
+            }
           }
         },
         {

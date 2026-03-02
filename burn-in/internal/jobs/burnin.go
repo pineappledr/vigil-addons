@@ -71,7 +71,12 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	// ── Phase 2: SMART SHORT ────────────────────────────────────────────
 	emit.phase(PhaseSmartShort, "starting short test", 15)
 
-	shortResult, err := drive.RunShortTest(ctx, driveInfo.Path)
+	shortResult, err := drive.RunShortTest(ctx, driveInfo.Path, func(pct float64, elapsed time.Duration, msg string) {
+		// Map short test progress (0-100%) into the overall 15-25% band.
+		overallPct := 15.0 + pct*0.10
+		emit.progress(PhaseSmartShort, msg, overallPct, 0, 0, 0, nil)
+		emit.log(SeverityInfo, "SMART_SHORT heartbeat: %.1f%% elapsed=%s", pct, elapsed.Round(time.Second))
+	})
 	if err != nil {
 		return nil, failJob(emit, result, PhaseSmartShort, "short test failed: %v", err)
 	}
@@ -109,10 +114,21 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 		}
 	}
 
+	var lastBBLogTime time.Time
+	var lastBBLogPct float64
 	bbResult, err := drive.RunBadblocks(ctx, driveInfo.Path, params.BlockSize, params.ConcurrentBlocks, params.AbortOnError, params.LogDir, func(progress drive.BadblocksProgress) {
 		// Map badblocks progress (0-100%) into the overall 25-75% band.
 		overallPercent := 25.0 + progress.Percent*0.5
 		emit.progress(PhaseBadblocks, progress.Phase, overallPercent, 0, 0, progress.Errors, nil)
+
+		// Throttled local log heartbeat: every 60s or every 1% progress.
+		now := time.Now()
+		if now.Sub(lastBBLogTime) >= 60*time.Second || progress.Percent-lastBBLogPct >= 1.0 {
+			emit.log(SeverityInfo, "BADBLOCKS heartbeat: %.1f%% (%s) errors=%d elapsed=%ds",
+				progress.Percent, progress.Phase, progress.Errors, emit.elapsed())
+			lastBBLogTime = now
+			lastBBLogPct = progress.Percent
+		}
 	})
 	if err != nil {
 		if ctx.Err() != nil {
@@ -144,7 +160,12 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	// ── Phase 4: SMART EXTENDED ─────────────────────────────────────────
 	emit.phase(PhaseSmartExtended, "starting extended test", 75)
 
-	longResult, err := drive.RunLongTest(ctx, driveInfo.Path)
+	longResult, err := drive.RunLongTest(ctx, driveInfo.Path, func(pct float64, elapsed time.Duration, msg string) {
+		// Map extended test progress (0-100%) into the overall 75-95% band.
+		overallPct := 75.0 + pct*0.20
+		emit.progress(PhaseSmartExtended, msg, overallPct, 0, 0, 0, nil)
+		emit.log(SeverityInfo, "SMART_EXTENDED heartbeat: %.1f%% elapsed=%s", pct, elapsed.Round(time.Second))
+	})
 	if err != nil {
 		return nil, failJob(emit, result, PhaseSmartExtended, "extended test failed: %v", err)
 	}

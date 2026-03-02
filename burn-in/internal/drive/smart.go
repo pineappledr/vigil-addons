@@ -46,6 +46,10 @@ type TestResult struct {
 	Duration time.Duration `json:"duration"`
 }
 
+// SmartProgressCallback is invoked periodically during SMART self-tests to
+// report estimated progress. percent is 0–100, elapsed is time since start.
+type SmartProgressCallback func(percent float64, elapsed time.Duration, message string)
+
 // smartctlCapabilities is the JSON structure for test polling times.
 type smartctlCapabilities struct {
 	ATASMARTData struct {
@@ -91,17 +95,27 @@ type smartctlSelfTestLog struct {
 
 // RunShortTest triggers a SMART short self-test and blocks until completion.
 // If the context is cancelled, the hardware test is aborted via smartctl -X.
-func RunShortTest(ctx context.Context, devicePath string) (*TestResult, error) {
-	return runSelfTest(ctx, devicePath, "short")
+// The optional onProgress callback receives periodic heartbeat updates.
+func RunShortTest(ctx context.Context, devicePath string, onProgress ...SmartProgressCallback) (*TestResult, error) {
+	var cb SmartProgressCallback
+	if len(onProgress) > 0 {
+		cb = onProgress[0]
+	}
+	return runSelfTest(ctx, devicePath, "short", cb)
 }
 
 // RunLongTest triggers a SMART extended (long) self-test and blocks until completion.
 // If the context is cancelled, the hardware test is aborted via smartctl -X.
-func RunLongTest(ctx context.Context, devicePath string) (*TestResult, error) {
-	return runSelfTest(ctx, devicePath, "long")
+// The optional onProgress callback receives periodic heartbeat updates.
+func RunLongTest(ctx context.Context, devicePath string, onProgress ...SmartProgressCallback) (*TestResult, error) {
+	var cb SmartProgressCallback
+	if len(onProgress) > 0 {
+		cb = onProgress[0]
+	}
+	return runSelfTest(ctx, devicePath, "long", cb)
 }
 
-func runSelfTest(ctx context.Context, devicePath, testType string) (*TestResult, error) {
+func runSelfTest(ctx context.Context, devicePath, testType string, onProgress SmartProgressCallback) (*TestResult, error) {
 	if !isValidDevicePath(devicePath) {
 		return nil, fmt.Errorf("invalid device path: %q", devicePath)
 	}
@@ -130,15 +144,42 @@ func runSelfTest(ctx context.Context, devicePath, testType string) (*TestResult,
 	})
 	defer cleanup()
 
-	// Poll for completion. Start polling at 90% of estimated time,
-	// then check every 30 seconds.
-	initialWait := time.Duration(float64(pollInterval) * 0.9)
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-time.After(initialWait):
+	// Helper to emit heartbeat with estimated progress based on elapsed time.
+	emitHeartbeat := func(msg string) {
+		if onProgress == nil {
+			return
+		}
+		elapsed := time.Since(start)
+		// Estimate percent based on elapsed vs expected duration. Cap at 95%
+		// since we can't know completion until smartctl confirms it.
+		pct := float64(elapsed) / float64(pollInterval) * 100.0
+		if pct > 95 {
+			pct = 95
+		}
+		onProgress(pct, elapsed, msg)
 	}
 
+	// ── Initial wait phase with periodic heartbeats ──────────────────
+	initialWait := time.Duration(float64(pollInterval) * 0.9)
+	heartbeatTick := time.NewTicker(30 * time.Second)
+	defer heartbeatTick.Stop()
+
+	waitDeadline := time.After(initialWait)
+	emitHeartbeat(fmt.Sprintf("SMART %s test running, estimated %s", testType, pollInterval.Round(time.Second)))
+waitLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-waitDeadline:
+			emitHeartbeat(fmt.Sprintf("SMART %s initial wait complete, polling for result", testType))
+			break waitLoop
+		case <-heartbeatTick.C:
+			emitHeartbeat(fmt.Sprintf("SMART %s test in progress", testType))
+		}
+	}
+
+	// ── Polling phase ────────────────────────────────────────────────
 	const checkInterval = 30 * time.Second
 	for {
 		done, passed, status, err := checkTestComplete(devicePath)
@@ -147,12 +188,17 @@ func runSelfTest(ctx context.Context, devicePath, testType string) (*TestResult,
 		}
 
 		if done {
+			if onProgress != nil {
+				onProgress(100, time.Since(start), fmt.Sprintf("SMART %s test complete", testType))
+			}
 			return &TestResult{
 				Passed:   passed,
 				Status:   status,
 				Duration: time.Since(start),
 			}, nil
 		}
+
+		emitHeartbeat(fmt.Sprintf("SMART %s test polling, awaiting completion", testType))
 
 		select {
 		case <-ctx.Done():

@@ -186,7 +186,7 @@ If you are running the binaries directly instead of Docker, the **Agent** host n
 Install on **Debian/Ubuntu**:
 
 ```bash
-sudo apt install smartmontools e2fsprogs gptfdisk util-linux
+sudo apt install smartmontools e2fsprogs gdisk util-linux
 ```
 
 Install on **Alpine** (used by the Docker images):

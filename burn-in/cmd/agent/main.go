@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -30,10 +31,19 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	// Resolve the advertise address: explicit config, or fall back to listen addr.
+	// Resolve the advertise address: explicit config, or auto-detect outbound IP.
 	advAddr := cfg.Agent.AdvertiseAddr
 	if advAddr == "" {
-		advAddr = cfg.Agent.Listen
+		_, port, _ := net.SplitHostPort(cfg.Agent.Listen)
+		if port == "" {
+			port = "9200"
+		}
+		if ip := detectOutboundIP(); ip != "" {
+			advAddr = net.JoinHostPort(ip, port)
+		} else {
+			advAddr = cfg.Agent.Listen
+		}
+		logger.Info("auto-detected advertise address", "addr", advAddr)
 	}
 
 	hubClient := agent.NewHubClient(cfg.Hub.URL, cfg.Hub.PSK, cfg.Agent.ID, advAddr, logger)
@@ -96,4 +106,16 @@ func run(logger *slog.Logger) error {
 
 	logger.Info("agent stopped")
 	return nil
+}
+
+// detectOutboundIP returns the preferred outbound IP by dialing a UDP socket.
+// No actual traffic is sent.
+func detectOutboundIP() string {
+	conn, err := net.Dial("udp4", "8.8.8.8:53")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	addr := conn.LocalAddr().(*net.UDPAddr)
+	return addr.IP.String()
 }

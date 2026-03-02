@@ -215,7 +215,7 @@
               "image": "ghcr.io/pineappledr/vigil-addons-burnin-agent",
               "default_tag": "latest",
               "container_name": "burnin-agent",
-              "ports": ["9200:9200"],
+              "network_mode": "host",
               "privileged": true,
               "volumes": ["/dev:/dev"],
               "environment": {

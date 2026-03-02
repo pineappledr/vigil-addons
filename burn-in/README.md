@@ -303,23 +303,154 @@ For testing drives across multiple physical servers, run one Hub and multiple Ag
 
 Repeat [Step 3](#step-3-deploy-agents) on each host. Each agent registers with the Hub independently. The Hub aggregates all telemetry upstream.
 
-### Pre-compiled Binaries
+### Binary: Systemd Service (Recommended)
 
-Retrieve the latest release for your architecture from the [Releases](https://github.com/pineappledr/vigil-addons/releases) page.
+Deploy the Hub and Agent as systemd services for automatic startup, restart on failure, and proper log management.
+
+#### 1. Download the Binaries
+
+Download the latest release and install to `/usr/local/bin`:
+
+```bash
+# Hub (amd64)
+curl -sL https://github.com/pineappledr/vigil-addons/releases/latest/download/burnin-hub-linux-amd64 \
+  -o burnin-hub && chmod +x burnin-hub && sudo mv burnin-hub /usr/local/bin/
+
+# Hub (arm64)
+curl -sL https://github.com/pineappledr/vigil-addons/releases/latest/download/burnin-hub-linux-arm64 \
+  -o burnin-hub && chmod +x burnin-hub && sudo mv burnin-hub /usr/local/bin/
+```
+
+```bash
+# Agent (amd64 — requires system packages, see System Requirements above)
+curl -sL https://github.com/pineappledr/vigil-addons/releases/latest/download/burnin-agent-linux-amd64 \
+  -o burnin-agent && chmod +x burnin-agent && sudo mv burnin-agent /usr/local/bin/
+
+# Agent (arm64)
+curl -sL https://github.com/pineappledr/vigil-addons/releases/latest/download/burnin-agent-linux-arm64 \
+  -o burnin-agent && chmod +x burnin-agent && sudo mv burnin-agent /usr/local/bin/
+```
+
+#### 2. Create the Hub Service
+
+Create the environment file with your configuration:
+
+```bash
+sudo mkdir -p /etc/burnin
+sudo tee /etc/burnin/hub.env > /dev/null <<'EOF'
+VIGIL_URL=http://YOUR_VIGIL_SERVER:9080
+VIGIL_AGENT_TOKEN=your-vigil-addon-token
+VIGIL_SERVER_PUBKEY=your-server-public-key
+BURNIN_HUB_LISTEN=:9100
+BURNIN_HUB_ADVERTISE_URL=http://THIS_HOST_IP:9100
+BURNIN_HUB_DATA_DIR=/var/lib/burnin-hub
+EOF
+```
+
+Create the systemd unit:
+
+```bash
+sudo tee /etc/systemd/system/burnin-hub.service > /dev/null <<'EOF'
+[Unit]
+Description=Burn-in Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/burnin/hub.env
+ExecStart=/usr/local/bin/burnin-hub
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+Enable and start:
+
+```bash
+sudo mkdir -p /var/lib/burnin-hub
+sudo systemctl daemon-reload
+sudo systemctl enable --now burnin-hub
+```
+
+> The Hub auto-generates its agent PSK on first startup and stores it in `{data_dir}/hub.psk`. The deploy wizard on the Agents tab will pre-fill this key for you.
+
+#### 3. Create the Agent Service
+
+Create the environment file:
+
+```bash
+sudo tee /etc/burnin/agent.env > /dev/null <<'EOF'
+BURNIN_HUB_URL=http://HUB_HOST_IP:9100
+BURNIN_HUB_PSK=<copy from Hub's /var/lib/burnin-hub/hub.psk>
+BURNIN_AGENT_ID=agent-host01
+BURNIN_AGENT_LISTEN=:9200
+EOF
+```
+
+Create the systemd unit:
+
+```bash
+sudo tee /etc/systemd/system/burnin-agent.service > /dev/null <<'EOF'
+[Unit]
+Description=Burn-in Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/burnin/agent.env
+ExecStart=/usr/local/bin/burnin-agent
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+Enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now burnin-agent
+```
+
+#### Checking Status and Logs
+
+```bash
+# Service status
+sudo systemctl status burnin-hub
+sudo systemctl status burnin-agent
+
+# Follow logs
+sudo journalctl -u burnin-hub -f
+sudo journalctl -u burnin-agent -f
+```
+
+#### Upgrading Binary Services
+
+```bash
+# 1. Stop the service
+sudo systemctl stop burnin-hub   # or burnin-agent
+
+# 2. Download and replace the binary
+curl -sL https://github.com/pineappledr/vigil-addons/releases/latest/download/burnin-hub-linux-amd64 \
+  -o burnin-hub && chmod +x burnin-hub && sudo mv burnin-hub /usr/local/bin/
+
+# 3. Restart
+sudo systemctl start burnin-hub   # or burnin-agent
+```
+
+### Binary: Manual (Foreground)
+
+For quick testing or development, you can run the binaries directly:
 
 ```bash
 # Hub
-chmod +x burnin-hub-linux-amd64
-sudo mv burnin-hub-linux-amd64 /usr/local/bin/burnin-hub
-
-# Agent (requires system packages — see System Requirements above)
-chmod +x burnin-agent-linux-amd64
-sudo mv burnin-agent-linux-amd64 /usr/local/bin/burnin-agent
-```
-
-Run the Hub:
-
-```bash
 export VIGIL_URL="http://vigil-server:9080"
 export VIGIL_AGENT_TOKEN="your-token"
 export VIGIL_SERVER_PUBKEY="your-server-public-key"
@@ -327,11 +458,8 @@ export BURNIN_HUB_ADVERTISE_URL="http://addon-host:9100"
 burnin-hub
 ```
 
-> The Hub auto-generates its agent PSK on first startup and stores it in `{data_dir}/hub.psk`. The deploy wizard on the Agents tab will pre-fill this key for you.
-
-Run an Agent:
-
 ```bash
+# Agent
 export BURNIN_HUB_URL="http://addon-host:9100"
 export BURNIN_HUB_PSK="<copy from Hub's data_dir/hub.psk>"
 export BURNIN_AGENT_ID="agent-host01"

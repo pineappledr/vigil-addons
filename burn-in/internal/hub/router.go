@@ -38,15 +38,19 @@ func NewCommandRouter(registry *AgentRegistry, logger *slog.Logger) *CommandRout
 	}
 }
 
-// executePayloadHeader is used only to extract the agent_id for routing.
-// The full signed payload is forwarded untouched.
-type executePayloadHeader struct {
-	AgentID string `json:"agent_id"`
+// topLevelFields are the fields that belong at the root of the agent
+// execute payload. Everything else is nested under "params".
+var topLevelFields = map[string]bool{
+	"agent_id":  true,
+	"command":   true,
+	"target":    true,
+	"signature": true,
 }
 
 // HandleExecute is the HTTP handler for POST /api/execute.
-// It reads the agent_id from the payload, looks up the agent, and forwards
-// the complete signed payload to the agent's API.
+// Vigil forwards flat form data from the UI (all fields at the top level).
+// The agent expects {agent_id, command, target, params: {...}}, so this
+// handler restructures the payload before forwarding.
 func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxPayloadSize))
 	if err != nil {
@@ -55,46 +59,68 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var header executePayloadHeader
-	if err := json.Unmarshal(body, &header); err != nil {
+	var flat map[string]interface{}
+	if err := json.Unmarshal(body, &flat); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON payload"})
 		return
 	}
-	if header.AgentID == "" {
+
+	agentID, _ := flat["agent_id"].(string)
+	if agentID == "" {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "agent_id is required in payload"})
 		return
 	}
 
-	agent := cr.registry.Get(header.AgentID)
+	agent := cr.registry.Get(agentID)
 	if agent == nil {
-		cr.logger.Warn("command routed to unknown agent", "agent_id", header.AgentID)
+		cr.logger.Warn("command routed to unknown agent", "agent_id", agentID)
 		writeJSON(w, http.StatusNotFound, errorResponse{
-			Error: fmt.Sprintf("agent %q is not registered", header.AgentID),
+			Error: fmt.Sprintf("agent %q is not registered", agentID),
 		})
 		return
 	}
 
 	if agent.AdvertiseAddr == "" {
-		cr.logger.Error("agent has no advertise address", "agent_id", header.AgentID)
+		cr.logger.Error("agent has no advertise address", "agent_id", agentID)
 		writeJSON(w, http.StatusBadGateway, errorResponse{
-			Error: fmt.Sprintf("agent %q has no reachable address", header.AgentID),
+			Error: fmt.Sprintf("agent %q has no reachable address", agentID),
 		})
 		return
 	}
 
+	// Restructure: move non-top-level fields into "params" if not already present.
+	if _, hasParams := flat["params"]; !hasParams {
+		params := make(map[string]interface{})
+		for k, v := range flat {
+			if !topLevelFields[k] {
+				params[k] = v
+				delete(flat, k)
+			}
+		}
+		if len(params) > 0 {
+			flat["params"] = params
+		}
+	}
+
+	forwarded, err := json.Marshal(flat)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to encode payload"})
+		return
+	}
+
 	cr.logger.Info("routing command to agent",
-		"agent_id", header.AgentID,
+		"agent_id", agentID,
 		"target", agent.AdvertiseAddr,
 	)
 
-	agentResp, err := cr.forwardToAgent(r.Context(), agent.AdvertiseAddr, body)
+	agentResp, err := cr.forwardToAgent(r.Context(), agent.AdvertiseAddr, forwarded)
 	if err != nil {
 		cr.logger.Error("failed to transmit command to agent",
-			"agent_id", header.AgentID,
+			"agent_id", agentID,
 			"error", err,
 		)
 		writeJSON(w, http.StatusBadGateway, errorResponse{
-			Error: fmt.Sprintf("failed to reach agent %q: %s", header.AgentID, err),
+			Error: fmt.Sprintf("failed to reach agent %q: %s", agentID, err),
 		})
 		return
 	}
@@ -103,7 +129,7 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	// Relay the agent's response back to the caller.
 	respBody, err := io.ReadAll(io.LimitReader(agentResp.Body, maxPayloadSize))
 	if err != nil {
-		cr.logger.Error("failed to retrieve agent response", "agent_id", header.AgentID, "error", err)
+		cr.logger.Error("failed to retrieve agent response", "agent_id", agentID, "error", err)
 		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "failed to read agent response"})
 		return
 	}

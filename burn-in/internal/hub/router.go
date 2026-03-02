@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -135,8 +136,8 @@ func (cr *CommandRouter) HandleCancelJob(w http.ResponseWriter, r *http.Request)
 			continue
 		}
 
-		url := fmt.Sprintf("http://%s%s%s", agent.AdvertiseAddr, agentJobPath, jobID)
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodDelete, url, nil)
+		target := fmt.Sprintf("http://%s%s%s", agent.AdvertiseAddr, agentJobPath, url.PathEscape(jobID))
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodDelete, target, nil) // #nosec G107 -- host from trusted agent registry, jobID path-escaped
 		if err != nil {
 			continue
 		}
@@ -167,7 +168,7 @@ func (cr *CommandRouter) HandleCancelJob(w http.ResponseWriter, r *http.Request)
 func (cr *CommandRouter) forwardToAgent(ctx context.Context, advertiseAddr string, payload []byte) (*http.Response, error) {
 	url := fmt.Sprintf("http://%s%s", advertiseAddr, agentExecutePath)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload)) // #nosec G107 -- host from trusted agent registry, path is constant
 	if err != nil {
 		return nil, fmt.Errorf("creating agent request: %w", err)
 	}

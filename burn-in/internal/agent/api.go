@@ -24,15 +24,38 @@ type ExecutePayload struct {
 }
 
 // JobCancelFunc is the function to call to cancel an active job.
-type JobCancelFunc func()
+type JobCancelFunc = func()
+
+// JobDispatcher starts a job and returns its ID.
+// Implemented by jobs.JobManager.
+type JobDispatcher interface {
+	StartJob(cmd JobCommand) (string, error)
+}
+
+// JobCommand is the inbound command for job dispatch.
+// Mirrors the structure expected by the job manager.
+type JobCommand struct {
+	AgentID string          `json:"agent_id"`
+	Command string          `json:"command"`
+	Target  string          `json:"target"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
 
 // AgentAPI is the HTTP server for the burn-in agent.
 type AgentAPI struct {
 	serverPubkey ed25519.PublicKey
 	logger       *slog.Logger
+	dispatcher   JobDispatcher
 
 	mu         sync.Mutex
 	activeJobs map[string]JobCancelFunc
+}
+
+// SetJobDispatcher injects the job manager after construction to break
+// the circular dependency (JobManager needs AgentAPI for lifecycle callbacks,
+// AgentAPI needs JobManager for dispatch).
+func (a *AgentAPI) SetJobDispatcher(d JobDispatcher) {
+	a.dispatcher = d
 }
 
 // NewAgentAPI creates the agent API server.
@@ -123,12 +146,28 @@ func (a *AgentAPI) handleExecute(w http.ResponseWriter, r *http.Request) {
 		"agent_id", payload.AgentID,
 	)
 
-	// TODO: Dispatch to job manager in Sprint C/D/E.
-	// For now, accept and acknowledge the command.
+	if a.dispatcher == nil {
+		a.logger.Error("job dispatcher not configured")
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "job dispatcher not configured"})
+		return
+	}
+
+	jobID, err := a.dispatcher.StartJob(JobCommand{
+		AgentID: payload.AgentID,
+		Command: payload.Command,
+		Target:  payload.Target,
+		Params:  payload.Params,
+	})
+	if err != nil {
+		a.logger.Error("failed to start job", "error", err)
+		writeJSON(w, http.StatusConflict, errorResponse{Error: err.Error()})
+		return
+	}
+
+	a.logger.Info("job dispatched", "job_id", jobID, "command", payload.Command)
 	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status":  "accepted",
-		"command": payload.Command,
-		"target":  payload.Target,
+		"status": "accepted",
+		"job_id": jobID,
 	})
 }
 

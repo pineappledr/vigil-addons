@@ -13,6 +13,7 @@ import (
 
 	"github.com/pineapple/vigil-addons/burn-in/internal/agent"
 	"github.com/pineapple/vigil-addons/burn-in/internal/config"
+	"github.com/pineapple/vigil-addons/burn-in/internal/jobs"
 )
 
 func main() {
@@ -56,6 +57,11 @@ func run(logger *slog.Logger) error {
 
 	// Hub telemetry WebSocket client for streaming progress/log frames.
 	hubTelemetry := agent.NewHubTelemetry(cfg.Hub.URL, cfg.Agent.ID, cfg.Hub.PSK, logger)
+
+	// Job manager: dispatches burn-in/preclear/full jobs, streams telemetry.
+	persist := jobs.NewJobPersistence("")
+	jobManager := jobs.NewJobManager(hubTelemetry, persist, agentAPI, logger)
+	agentAPI.SetJobDispatcher(&jobDispatcherAdapter{manager: jobManager})
 
 	httpServer := &http.Server{
 		Addr:         cfg.Agent.Listen,
@@ -106,6 +112,21 @@ func run(logger *slog.Logger) error {
 
 	logger.Info("agent stopped")
 	return nil
+}
+
+// jobDispatcherAdapter bridges agent.JobDispatcher to jobs.JobManager,
+// converting between the two packages' JobCommand types.
+type jobDispatcherAdapter struct {
+	manager *jobs.JobManager
+}
+
+func (a *jobDispatcherAdapter) StartJob(cmd agent.JobCommand) (string, error) {
+	return a.manager.StartJob(jobs.JobCommand{
+		AgentID: cmd.AgentID,
+		Command: cmd.Command,
+		Target:  cmd.Target,
+		Params:  cmd.Params,
+	})
 }
 
 // detectOutboundIP returns the preferred outbound IP by dialing a UDP socket.

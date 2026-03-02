@@ -12,7 +12,7 @@ import (
 // PreclearParams holds the configuration for a single pre-clear job.
 type PreclearParams struct {
 	FileSystem  string `json:"file_system"`
-	ReservedPct int    `json:"reserved_pct"`
+	ReservedPct int    `json:"reserved_percent"`
 	LogDir      string `json:"log_dir"`
 }
 

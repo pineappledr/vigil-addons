@@ -41,15 +41,18 @@
           "id": "temperature-chart",
           "title": "Drive Temperature",
           "config": {
-            "chart_type": "line",
-            "x_axis": "time",
-            "y_axis": "temp_c",
-            "y_label": "Temperature (°C)",
-            "thresholds": [
-              { "value": 45, "color": "#f59e0b", "label": "Warning" },
-              { "value": 55, "color": "#ef4444", "label": "Critical" }
+            "datasets": [
+              { "key": "temp_c", "label": "Temperature", "color": "#f59e0b", "fill": true }
             ],
-            "max_points": 360
+            "maxPoints": 360,
+            "yAxes": {
+              "left": {
+                "title": "Temperature (°C)",
+                "unit": "°C",
+                "min": 20,
+                "max": 70
+              }
+            }
           }
         },
         {

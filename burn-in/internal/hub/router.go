@@ -15,6 +15,7 @@ const (
 	agentForwardTimeout = 30 * time.Second
 	maxPayloadSize      = 1 << 20 // 1 MB
 	agentExecutePath    = "/api/execute"
+	agentJobPath        = "/api/jobs/" // + {id}
 )
 
 // CommandRouter forwards signed execution payloads from the Vigil server
@@ -109,6 +110,58 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(agentResp.StatusCode)
 	w.Write(respBody)
+}
+
+// HandleCancelJob is the HTTP handler for DELETE /api/jobs/{id}.
+// The hub does not track job-to-agent mapping, so it broadcasts the
+// DELETE to all registered agents and returns the first successful response.
+func (cr *CommandRouter) HandleCancelJob(w http.ResponseWriter, r *http.Request) {
+	jobID := r.PathValue("id")
+	if jobID == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "job id is required"})
+		return
+	}
+
+	agents := cr.registry.List()
+	if len(agents) == 0 {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "no agents registered"})
+		return
+	}
+
+	cr.logger.Info("broadcasting job cancel to agents", "job_id", jobID, "agent_count", len(agents))
+
+	for _, agent := range agents {
+		if agent.AdvertiseAddr == "" {
+			continue
+		}
+
+		url := fmt.Sprintf("http://%s%s%s", agent.AdvertiseAddr, agentJobPath, jobID)
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodDelete, url, nil)
+		if err != nil {
+			continue
+		}
+
+		resp, err := cr.httpClient.Do(req)
+		if err != nil {
+			cr.logger.Debug("cancel forward failed", "agent_id", agent.AgentID, "error", err)
+			continue
+		}
+
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxPayloadSize))
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			cr.logger.Info("job cancelled via agent", "job_id", jobID, "agent_id", agent.AgentID)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(respBody)
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusNotFound, errorResponse{
+		Error: fmt.Sprintf("job %q not found on any agent", jobID),
+	})
 }
 
 func (cr *CommandRouter) forwardToAgent(ctx context.Context, advertiseAddr string, payload []byte) (*http.Response, error) {

@@ -45,6 +45,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/agents/register", s.requirePSK(s.handleRegisterAgent))
 	s.mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
 	s.mux.HandleFunc("POST /api/execute", s.router.HandleExecute)
+	s.mux.HandleFunc("DELETE /api/jobs/{id}", s.router.HandleCancelJob)
 	s.mux.HandleFunc("GET /api/agents/{id}/telemetry", s.aggregator.HandleAgentTelemetry)
 }
 

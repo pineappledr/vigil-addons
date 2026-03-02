@@ -92,8 +92,6 @@ func (a *Aggregator) HandleAgentTelemetry(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	a.logger.Info("agent telemetry connected", "agent_id", agentID)
-
 	// Mark agent as seen on connect.
 	a.registry.TouchLastSeen(agentID)
 
@@ -103,9 +101,13 @@ func (a *Aggregator) HandleAgentTelemetry(w http.ResponseWriter, r *http.Request
 	// Close any existing connection from the same agent.
 	if old, ok := a.conns[agentID]; ok {
 		old.conn.Close()
+		a.logger.Info("replaced existing telemetry connection", "agent_id", agentID)
 	}
 	a.conns[agentID] = ac
+	connCount := len(a.conns)
 	a.mu.Unlock()
+
+	a.logger.Info("agent telemetry connected", "agent_id", agentID, "active_connections", connCount)
 
 	defer func() {
 		conn.Close()
@@ -114,8 +116,9 @@ func (a *Aggregator) HandleAgentTelemetry(w http.ResponseWriter, r *http.Request
 		if cur, ok := a.conns[agentID]; ok && cur == ac {
 			delete(a.conns, agentID)
 		}
+		connCount := len(a.conns)
 		a.mu.Unlock()
-		a.logger.Info("agent telemetry disconnected", "agent_id", agentID)
+		a.logger.Info("agent telemetry disconnected", "agent_id", agentID, "active_connections", connCount)
 	}()
 
 	a.readLoop(ac)

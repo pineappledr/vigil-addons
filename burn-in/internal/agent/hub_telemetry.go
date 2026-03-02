@@ -42,13 +42,25 @@ type ProgressFrame struct {
 // Field names match the Vigil UI expectations: "level" (not "severity"),
 // "source" for origin identification.
 type LogFrame struct {
-	Type      string `json:"type"`
-	AgentID   string `json:"agent_id"`
-	JobID     string `json:"job_id"`
-	Level     string `json:"level"`
-	Message   string `json:"message"`
-	Source    string `json:"source"`
-	Timestamp string `json:"timestamp"`
+	Type        string `json:"type"`
+	AgentID     string `json:"agent_id"`
+	JobID       string `json:"job_id"`
+	ComponentID string `json:"component_id,omitempty"`
+	Level       string `json:"level"`
+	Message     string `json:"message"`
+	Source      string `json:"source"`
+	Timestamp   string `json:"timestamp"`
+}
+
+// ChartFrame is a targeted chart data point sent to the hub for real-time charting.
+// ComponentID identifies the specific chart component in the manifest.
+type ChartFrame struct {
+	Type        string  `json:"type"`
+	AgentID     string  `json:"agent_id"`
+	ComponentID string  `json:"component_id"`
+	Key         string  `json:"key"`
+	Value       float64 `json:"value"`
+	Timestamp   string  `json:"timestamp"`
 }
 
 // MetricFrame is a chart data point sent to the hub for real-time charting.
@@ -195,16 +207,32 @@ func (t *HubTelemetry) SendProgress(jobID, command, phase, phaseDetail string, p
 	return t.writeJSON(frame)
 }
 
-// SendLog transmits a log frame to the hub.
+// SendLog transmits a log frame to the hub, targeting the "recent-activity"
+// component so the UI routes it to the correct log viewer.
 func (t *HubTelemetry) SendLog(jobID, severity, message string) error {
 	frame := LogFrame{
-		Type:      "log",
-		AgentID:   t.agentID,
-		JobID:     jobID,
-		Level:     severity,
-		Message:   message,
-		Source:    t.agentID,
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Type:        "log",
+		AgentID:     t.agentID,
+		JobID:       jobID,
+		ComponentID: "recent-activity",
+		Level:       severity,
+		Message:     message,
+		Source:      t.agentID,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339),
+	}
+	return t.writeJSON(frame)
+}
+
+// SendChart transmits a chart data point to the hub, targeting a specific
+// chart component by its manifest ID.
+func (t *HubTelemetry) SendChart(componentID, key string, value float64) error {
+	frame := ChartFrame{
+		Type:        "chart",
+		AgentID:     t.agentID,
+		ComponentID: componentID,
+		Key:         key,
+		Value:       value,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339),
 	}
 	return t.writeJSON(frame)
 }

@@ -143,6 +143,7 @@ type agentFrame struct {
 	Type         string          `json:"type"`
 	AgentID      string          `json:"agent_id"`
 	JobID        string          `json:"job_id"`
+	ComponentID  string          `json:"component_id,omitempty"`
 	Command      string          `json:"command"`
 	Phase        string          `json:"phase"`
 	PhaseDetail  string          `json:"phase_detail,omitempty"`
@@ -158,8 +159,8 @@ type agentFrame struct {
 	Message      string          `json:"message,omitempty"`
 	Source       string          `json:"source,omitempty"`
 	Timestamp    string          `json:"timestamp,omitempty"`
-	Key          string          `json:"key,omitempty"`   // metric frames
-	Value        float64         `json:"value,omitempty"` // metric frames
+	Key          string          `json:"key,omitempty"`   // metric/chart frames
+	Value        float64         `json:"value,omitempty"` // metric/chart frames
 }
 
 // resolveLevel returns the log level from an agent frame, preferring "level"
@@ -277,6 +278,13 @@ func (a *Aggregator) processFrame(frame agentFrame) {
 			"key", frame.Key,
 		)
 		a.forwardMetric(upstream, frame)
+	case "chart":
+		a.logger.Debug("relaying chart frame upstream",
+			"agent_id", frame.AgentID,
+			"component_id", frame.ComponentID,
+			"key", frame.Key,
+		)
+		a.forwardChart(upstream, frame)
 	default:
 		a.logger.Warn("unknown frame type from agent", "agent_id", frame.AgentID, "type", frame.Type)
 	}
@@ -326,6 +334,27 @@ func (a *Aggregator) forwardMetric(upstream *TelemetryClient, frame agentFrame) 
 	}
 }
 
+func (a *Aggregator) forwardChart(upstream *TelemetryClient, frame agentFrame) {
+	ts := frame.Timestamp
+	if ts == "" {
+		ts = time.Now().UTC().Format(time.RFC3339)
+	}
+	c := ChartPayload{
+		ComponentID: frame.ComponentID,
+		Key:         frame.Key,
+		Value:       frame.Value,
+		Timestamp:   ts,
+	}
+	if err := upstream.SendChart(c); err != nil {
+		a.logger.Warn("failed to relay chart upstream",
+			"agent_id", frame.AgentID,
+			"component_id", frame.ComponentID,
+			"key", frame.Key,
+			"error", err,
+		)
+	}
+}
+
 func (a *Aggregator) forwardLog(upstream *TelemetryClient, frame agentFrame) {
 	ts := frame.Timestamp
 	if ts == "" {
@@ -336,11 +365,12 @@ func (a *Aggregator) forwardLog(upstream *TelemetryClient, frame agentFrame) {
 		source = frame.AgentID
 	}
 	l := LogPayload{
-		Level:     frame.resolveLevel(),
-		Message:   frame.Message,
-		Source:    source,
-		JobID:     frame.JobID,
-		Timestamp: ts,
+		ComponentID: frame.ComponentID,
+		Level:       frame.resolveLevel(),
+		Message:     frame.Message,
+		Source:      source,
+		JobID:       frame.JobID,
+		Timestamp:   ts,
 	}
 
 	// Persist to the ring buffer for historical queries.

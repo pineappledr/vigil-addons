@@ -34,6 +34,7 @@ type TelemetrySink interface {
 	SendProgress(jobID, command, phase, phaseDetail string, percent, speedMbps float64, tempC int, elapsedSec, etaSec int64, badblockErrs int, smartDeltas json.RawMessage) error
 	SendLog(jobID, severity, message string) error
 	SendMetric(key string, value float64) error
+	SendChart(componentID, key string, value float64) error
 }
 
 // emitter wraps TelemetrySink with convenience methods for job orchestrators.
@@ -97,6 +98,15 @@ func (e *emitter) metric(key string, value float64) {
 	}
 	if err := e.sink.SendMetric(key, value); err != nil {
 		e.logger.Warn("failed to transmit metric", "error", err, "key", key)
+	}
+}
+
+func (e *emitter) chart(componentID, key string, value float64) {
+	if e.sink == nil {
+		return
+	}
+	if err := e.sink.SendChart(componentID, key, value); err != nil {
+		e.logger.Warn("failed to transmit chart point", "error", err, "component_id", componentID, "key", key)
 	}
 }
 

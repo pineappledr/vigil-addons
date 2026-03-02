@@ -45,11 +45,12 @@ type ProgressPayload struct {
 // LogPayload is the payload for a log telemetry frame.
 // Field names match the Vigil UI contract: "level" and "source".
 type LogPayload struct {
-	Level     string `json:"level"`
-	Message   string `json:"message"`
-	Source    string `json:"source,omitempty"`
-	JobID     string `json:"job_id,omitempty"`
-	Timestamp string `json:"timestamp,omitempty"`
+	ComponentID string `json:"component_id,omitempty"`
+	Level       string `json:"level"`
+	Message     string `json:"message"`
+	Source      string `json:"source,omitempty"`
+	JobID       string `json:"job_id,omitempty"`
+	Timestamp   string `json:"timestamp,omitempty"`
 }
 
 // NotificationPayload is the payload for a notification telemetry frame.
@@ -66,6 +67,15 @@ type MetricPayload struct {
 	Key       string  `json:"key"`
 	Value     float64 `json:"value"`
 	Timestamp string  `json:"timestamp"`
+}
+
+// ChartPayload is the payload for a targeted chart telemetry frame.
+// ComponentID identifies which chart component should receive the data point.
+type ChartPayload struct {
+	ComponentID string  `json:"component_id"`
+	Key         string  `json:"key"`
+	Value       float64 `json:"value"`
+	Timestamp   string  `json:"timestamp"`
 }
 
 // TelemetryClient manages the persistent WebSocket connection to the Vigil server.
@@ -229,6 +239,11 @@ func (t *TelemetryClient) SendNotification(n NotificationPayload) error {
 // SendMetric transmits a chart metric frame upstream.
 func (t *TelemetryClient) SendMetric(m MetricPayload) error {
 	return t.send("metric", m)
+}
+
+// SendChart transmits a targeted chart data point upstream.
+func (t *TelemetryClient) SendChart(c ChartPayload) error {
+	return t.send("chart", c)
 }
 
 func (t *TelemetryClient) send(frameType string, payload any) error {

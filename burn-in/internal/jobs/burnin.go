@@ -2,8 +2,10 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/pineapple/vigil-addons/burn-in/internal/drive"
@@ -47,6 +49,32 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	result.DriveInfo = driveInfo
 
 	emit.log(SeverityInfo, "device resolved: %s model=%s serial=%s", driveInfo.Path, driveInfo.Model, driveInfo.Serial)
+
+	// ── Background temperature poller ──────────────────────────────────
+	// Polls smartctl -A every 60s to retrieve the current drive temperature.
+	// The value is stored atomically and injected into progress frames.
+	var currentTempC atomic.Int32
+	tempCtx, tempCancel := context.WithCancel(ctx)
+	defer tempCancel()
+	go func() {
+		// Retrieve initial temperature immediately.
+		if t, err := drive.ReadTemperature(driveInfo.Path); err == nil && t > 0 {
+			currentTempC.Store(int32(t))
+		}
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-tempCtx.Done():
+				return
+			case <-ticker.C:
+				if t, err := drive.ReadTemperature(driveInfo.Path); err == nil && t > 0 {
+					currentTempC.Store(int32(t))
+				}
+			}
+		}
+	}()
+
 	emit.phase(PhasePreflight, "safety check", 5)
 
 	if err := drive.IsSafeTarget(driveInfo.Path); err != nil {
@@ -74,7 +102,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	shortResult, err := drive.RunShortTest(ctx, driveInfo.Path, func(pct float64, elapsed time.Duration, msg string) {
 		// Map short test progress (0-100%) into the overall 15-25% band.
 		overallPct := 15.0 + pct*0.10
-		emit.progress(PhaseSmartShort, msg, overallPct, 0, 0, 0, nil)
+		emit.progress(PhaseSmartShort, msg, overallPct, 0, int(currentTempC.Load()), 0, nil)
 		emit.log(SeverityInfo, "SMART_SHORT heartbeat: %.1f%% elapsed=%s", pct, elapsed.Round(time.Second))
 	})
 	if err != nil {
@@ -116,16 +144,34 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 
 	var lastBBLogTime time.Time
 	var lastBBLogPct float64
+	var lastDeltaTime time.Time
+	var liveDeltaJSON json.RawMessage
 	bbResult, err := drive.RunBadblocks(ctx, driveInfo.Path, params.BlockSize, params.ConcurrentBlocks, params.AbortOnError, params.LogDir, func(progress drive.BadblocksProgress) {
+		now := time.Now()
+		tempC := int(currentTempC.Load())
+
+		// Refresh SMART deltas every 5 minutes during badblocks.
+		if now.Sub(lastDeltaTime) >= 5*time.Minute {
+			if snap, err := drive.TakeSnapshot(driveInfo.Path); err == nil {
+				delta := drive.ComputeDelta(baseline, snap)
+				if d, err := json.Marshal(delta.Deltas); err == nil {
+					liveDeltaJSON = d
+				}
+				if delta.Degraded {
+					emit.log(SeverityWarning, "SMART degradation detected during badblocks")
+				}
+			}
+			lastDeltaTime = now
+		}
+
 		// Map badblocks progress (0-100%) into the overall 25-75% band.
 		overallPercent := 25.0 + progress.Percent*0.5
-		emit.progress(PhaseBadblocks, progress.Phase, overallPercent, 0, 0, progress.Errors, nil)
+		emit.progress(PhaseBadblocks, progress.Phase, overallPercent, 0, tempC, progress.Errors, liveDeltaJSON)
 
 		// Throttled local log heartbeat: every 60s or every 1% progress.
-		now := time.Now()
 		if now.Sub(lastBBLogTime) >= 60*time.Second || progress.Percent-lastBBLogPct >= 1.0 {
-			emit.log(SeverityInfo, "BADBLOCKS heartbeat: %.1f%% (%s) errors=%d elapsed=%ds",
-				progress.Percent, progress.Phase, progress.Errors, emit.elapsed())
+			emit.log(SeverityInfo, "BADBLOCKS heartbeat: %.1f%% (%s) errors=%d temp=%d°C elapsed=%ds",
+				progress.Percent, progress.Phase, progress.Errors, tempC, emit.elapsed())
 			lastBBLogTime = now
 			lastBBLogPct = progress.Percent
 		}
@@ -163,7 +209,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	longResult, err := drive.RunLongTest(ctx, driveInfo.Path, func(pct float64, elapsed time.Duration, msg string) {
 		// Map extended test progress (0-100%) into the overall 75-95% band.
 		overallPct := 75.0 + pct*0.20
-		emit.progress(PhaseSmartExtended, msg, overallPct, 0, 0, 0, nil)
+		emit.progress(PhaseSmartExtended, msg, overallPct, 0, int(currentTempC.Load()), 0, nil)
 		emit.log(SeverityInfo, "SMART_EXTENDED heartbeat: %.1f%% elapsed=%s", pct, elapsed.Round(time.Second))
 	})
 	if err != nil {

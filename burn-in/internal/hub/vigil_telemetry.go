@@ -43,12 +43,13 @@ type ProgressPayload struct {
 }
 
 // LogPayload is the payload for a log telemetry frame.
+// Field names match the Vigil UI contract: "level" and "source".
 type LogPayload struct {
-	AgentID   string `json:"agent_id"`
-	JobID     string `json:"job_id"`
-	Severity  string `json:"severity"`
+	Level     string `json:"level"`
 	Message   string `json:"message"`
-	Timestamp string `json:"timestamp"`
+	Source    string `json:"source,omitempty"`
+	JobID     string `json:"job_id,omitempty"`
+	Timestamp string `json:"timestamp,omitempty"`
 }
 
 // NotificationPayload is the payload for a notification telemetry frame.

@@ -270,7 +270,17 @@
             "sortable": true,
             "default_sort": { "key": "started_at", "direction": "desc" },
             "filterable": true,
-            "filter_keys": ["command", "agent_id", "status"]
+            "filter_keys": ["command", "agent_id", "status"],
+            "time_filter": {
+              "default": "7d",
+              "options": [
+                { "value": "1h", "label": "Last 1 Hour" },
+                { "value": "24h", "label": "Last 24 Hours" },
+                { "value": "7d", "label": "Last 7 Days" },
+                { "value": "30d", "label": "Last 30 Days" },
+                { "value": "", "label": "All Time" }
+              ]
+            }
           }
         },
         {
@@ -282,7 +292,17 @@
             "levels": ["info", "warn", "error"],
             "show_timestamp": true,
             "show_source": true,
-            "filterable_by_job": true
+            "filterable_by_job": true,
+            "source": "log_history",
+            "time_filter": {
+              "default": "7d",
+              "options": [
+                { "value": "7d", "label": "Last 7 Days" },
+                { "value": "14d", "label": "Last 14 Days" },
+                { "value": "30d", "label": "Last 30 Days" },
+                { "value": "90d", "label": "Last 90 Days" }
+              ]
+            }
           }
         }
       ]

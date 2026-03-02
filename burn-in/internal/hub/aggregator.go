@@ -30,6 +30,17 @@ type agentConn struct {
 	conn    *websocket.Conn
 }
 
+// StoredLog is a log entry retained in the hub's ring buffer for historical queries.
+type StoredLog struct {
+	Level     string `json:"level"`
+	Message   string `json:"message"`
+	Source    string `json:"source"`
+	JobID     string `json:"job_id,omitempty"`
+	Timestamp string `json:"timestamp"`
+}
+
+const maxStoredLogs = 10000
+
 // Aggregator accepts telemetry WebSocket connections from agents,
 // evaluates frames for notification triggers, and multiplexes
 // everything into the single upstream TelemetryClient.
@@ -42,6 +53,9 @@ type Aggregator struct {
 
 	mu    sync.Mutex
 	conns map[string]*agentConn
+
+	logMu   sync.Mutex
+	logRing []StoredLog
 }
 
 // NewAggregator creates a telemetry aggregator.
@@ -139,9 +153,20 @@ type agentFrame struct {
 	ETASec       int64           `json:"eta_sec,omitempty"`
 	BadblockErrs int             `json:"badblocks_errors,omitempty"`
 	SmartDeltas  json.RawMessage `json:"smart_deltas,omitempty"`
-	Severity     string          `json:"severity,omitempty"`
+	Level        string          `json:"level,omitempty"`    // preferred — matches Vigil UI
+	Severity     string          `json:"severity,omitempty"` // legacy fallback
 	Message      string          `json:"message,omitempty"`
+	Source       string          `json:"source,omitempty"`
 	Timestamp    string          `json:"timestamp,omitempty"`
+}
+
+// resolveLevel returns the log level from an agent frame, preferring "level"
+// over the legacy "severity" field for backward compatibility.
+func (f *agentFrame) resolveLevel() string {
+	if f.Level != "" {
+		return f.Level
+	}
+	return f.Severity
 }
 
 const agentPingInterval = 30 * time.Second
@@ -240,7 +265,7 @@ func (a *Aggregator) processFrame(frame agentFrame) {
 		a.logger.Info("relaying log frame upstream",
 			"agent_id", frame.AgentID,
 			"job_id", frame.JobID,
-			"severity", frame.Severity,
+			"level", frame.resolveLevel(),
 		)
 		a.forwardLog(upstream, frame)
 		a.evaluateLog(upstream, frame)
@@ -279,13 +304,27 @@ func (a *Aggregator) forwardLog(upstream *TelemetryClient, frame agentFrame) {
 	if ts == "" {
 		ts = time.Now().UTC().Format(time.RFC3339)
 	}
+	source := frame.Source
+	if source == "" {
+		source = frame.AgentID
+	}
 	l := LogPayload{
-		AgentID:   frame.AgentID,
-		JobID:     frame.JobID,
-		Severity:  frame.Severity,
+		Level:     frame.resolveLevel(),
 		Message:   frame.Message,
+		Source:    source,
+		JobID:     frame.JobID,
 		Timestamp: ts,
 	}
+
+	// Persist to the ring buffer for historical queries.
+	a.storeLog(StoredLog{
+		Level:     l.Level,
+		Message:   l.Message,
+		Source:    l.Source,
+		JobID:     l.JobID,
+		Timestamp: l.Timestamp,
+	})
+
 	if err := upstream.SendLog(l); err != nil {
 		a.logger.Warn("failed to relay log upstream",
 			"agent_id", frame.AgentID,
@@ -293,6 +332,50 @@ func (a *Aggregator) forwardLog(upstream *TelemetryClient, frame agentFrame) {
 			"error", err,
 		)
 	}
+}
+
+// storeLog appends a log entry to the ring buffer, evicting the oldest
+// entry when capacity is exceeded.
+func (a *Aggregator) storeLog(entry StoredLog) {
+	a.logMu.Lock()
+	defer a.logMu.Unlock()
+
+	a.logRing = append(a.logRing, entry)
+	if len(a.logRing) > maxStoredLogs {
+		// Drop the oldest 10% to avoid constant slice shifting.
+		drop := maxStoredLogs / 10
+		copy(a.logRing, a.logRing[drop:])
+		a.logRing = a.logRing[:len(a.logRing)-drop]
+	}
+}
+
+// QueryLogs returns stored log entries, optionally filtered to those
+// with a timestamp within the given time range. An empty timeRange
+// returns all stored logs.
+func (a *Aggregator) QueryLogs(timeRange string) []StoredLog {
+	a.logMu.Lock()
+	snapshot := make([]StoredLog, len(a.logRing))
+	copy(snapshot, a.logRing)
+	a.logMu.Unlock()
+
+	dur, ok := parseTimeRange(timeRange)
+	if !ok || timeRange == "" {
+		return snapshot
+	}
+
+	cutoff := time.Now().Add(-dur)
+	filtered := make([]StoredLog, 0, len(snapshot))
+	for _, entry := range snapshot {
+		t, err := time.Parse(time.RFC3339, entry.Timestamp)
+		if err != nil {
+			filtered = append(filtered, entry) // Fail-open.
+			continue
+		}
+		if t.After(cutoff) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 // evaluateProgress inspects progress frames for notification triggers.
@@ -328,7 +411,7 @@ func (a *Aggregator) evaluateProgress(upstream *TelemetryClient, frame agentFram
 
 // evaluateLog inspects log frames for notification triggers.
 func (a *Aggregator) evaluateLog(upstream *TelemetryClient, frame agentFrame) {
-	switch frame.Severity {
+	switch frame.resolveLevel() {
 	case "error":
 		a.emitNotification(upstream, frame, "JobFailed", "critical",
 			fmt.Sprintf("Agent %s reported error: %s", frame.AgentID, frame.Message))

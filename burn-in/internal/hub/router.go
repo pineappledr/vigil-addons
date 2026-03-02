@@ -166,7 +166,8 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 
 // HandleJobHistory is the HTTP handler for GET /api/jobs/history.
 // It fans out to all registered agents, collects their job records,
-// and returns a merged JSON array.
+// and returns a merged JSON array. Supports an optional ?time_range
+// query parameter (e.g., "1h", "24h", "7d", "30d") to filter records.
 func (cr *CommandRouter) HandleJobHistory(w http.ResponseWriter, r *http.Request) {
 	agents := cr.registry.List()
 	cr.logger.Info("retrieving job history from agents", "agent_count", len(agents))
@@ -219,7 +220,75 @@ func (cr *CommandRouter) HandleJobHistory(w http.ResponseWriter, r *http.Request
 		allRecords = []json.RawMessage{}
 	}
 
+	// Apply time_range filter if provided.
+	if tr := r.URL.Query().Get("time_range"); tr != "" {
+		allRecords = filterByTimeRange(allRecords, tr)
+	}
+
 	writeJSON(w, http.StatusOK, allRecords)
+}
+
+// parseTimeRange converts a shorthand time range string into a duration.
+// Supported formats: "1h", "24h", "7d", "14d", "30d", "90d".
+func parseTimeRange(tr string) (time.Duration, bool) {
+	switch tr {
+	case "1h":
+		return 1 * time.Hour, true
+	case "24h":
+		return 24 * time.Hour, true
+	case "7d":
+		return 7 * 24 * time.Hour, true
+	case "14d":
+		return 14 * 24 * time.Hour, true
+	case "30d":
+		return 30 * 24 * time.Hour, true
+	case "90d":
+		return 90 * 24 * time.Hour, true
+	default:
+		return 0, false
+	}
+}
+
+// filterByTimeRange keeps only records whose "started_at" timestamp is
+// within the given window. Records with unparseable or missing timestamps
+// are retained (fail-open).
+func filterByTimeRange(records []json.RawMessage, tr string) []json.RawMessage {
+	dur, ok := parseTimeRange(tr)
+	if !ok {
+		return records // Unknown range (e.g., "" for All Time) — return unfiltered.
+	}
+
+	cutoff := time.Now().Add(-dur)
+	filtered := make([]json.RawMessage, 0, len(records))
+
+	for _, raw := range records {
+		var rec struct {
+			StartedAt string `json:"started_at"`
+		}
+		if err := json.Unmarshal(raw, &rec); err != nil || rec.StartedAt == "" {
+			filtered = append(filtered, raw) // Fail-open: keep records we can't parse.
+			continue
+		}
+
+		t, err := time.Parse(time.RFC3339, rec.StartedAt)
+		if err != nil {
+			// Try common alternative formats.
+			t, err = time.Parse("2006-01-02T15:04:05Z", rec.StartedAt)
+		}
+		if err != nil {
+			t, err = time.Parse("2006-01-02 15:04:05", rec.StartedAt)
+		}
+		if err != nil {
+			filtered = append(filtered, raw) // Unparseable — keep.
+			continue
+		}
+
+		if t.After(cutoff) {
+			filtered = append(filtered, raw)
+		}
+	}
+
+	return filtered
 }
 
 // HandleCancelJob is the HTTP handler for DELETE /api/jobs/{id}.

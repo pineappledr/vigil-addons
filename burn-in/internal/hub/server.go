@@ -47,6 +47,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/execute", s.router.HandleExecute)
 	s.mux.HandleFunc("GET /api/jobs/history", s.router.HandleJobHistory)
 	s.mux.HandleFunc("DELETE /api/jobs/{id}", s.router.HandleCancelJob)
+	s.mux.HandleFunc("GET /api/logs/history", s.handleLogHistory)
 	s.mux.HandleFunc("GET /api/agents/{id}/telemetry", s.aggregator.HandleAgentTelemetry)
 }
 
@@ -98,6 +99,12 @@ func (s *Server) handleListAgents(w http.ResponseWriter, _ *http.Request) {
 	// TODO: pass actual busy agents from job manager when available
 	agents := s.registry.ListViews(nil)
 	writeJSON(w, http.StatusOK, agents)
+}
+
+func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
+	timeRange := r.URL.Query().Get("time_range")
+	logs := s.aggregator.QueryLogs(timeRange)
+	writeJSON(w, http.StatusOK, logs)
 }
 
 func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {

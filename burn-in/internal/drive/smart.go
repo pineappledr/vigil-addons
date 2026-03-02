@@ -293,6 +293,33 @@ func abortSelfTest(devicePath string) {
 	exec.Command("smartctl", "-X", devicePath).Run()
 }
 
+// smartctlTemperature is the JSON structure for the temperature section.
+type smartctlTemperature struct {
+	Temperature struct {
+		Current int `json:"current"`
+	} `json:"temperature"`
+}
+
+// ReadTemperature retrieves the current drive temperature in °C via smartctl.
+// Returns 0 if the temperature cannot be determined.
+func ReadTemperature(devicePath string) (int, error) {
+	if !isValidDevicePath(devicePath) {
+		return 0, fmt.Errorf("invalid device path: %q", devicePath)
+	}
+
+	out, err := runSmartctl("-A", "--json", devicePath)
+	if err != nil {
+		return 0, fmt.Errorf("retrieving temperature for %s: %w", devicePath, err)
+	}
+
+	var t smartctlTemperature
+	if err := json.Unmarshal(out, &t); err != nil {
+		return 0, fmt.Errorf("parsing temperature JSON: %w", err)
+	}
+
+	return t.Temperature.Current, nil
+}
+
 // TakeSnapshot records the current raw values for critical SMART attributes.
 func TakeSnapshot(devicePath string) (*SmartSnapshot, error) {
 	if !isValidDevicePath(devicePath) {

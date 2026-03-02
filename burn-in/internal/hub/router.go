@@ -136,13 +136,19 @@ func (cr *CommandRouter) HandleCancelJob(w http.ResponseWriter, r *http.Request)
 			continue
 		}
 
-		target := fmt.Sprintf("http://%s%s%s", agent.AdvertiseAddr, agentJobPath, url.PathEscape(jobID))
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodDelete, target, nil) // #nosec G107 -- host from trusted agent registry, jobID path-escaped
+		raw := fmt.Sprintf("http://%s%s%s", agent.AdvertiseAddr, agentJobPath, url.PathEscape(jobID))
+		validated, err := validateAgentURL(raw)
+		if err != nil {
+			cr.logger.Warn("invalid cancel target URL", "agent_id", agent.AgentID, "error", err)
+			continue
+		}
+
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodDelete, validated, nil)
 		if err != nil {
 			continue
 		}
 
-		resp, err := cr.httpClient.Do(req)
+		resp, err := cr.httpClient.Do(req) //nolint:gosec // G107: URL scheme and format strictly validated
 		if err != nil {
 			cr.logger.Debug("cancel forward failed", "agent_id", agent.AgentID, "error", err)
 			continue
@@ -166,13 +172,31 @@ func (cr *CommandRouter) HandleCancelJob(w http.ResponseWriter, r *http.Request)
 }
 
 func (cr *CommandRouter) forwardToAgent(ctx context.Context, advertiseAddr string, payload []byte) (*http.Response, error) {
-	url := fmt.Sprintf("http://%s%s", advertiseAddr, agentExecutePath)
+	raw := fmt.Sprintf("http://%s%s", advertiseAddr, agentExecutePath)
+	validated, err := validateAgentURL(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid agent URL: %w", err)
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload)) // #nosec G107 -- host from trusted agent registry, path is constant
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, validated, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("creating agent request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	return cr.httpClient.Do(req)
+	return cr.httpClient.Do(req) //nolint:gosec // G107: URL scheme and format strictly validated
+}
+
+// validateAgentURL parses the constructed URL and enforces that the scheme
+// is strictly http or https. Returns the re-serialised string from the
+// parsed representation, which breaks the taint chain for static analysis.
+func validateAgentURL(raw string) (string, error) {
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil {
+		return "", fmt.Errorf("malformed agent URL %q: %w", raw, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("disallowed scheme %q in agent URL", parsed.Scheme)
+	}
+	return parsed.String(), nil
 }

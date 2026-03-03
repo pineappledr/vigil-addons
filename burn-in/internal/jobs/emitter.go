@@ -52,6 +52,10 @@ type emitter struct {
 	logger  *slog.Logger
 	logFile *JobLogFile // Optional persistent log file for this job.
 
+	// Per-phase ETA tracking — reset on each phase transition.
+	phaseStart   time.Time // when the current phase began
+	phaseBasePct float64   // overall percent at the start of the current phase
+
 	// Alive heartbeat state — written by phase(), read by the heartbeat goroutine.
 	curPhase  atomic.Value // string
 	curTempC  *atomic.Int32
@@ -65,13 +69,15 @@ func (e *emitter) setLogFile(lf *JobLogFile) {
 }
 
 func newEmitter(sink TelemetrySink, jobID, command string, logger *slog.Logger) *emitter {
+	now := time.Now()
 	e := &emitter{
-		sink:      sink,
-		jobID:     jobID,
-		command:   command,
-		start:     time.Now(),
-		logger:    logger,
-		stopAlive: make(chan struct{}),
+		sink:       sink,
+		jobID:      jobID,
+		command:    command,
+		start:      now,
+		phaseStart: now,
+		logger:     logger,
+		stopAlive:  make(chan struct{}),
 	}
 	e.curPhase.Store(PhasePreflight)
 	return e
@@ -117,6 +123,9 @@ func (e *emitter) elapsed() int64 {
 
 func (e *emitter) phase(phase, detail string, percent float64) {
 	e.curPhase.Store(phase)
+	// Reset per-phase ETA tracking on phase transitions.
+	e.phaseStart = time.Now()
+	e.phaseBasePct = percent
 	if e.logFile != nil {
 		e.logFile.WritePhase(fmt.Sprintf("%s: %s", phase, detail))
 	}
@@ -138,18 +147,38 @@ func (e *emitter) progress(phase, detail string, percent, speedMbps float64, tem
 	}
 }
 
-// estimateETA calculates the remaining seconds based on elapsed time and
-// overall completion percentage. Returns 0 if estimation is not meaningful.
+// estimateETA calculates the remaining seconds based on progress within the
+// current phase. Uses per-phase elapsed time and percent delta to avoid
+// misleading estimates at phase boundaries (e.g. badblocks starting at 25%
+// overall after a quick SMART_SHORT phase).
 func (e *emitter) estimateETA(percent float64) int64 {
 	if percent <= 0 || percent >= 100 {
 		return 0
 	}
-	elapsedSec := float64(time.Since(e.start).Seconds())
-	if elapsedSec < 5 {
-		return 0 // Too early for a meaningful estimate.
+
+	// Use per-phase progress if we have a phase start anchor.
+	phaseElapsed := time.Since(e.phaseStart).Seconds()
+	phaseDelta := percent - e.phaseBasePct
+
+	if phaseDelta > 0.5 && phaseElapsed > 5 {
+		// Estimate based on progress rate within this phase only.
+		// phaseDelta is how much overall percent we've gained in this phase.
+		// Assume the phase will reach the next milestone proportionally.
+		rate := phaseDelta / phaseElapsed // percent per second
+		remaining := (100.0 - percent) / rate
+		if remaining > 0 {
+			return int64(remaining)
+		}
+		return 0
 	}
-	totalEstimate := elapsedSec / (percent / 100.0)
-	remaining := totalEstimate - elapsedSec
+
+	// Fallback: too early in the current phase, use job-level estimate.
+	jobElapsed := time.Since(e.start).Seconds()
+	if jobElapsed < 5 {
+		return 0
+	}
+	totalEstimate := jobElapsed / (percent / 100.0)
+	remaining := totalEstimate - jobElapsed
 	if remaining < 0 {
 		return 0
 	}

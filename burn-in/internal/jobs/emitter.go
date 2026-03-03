@@ -44,6 +44,13 @@ type emitter struct {
 	command string
 	start   time.Time
 	logger  *slog.Logger
+	logFile *JobLogFile // Optional persistent log file for this job.
+}
+
+// setLogFile attaches a persistent log file to the emitter. All subsequent
+// log() and phase() calls will also write to this file.
+func (e *emitter) setLogFile(lf *JobLogFile) {
+	e.logFile = lf
 }
 
 func newEmitter(sink TelemetrySink, jobID, command string, logger *slog.Logger) *emitter {
@@ -61,6 +68,9 @@ func (e *emitter) elapsed() int64 {
 }
 
 func (e *emitter) phase(phase, detail string, percent float64) {
+	if e.logFile != nil {
+		e.logFile.WritePhase(fmt.Sprintf("%s: %s", phase, detail))
+	}
 	e.progress(phase, detail, percent, 0, 0, 0, nil)
 }
 
@@ -71,6 +81,11 @@ func (e *emitter) progress(phase, detail string, percent, speedMbps float64, tem
 	etaSec := e.estimateETA(percent)
 	if err := e.sink.SendProgress(e.jobID, e.command, phase, detail, percent, speedMbps, tempC, e.elapsed(), etaSec, badblockErrs, smartDeltas); err != nil {
 		e.logger.Warn("failed to transmit progress", "error", err, "phase", phase)
+	}
+	// Piggyback a chart frame whenever temperature is available so the
+	// drive-temperature line chart updates on every progress tick.
+	if tempC > 0 {
+		e.chart("drive-temperature", "temp_c", float64(tempC))
 	}
 }
 
@@ -113,6 +128,9 @@ func (e *emitter) chart(componentID, key string, value float64) {
 func (e *emitter) log(severity, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	e.logger.Info(msg, "job_id", e.jobID, "severity", severity)
+	if e.logFile != nil {
+		e.logFile.WriteLog(severity, "%s", msg)
+	}
 	if e.sink == nil {
 		return
 	}
@@ -122,6 +140,9 @@ func (e *emitter) log(severity, format string, args ...any) {
 }
 
 func (e *emitter) phaseComplete(phase string) {
+	if e.logFile != nil {
+		e.logFile.WritePhase(fmt.Sprintf("Finished %s", phase))
+	}
 	e.log(SeverityInfo, "phase %s complete", phase)
 }
 

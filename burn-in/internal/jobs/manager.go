@@ -65,6 +65,7 @@ type JobManager struct {
 	persist   *JobPersistence
 	lifecycle OnJobLifecycle
 	logger    *slog.Logger
+	logDir    string // Directory for persistent per-job log files.
 
 	mu         sync.Mutex
 	jobs       map[string]*managedJob
@@ -79,11 +80,13 @@ type managedJob struct {
 
 // NewJobManager creates the job manager.
 // persist may be nil to disable state persistence.
-func NewJobManager(sink TelemetrySink, persist *JobPersistence, lifecycle OnJobLifecycle, logger *slog.Logger) *JobManager {
+// logDir specifies where persistent per-job log files are written.
+func NewJobManager(sink TelemetrySink, persist *JobPersistence, lifecycle OnJobLifecycle, logDir string, logger *slog.Logger) *JobManager {
 	return &JobManager{
 		sink:       sink,
 		persist:    persist,
 		lifecycle:  lifecycle,
+		logDir:     logDir,
 		logger:     logger,
 		jobs:       make(map[string]*managedJob),
 		driveLocks: make(map[string]string),
@@ -268,7 +271,7 @@ func (m *JobManager) runJob(ctx context.Context, mj *managedJob) {
 
 func (m *JobManager) runBurninJob(ctx context.Context, mj *managedJob) {
 	rec := &mj.record
-	params := parseBurninParams(rec.Params)
+	params := parseBurninParams(rec.Params, m.logDir)
 
 	m.logger.Info("burn-in starting",
 		"job_id", rec.JobID,
@@ -304,7 +307,7 @@ func (m *JobManager) runBurninJob(ctx context.Context, mj *managedJob) {
 
 func (m *JobManager) runPreclearJob(ctx context.Context, mj *managedJob) {
 	rec := &mj.record
-	params := parsePreclearParams(rec.Params)
+	params := parsePreclearParams(rec.Params, m.logDir)
 
 	m.logger.Info("pre-clear starting",
 		"job_id", rec.JobID,
@@ -340,7 +343,7 @@ func (m *JobManager) runPreclearJob(ctx context.Context, mj *managedJob) {
 // transitions into the pre-clear pipeline using the same job ID.
 func (m *JobManager) runFullJob(ctx context.Context, mj *managedJob) {
 	rec := &mj.record
-	burninParams := parseBurninParams(rec.Params)
+	burninParams := parseBurninParams(rec.Params, m.logDir)
 
 	// Phase A: Burn-in.
 	rec.Phase = "BURNIN"
@@ -389,7 +392,7 @@ func (m *JobManager) runFullJob(ctx context.Context, mj *managedJob) {
 	m.saveState(mj)
 	m.logger.Info("full pipeline: entering PRECLEAR phase", "job_id", rec.JobID, "device", rec.DevicePath)
 
-	preclearParams := parsePreclearParams(rec.Params)
+	preclearParams := parsePreclearParams(rec.Params, m.logDir)
 
 	preclearResult, err := RunPreclear(ctx, rec.JobID, rec.DevicePath, preclearParams, m.sink, m.logger)
 	if err != nil {
@@ -480,27 +483,35 @@ func generateJobID(command, devicePath string) string {
 }
 
 // parseBurninParams extracts BurninParams from raw JSON, applying defaults.
-func parseBurninParams(raw json.RawMessage) BurninParams {
+// logDir overrides the default log directory with the agent's configured value.
+func parseBurninParams(raw json.RawMessage, logDir string) BurninParams {
 	params := BurninParams{
 		BlockSize:        4096,
 		ConcurrentBlocks: 65536,
 		AbortOnError:     true,
-		LogDir:           "/var/lib/vigil-agent/logs",
+		LogDir:           logDir,
 	}
 	if len(raw) > 0 {
 		json.Unmarshal(raw, &params)
+	}
+	if params.LogDir == "" {
+		params.LogDir = logDir
 	}
 	return params
 }
 
 // parsePreclearParams extracts PreclearParams from raw JSON, applying defaults.
-func parsePreclearParams(raw json.RawMessage) PreclearParams {
+// logDir overrides the default log directory with the agent's configured value.
+func parsePreclearParams(raw json.RawMessage, logDir string) PreclearParams {
 	params := PreclearParams{
 		ReservedPct: 1,
-		LogDir:      "/var/lib/vigil-agent/logs",
+		LogDir:      logDir,
 	}
 	if len(raw) > 0 {
 		json.Unmarshal(raw, &params)
+	}
+	if params.LogDir == "" {
+		params.LogDir = logDir
 	}
 	return params
 }

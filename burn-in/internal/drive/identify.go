@@ -12,13 +12,28 @@ import (
 	"strings"
 )
 
+// RotationType describes the physical medium of a drive.
+type RotationType string
+
+const (
+	RotationSSD     RotationType = "SSD"
+	RotationHDD     RotationType = "HDD"
+	RotationUnknown RotationType = "unknown"
+)
+
 // DriveInfo holds block device metadata resolved from smartctl.
 type DriveInfo struct {
-	Path          string `json:"path"`           // Resolved /dev/ block device path.
-	ByIDPath      string `json:"by_id_path"`     // Original /dev/disk/by-id/ symlink, if applicable.
-	Model         string `json:"model"`
-	Serial        string `json:"serial"`
-	CapacityBytes int64  `json:"capacity_bytes"`
+	Path          string       `json:"path"`           // Resolved /dev/ block device path.
+	ByIDPath      string       `json:"by_id_path"`     // Original /dev/disk/by-id/ symlink, if applicable.
+	Model         string       `json:"model"`
+	Serial        string       `json:"serial"`
+	CapacityBytes int64        `json:"capacity_bytes"`
+	Rotation      RotationType `json:"rotation"`       // SSD, HDD, or unknown.
+}
+
+// IsSSD returns true if the drive is a solid state device.
+func (d *DriveInfo) IsSSD() bool {
+	return d.Rotation == RotationSSD
 }
 
 // SmartctlIdentify is the JSON structure returned by smartctl -i --json.
@@ -28,6 +43,7 @@ type SmartctlIdentify struct {
 	UserCapacity struct {
 		Bytes int64 `json:"bytes"`
 	} `json:"user_capacity"`
+	RotationRate int    `json:"rotation_rate"` // 0 = SSD/NVMe, >0 = RPM for HDDs.
 	// Fallback fields for NVMe drives.
 	ModelFamily string `json:"model_family"`
 }
@@ -98,6 +114,15 @@ func querySmartctlJSON(devicePath string, info *DriveInfo) error {
 	info.Serial = ident.SerialNumber
 	info.CapacityBytes = ident.UserCapacity.Bytes
 
+	// Determine rotation type: smartctl returns rotation_rate=0 for SSDs/NVMe,
+	// and the RPM value (e.g. 7200) for mechanical drives. Following the
+	// Spearfoot convention, treat all drives as HDD unless explicitly SSD.
+	if ident.RotationRate == 0 {
+		info.Rotation = RotationSSD
+	} else {
+		info.Rotation = RotationHDD
+	}
+
 	if info.Model == "" && info.Serial == "" {
 		return querySmartctlText(devicePath, info)
 	}
@@ -130,6 +155,13 @@ func querySmartctlText(devicePath string, info *DriveInfo) error {
 		case "Total NVM Capacity", "Namespace 1 Size/Capacity":
 			if info.CapacityBytes == 0 {
 				info.CapacityBytes = parseCapacityBytes(value)
+			}
+		case "Rotation Rate":
+			lower := strings.ToLower(value)
+			if strings.Contains(lower, "solid state") {
+				info.Rotation = RotationSSD
+			} else {
+				info.Rotation = RotationHDD
 			}
 		}
 	}

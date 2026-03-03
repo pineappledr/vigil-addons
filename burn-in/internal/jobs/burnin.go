@@ -48,7 +48,19 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	}
 	result.DriveInfo = driveInfo
 
-	emit.log(SeverityInfo, "device resolved: %s model=%s serial=%s", driveInfo.Path, driveInfo.Model, driveInfo.Serial)
+	// Open persistent log file for this job (Spearfoot-style per-drive log).
+	logFile, err := NewJobLogFile(params.LogDir, jobID, driveInfo)
+	if err != nil {
+		logger.Warn("failed to create job log file, continuing without file logging", "error", err)
+	}
+	defer logFile.Close()
+
+	if logFile != nil {
+		logFile.WriteHeader(jobID, driveInfo)
+		emit.setLogFile(logFile)
+	}
+
+	emit.log(SeverityInfo, "device resolved: %s model=%s serial=%s rotation=%s", driveInfo.Path, driveInfo.Model, driveInfo.Serial, driveInfo.Rotation)
 
 	// ── Background temperature poller ──────────────────────────────────
 	// Polls smartctl -A every 60s to retrieve the current drive temperature.
@@ -138,68 +150,76 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	// ── Phase 3: BADBLOCKS ──────────────────────────────────────────────
 	emit.phase(PhaseBadblocks, "preparing", 25)
 
-	if params.LogDir != "" {
-		if err := drive.EnsureLogDir(params.LogDir); err != nil {
-			return nil, failJob(emit, result, PhaseBadblocks, "cannot create log dir: %v", err)
-		}
-	}
-
-	var lastBBLogTime time.Time
-	var lastBBLogPct float64
-	var lastDeltaTime time.Time
-	var liveDeltaJSON json.RawMessage
-	bbResult, err := drive.RunBadblocks(ctx, driveInfo.Path, params.BlockSize, params.ConcurrentBlocks, params.AbortOnError, params.LogDir, func(progress drive.BadblocksProgress) {
-		now := time.Now()
-		tempC := int(currentTempC.Load())
-
-		// Refresh SMART deltas every 5 minutes during badblocks.
-		if now.Sub(lastDeltaTime) >= 5*time.Minute {
-			if snap, err := drive.TakeSnapshot(driveInfo.Path); err == nil {
-				delta := drive.ComputeDelta(baseline, snap)
-				if d, err := json.Marshal(delta.Deltas); err == nil {
-					liveDeltaJSON = d
-				}
-				if delta.Degraded {
-					emit.log(SeverityWarning, "SMART degradation detected during badblocks")
-				}
-			}
-			lastDeltaTime = now
-		}
-
-		// Map badblocks progress (0-100%) into the overall 25-75% band.
-		overallPercent := 25.0 + progress.Percent*0.5
-		emit.progress(PhaseBadblocks, progress.Phase, overallPercent, 0, tempC, progress.Errors, liveDeltaJSON)
-
-		// Throttled local log heartbeat: every 30s or every 1% progress.
-		if now.Sub(lastBBLogTime) >= 30*time.Second || progress.Percent-lastBBLogPct >= 1.0 {
-			emit.log(SeverityInfo, "BADBLOCKS heartbeat: %.1f%% (%s) errors=%d temp=%d°C elapsed=%ds",
-				progress.Percent, progress.Phase, progress.Errors, tempC, emit.elapsed())
-			lastBBLogTime = now
-			lastBBLogPct = progress.Percent
-		}
-	})
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, failJob(emit, result, PhaseBadblocks, "badblocks failed: %v", err)
-	}
-
-	result.BadblockErrs = bbResult.Errors
-
-	if bbResult.Errors > 0 {
-		emit.log(SeverityError, "badblocks found %d error(s)", bbResult.Errors)
-		if params.AbortOnError {
-			result.Passed = false
-			result.FailReason = fmt.Sprintf("badblocks found %d error(s)", bbResult.Errors)
-			emit.phaseComplete(PhaseBadblocks)
-			return result, failJob(emit, result, PhaseBadblocks, "%s", result.FailReason)
-		}
+	// Skip badblocks for SSDs — destructive write patterns waste flash write
+	// endurance without providing meaningful testing due to wear leveling.
+	// This matches the behaviour of the Spearfoot disk-burnin.sh script.
+	if driveInfo.IsSSD() {
+		emit.log(SeverityInfo, "SKIPPED: badblocks for %s device (SSD detected)", driveInfo.Rotation)
+		emit.phaseComplete(PhaseBadblocks)
 	} else {
-		emit.log(SeverityInfo, "badblocks completed with zero errors")
-	}
+		if params.LogDir != "" {
+			if err := drive.EnsureLogDir(params.LogDir); err != nil {
+				return nil, failJob(emit, result, PhaseBadblocks, "cannot create log dir: %v", err)
+			}
+		}
 
-	emit.phaseComplete(PhaseBadblocks)
+		var lastBBLogTime time.Time
+		var lastBBLogPct float64
+		var lastDeltaTime time.Time
+		var liveDeltaJSON json.RawMessage
+		bbResult, err := drive.RunBadblocks(ctx, driveInfo.Path, params.BlockSize, params.ConcurrentBlocks, params.AbortOnError, params.LogDir, func(progress drive.BadblocksProgress) {
+			now := time.Now()
+			tempC := int(currentTempC.Load())
+
+			// Refresh SMART deltas every 5 minutes during badblocks.
+			if now.Sub(lastDeltaTime) >= 5*time.Minute {
+				if snap, err := drive.TakeSnapshot(driveInfo.Path); err == nil {
+					delta := drive.ComputeDelta(baseline, snap)
+					if d, err := json.Marshal(delta.Deltas); err == nil {
+						liveDeltaJSON = d
+					}
+					if delta.Degraded {
+						emit.log(SeverityWarning, "SMART degradation detected during badblocks")
+					}
+				}
+				lastDeltaTime = now
+			}
+
+			// Map badblocks progress (0-100%) into the overall 25-75% band.
+			overallPercent := 25.0 + progress.Percent*0.5
+			emit.progress(PhaseBadblocks, progress.Phase, overallPercent, 0, tempC, progress.Errors, liveDeltaJSON)
+
+			// Throttled local log heartbeat: every 30s or every 1% progress.
+			if now.Sub(lastBBLogTime) >= 30*time.Second || progress.Percent-lastBBLogPct >= 1.0 {
+				emit.log(SeverityInfo, "BADBLOCKS heartbeat: %.1f%% (%s) errors=%d temp=%d°C elapsed=%ds",
+					progress.Percent, progress.Phase, progress.Errors, tempC, emit.elapsed())
+				lastBBLogTime = now
+				lastBBLogPct = progress.Percent
+			}
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, failJob(emit, result, PhaseBadblocks, "badblocks failed: %v", err)
+		}
+
+		result.BadblockErrs = bbResult.Errors
+
+		if bbResult.Errors > 0 {
+			emit.log(SeverityError, "badblocks found %d error(s)", bbResult.Errors)
+			if params.AbortOnError {
+				result.Passed = false
+				result.FailReason = fmt.Sprintf("badblocks found %d error(s)", bbResult.Errors)
+				emit.phaseComplete(PhaseBadblocks)
+				return result, failJob(emit, result, PhaseBadblocks, "%s", result.FailReason)
+			}
+		} else {
+			emit.log(SeverityInfo, "badblocks completed with zero errors")
+		}
+
+		emit.phaseComplete(PhaseBadblocks)
+	}
 
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -259,12 +279,12 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 		}
 		result.FailReason += "SMART attribute degradation"
 	}
-	if bbResult.Errors > 0 {
+	if result.BadblockErrs > 0 {
 		result.Passed = false
 		if result.FailReason != "" {
 			result.FailReason += "; "
 		}
-		result.FailReason += fmt.Sprintf("%d bad block(s)", bbResult.Errors)
+		result.FailReason += fmt.Sprintf("%d bad block(s)", result.BadblockErrs)
 	}
 
 	if result.Passed {
@@ -273,6 +293,11 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	} else {
 		emit.log(SeverityError, "burn-in FAILED for %s (%s): %s", driveInfo.Path, driveInfo.Serial, result.FailReason)
 		emit.emitComplete(result.FailReason, result.BadblockErrs, result.FinalDelta)
+	}
+
+	// Write final result summary to the persistent log file.
+	if logFile != nil {
+		logFile.WriteResult(result.Passed, result.FailReason, result.BadblockErrs, result.TotalDuration)
 	}
 
 	emit.phaseComplete(PhaseComplete)

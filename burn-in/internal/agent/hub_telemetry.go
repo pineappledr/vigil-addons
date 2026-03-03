@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	telemetryPath  = "/api/agents/%s/telemetry"
-	writeWait      = 10 * time.Second
-	pongWait       = 60 * time.Second
-	maxMessageSize = 64 * 1024 // 64 KB
+	telemetryPath    = "/api/agents/%s/telemetry"
+	writeWait        = 10 * time.Second
+	pongWait         = 60 * time.Second
+	pingInterval     = 15 * time.Second // client-side keepalive
+	maxMessageSize   = 64 * 1024        // 64 KB
 )
 
 // ProgressFrame is the flat progress telemetry frame sent to the hub.
@@ -38,13 +39,37 @@ type ProgressFrame struct {
 }
 
 // LogFrame is the flat log telemetry frame sent to the hub.
+// Field names match the Vigil UI expectations: "level" (not "severity"),
+// "source" for origin identification.
 type LogFrame struct {
-	Type      string `json:"type"`
-	AgentID   string `json:"agent_id"`
-	JobID     string `json:"job_id"`
-	Severity  string `json:"severity"`
-	Message   string `json:"message"`
-	Timestamp string `json:"timestamp"`
+	Type        string `json:"type"`
+	AgentID     string `json:"agent_id"`
+	JobID       string `json:"job_id"`
+	ComponentID string `json:"component_id,omitempty"`
+	Level       string `json:"level"`
+	Message     string `json:"message"`
+	Source      string `json:"source"`
+	Timestamp   string `json:"timestamp"`
+}
+
+// ChartFrame is a targeted chart data point sent to the hub for real-time charting.
+// ComponentID identifies the specific chart component in the manifest.
+type ChartFrame struct {
+	Type        string  `json:"type"`
+	AgentID     string  `json:"agent_id"`
+	ComponentID string  `json:"component_id"`
+	Key         string  `json:"key"`
+	Value       float64 `json:"value"`
+	Timestamp   string  `json:"timestamp"`
+}
+
+// MetricFrame is a chart data point sent to the hub for real-time charting.
+type MetricFrame struct {
+	Type      string  `json:"type"`
+	AgentID   string  `json:"agent_id"`
+	Key       string  `json:"key"`
+	Value     float64 `json:"value"`
+	Timestamp string  `json:"timestamp"`
 }
 
 // HubTelemetry manages the persistent WebSocket connection to the hub
@@ -130,7 +155,31 @@ func (t *HubTelemetry) connectAndServe(ctx context.Context) error {
 
 	t.logger.Info("hub telemetry websocket connected")
 
+	// Background ping keepalive — prevents intermediate proxies and the OS
+	// from closing the connection with a 1006 during long badblocks runs.
+	pingDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(pingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pingDone:
+				return
+			case <-ticker.C:
+				if err := conn.WriteControl(
+					websocket.PingMessage, nil,
+					time.Now().Add(writeWait),
+				); err != nil {
+					t.logger.Warn("hub ping failed", "error", err)
+					conn.Close() // unblock the read loop
+					return
+				}
+			}
+		}
+	}()
+
 	// Read loop — keeps the connection alive and detects closure.
+	defer close(pingDone)
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			return fmt.Errorf("read: %w", err)
@@ -158,14 +207,43 @@ func (t *HubTelemetry) SendProgress(jobID, command, phase, phaseDetail string, p
 	return t.writeJSON(frame)
 }
 
-// SendLog transmits a log frame to the hub.
+// SendLog transmits a log frame to the hub, targeting the "recent-activity"
+// component so the UI routes it to the correct log viewer.
 func (t *HubTelemetry) SendLog(jobID, severity, message string) error {
 	frame := LogFrame{
-		Type:      "log",
+		Type:        "log",
+		AgentID:     t.agentID,
+		JobID:       jobID,
+		ComponentID: "recent-activity",
+		Level:       severity,
+		Message:     message,
+		Source:      t.agentID,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339),
+	}
+	return t.writeJSON(frame)
+}
+
+// SendChart transmits a chart data point to the hub, targeting a specific
+// chart component by its manifest ID.
+func (t *HubTelemetry) SendChart(componentID, key string, value float64) error {
+	frame := ChartFrame{
+		Type:        "chart",
+		AgentID:     t.agentID,
+		ComponentID: componentID,
+		Key:         key,
+		Value:       value,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339),
+	}
+	return t.writeJSON(frame)
+}
+
+// SendMetric transmits a chart metric data point to the hub.
+func (t *HubTelemetry) SendMetric(key string, value float64) error {
+	frame := MetricFrame{
+		Type:      "metric",
 		AgentID:   t.agentID,
-		JobID:     jobID,
-		Severity:  severity,
-		Message:   message,
+		Key:       key,
+		Value:     value,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 	return t.writeJSON(frame)

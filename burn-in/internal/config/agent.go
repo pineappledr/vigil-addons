@@ -27,6 +27,7 @@ type AgentNodeConfig struct {
 	ServerPubkey      string        `json:"server_pubkey"`
 	SmartPollInterval time.Duration `json:"smart_poll_interval"`
 	TempPollInterval  time.Duration `json:"temp_poll_interval"`
+	LogDir            string        `json:"log_dir"`
 }
 
 // LoadAgentConfig loads agent configuration from an optional JSON file
@@ -40,6 +41,7 @@ func LoadAgentConfig() (*AgentConfig, error) {
 			Listen:            ":9200",
 			SmartPollInterval: 10 * time.Second,
 			TempPollInterval:  10 * time.Second,
+			LogDir:            "/var/lib/vigil-agent/logs",
 		},
 	}
 
@@ -84,6 +86,9 @@ func LoadAgentConfig() (*AgentConfig, error) {
 			return nil, fmt.Errorf("invalid BURNIN_AGENT_TEMP_POLL_INTERVAL: %w", err)
 		}
 		cfg.Agent.TempPollInterval = d
+	}
+	if v := os.Getenv("BURNIN_AGENT_LOG_DIR"); v != "" {
+		cfg.Agent.LogDir = v
 	}
 
 	if err := cfg.validate(); err != nil {

@@ -30,6 +30,29 @@ type agentConn struct {
 	conn    *websocket.Conn
 }
 
+// StoredLog is a log entry retained in the hub's ring buffer for historical queries.
+type StoredLog struct {
+	Level     string `json:"level"`
+	Message   string `json:"message"`
+	Source    string `json:"source"`
+	JobID     string `json:"job_id,omitempty"`
+	Timestamp string `json:"timestamp"`
+}
+
+const maxStoredLogs = 10000
+
+// StoredChartPoint is a single data point retained in the hub's chart ring
+// buffer for historical chart queries (e.g., drive temperature over time).
+type StoredChartPoint struct {
+	ComponentID string  `json:"component_id"`
+	Key         string  `json:"key"`
+	Value       float64 `json:"value"`
+	Source      string  `json:"source,omitempty"`
+	Timestamp   string  `json:"timestamp"`
+}
+
+const maxStoredChartPoints = 2000
+
 // Aggregator accepts telemetry WebSocket connections from agents,
 // evaluates frames for notification triggers, and multiplexes
 // everything into the single upstream TelemetryClient.
@@ -42,6 +65,25 @@ type Aggregator struct {
 
 	mu    sync.Mutex
 	conns map[string]*agentConn
+
+	logMu   sync.Mutex
+	logRing []StoredLog
+
+	chartMu   sync.Mutex
+	chartRing []StoredChartPoint
+
+	// progressMu guards activeProgress.
+	progressMu     sync.Mutex
+	activeProgress map[string]ProgressPayload // key: jobID → latest progress state
+
+	// smartMu guards smartDeltas.
+	smartMu     sync.Mutex
+	smartDeltas map[string]json.RawMessage // key: jobID → latest enriched deltas JSON
+
+	// lastPhase tracks the most recent progress phase per job so that
+	// phase transitions can be stored as synthetic log entries in the
+	// ring buffer, making them available to historical queries.
+	lastPhase map[string]string // key: jobID, value: "phase|detail"
 }
 
 // NewAggregator creates a telemetry aggregator.
@@ -52,7 +94,10 @@ func NewAggregator(upstream *TelemetryClient, registry *AgentRegistry, psk strin
 		psk:        psk,
 		thresholds: thresholds,
 		logger:     logger,
-		conns:      make(map[string]*agentConn),
+		conns:          make(map[string]*agentConn),
+		lastPhase:      make(map[string]string),
+		smartDeltas:    make(map[string]json.RawMessage),
+		activeProgress: make(map[string]ProgressPayload),
 	}
 }
 
@@ -92,8 +137,6 @@ func (a *Aggregator) HandleAgentTelemetry(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	a.logger.Info("agent telemetry connected", "agent_id", agentID)
-
 	// Mark agent as seen on connect.
 	a.registry.TouchLastSeen(agentID)
 
@@ -103,9 +146,13 @@ func (a *Aggregator) HandleAgentTelemetry(w http.ResponseWriter, r *http.Request
 	// Close any existing connection from the same agent.
 	if old, ok := a.conns[agentID]; ok {
 		old.conn.Close()
+		a.logger.Info("replaced existing telemetry connection", "agent_id", agentID)
 	}
 	a.conns[agentID] = ac
+	connCount := len(a.conns)
 	a.mu.Unlock()
+
+	a.logger.Info("agent telemetry connected", "agent_id", agentID, "active_connections", connCount)
 
 	defer func() {
 		conn.Close()
@@ -114,8 +161,9 @@ func (a *Aggregator) HandleAgentTelemetry(w http.ResponseWriter, r *http.Request
 		if cur, ok := a.conns[agentID]; ok && cur == ac {
 			delete(a.conns, agentID)
 		}
+		connCount := len(a.conns)
 		a.mu.Unlock()
-		a.logger.Info("agent telemetry disconnected", "agent_id", agentID)
+		a.logger.Info("agent telemetry disconnected", "agent_id", agentID, "active_connections", connCount)
 	}()
 
 	a.readLoop(ac)
@@ -126,6 +174,7 @@ type agentFrame struct {
 	Type         string          `json:"type"`
 	AgentID      string          `json:"agent_id"`
 	JobID        string          `json:"job_id"`
+	ComponentID  string          `json:"component_id,omitempty"`
 	Command      string          `json:"command"`
 	Phase        string          `json:"phase"`
 	PhaseDetail  string          `json:"phase_detail,omitempty"`
@@ -136,9 +185,22 @@ type agentFrame struct {
 	ETASec       int64           `json:"eta_sec,omitempty"`
 	BadblockErrs int             `json:"badblocks_errors,omitempty"`
 	SmartDeltas  json.RawMessage `json:"smart_deltas,omitempty"`
-	Severity     string          `json:"severity,omitempty"`
+	Level        string          `json:"level,omitempty"`    // preferred — matches Vigil UI
+	Severity     string          `json:"severity,omitempty"` // legacy fallback
 	Message      string          `json:"message,omitempty"`
+	Source       string          `json:"source,omitempty"`
 	Timestamp    string          `json:"timestamp,omitempty"`
+	Key          string          `json:"key,omitempty"`   // metric/chart frames
+	Value        float64         `json:"value,omitempty"` // metric/chart frames
+}
+
+// resolveLevel returns the log level from an agent frame, preferring "level"
+// over the legacy "severity" field for backward compatibility.
+func (f *agentFrame) resolveLevel() string {
+	if f.Level != "" {
+		return f.Level
+	}
+	return f.Severity
 }
 
 const agentPingInterval = 30 * time.Second
@@ -196,6 +258,12 @@ func (a *Aggregator) readLoop(ac *agentConn) {
 		// Enforce agent_id tagging — always use the authenticated connection's ID.
 		frame.AgentID = ac.agentID
 
+		a.logger.Debug("agent frame received",
+			"agent_id", ac.agentID,
+			"type", frame.Type,
+			"job_id", frame.JobID,
+		)
+
 		// Keep the agent's last-seen timestamp fresh.
 		a.registry.TouchLastSeen(ac.agentID)
 
@@ -209,16 +277,46 @@ func (a *Aggregator) processFrame(frame agentFrame) {
 	a.mu.Unlock()
 
 	if upstream == nil {
+		a.logger.Warn("frame dropped: upstream not configured",
+			"agent_id", frame.AgentID,
+			"type", frame.Type,
+			"job_id", frame.JobID,
+		)
 		return
 	}
 
 	switch frame.Type {
 	case "progress":
+		a.logger.Info("relaying progress frame upstream",
+			"agent_id", frame.AgentID,
+			"job_id", frame.JobID,
+			"phase", frame.Phase,
+			"percent", frame.Percent,
+		)
 		a.forwardProgress(upstream, frame)
 		a.evaluateProgress(upstream, frame)
+		a.storePhaseTransition(frame)
 	case "log":
+		a.logger.Info("relaying log frame upstream",
+			"agent_id", frame.AgentID,
+			"job_id", frame.JobID,
+			"level", frame.resolveLevel(),
+		)
 		a.forwardLog(upstream, frame)
 		a.evaluateLog(upstream, frame)
+	case "metric":
+		a.logger.Debug("relaying metric frame upstream",
+			"agent_id", frame.AgentID,
+			"key", frame.Key,
+		)
+		a.forwardMetric(upstream, frame)
+	case "chart":
+		a.logger.Debug("relaying chart frame upstream",
+			"agent_id", frame.AgentID,
+			"component_id", frame.ComponentID,
+			"key", frame.Key,
+		)
+		a.forwardChart(upstream, frame)
 	default:
 		a.logger.Warn("unknown frame type from agent", "agent_id", frame.AgentID, "type", frame.Type)
 	}
@@ -239,8 +337,72 @@ func (a *Aggregator) forwardProgress(upstream *TelemetryClient, frame agentFrame
 		BadblockErrs: frame.BadblockErrs,
 		SmartDeltas:  frame.SmartDeltas,
 	}
+
+	// Persist latest progress and SMART deltas so they survive page navigation.
+	if frame.JobID != "" {
+		a.storeProgress(frame.JobID, p)
+		if len(frame.SmartDeltas) > 0 {
+			a.storeSmartDeltas(frame.JobID, frame.SmartDeltas)
+		}
+	}
+
 	if err := upstream.SendProgress(p); err != nil {
-		a.logger.Warn("failed to relay progress upstream", "agent_id", frame.AgentID, "error", err)
+		a.logger.Warn("failed to relay progress upstream",
+			"agent_id", frame.AgentID,
+			"job_id", frame.JobID,
+			"phase", frame.Phase,
+			"error", err,
+		)
+	}
+}
+
+func (a *Aggregator) forwardMetric(upstream *TelemetryClient, frame agentFrame) {
+	ts := frame.Timestamp
+	if ts == "" {
+		ts = time.Now().UTC().Format(time.RFC3339)
+	}
+	m := MetricPayload{
+		Key:       frame.Key,
+		Value:     frame.Value,
+		Timestamp: ts,
+	}
+	if err := upstream.SendMetric(m); err != nil {
+		a.logger.Warn("failed to relay metric upstream",
+			"agent_id", frame.AgentID,
+			"key", frame.Key,
+			"error", err,
+		)
+	}
+}
+
+func (a *Aggregator) forwardChart(upstream *TelemetryClient, frame agentFrame) {
+	ts := frame.Timestamp
+	if ts == "" {
+		ts = time.Now().UTC().Format(time.RFC3339)
+	}
+	c := ChartPayload{
+		ComponentID: frame.ComponentID,
+		Key:         frame.Key,
+		Value:       frame.Value,
+		Timestamp:   ts,
+	}
+
+	// Persist chart data point for historical queries.
+	a.storeChartPoint(StoredChartPoint{
+		ComponentID: frame.ComponentID,
+		Key:         frame.Key,
+		Value:       frame.Value,
+		Source:      frame.AgentID,
+		Timestamp:   ts,
+	})
+
+	if err := upstream.SendChart(c); err != nil {
+		a.logger.Warn("failed to relay chart upstream",
+			"agent_id", frame.AgentID,
+			"component_id", frame.ComponentID,
+			"key", frame.Key,
+			"error", err,
+		)
 	}
 }
 
@@ -249,16 +411,238 @@ func (a *Aggregator) forwardLog(upstream *TelemetryClient, frame agentFrame) {
 	if ts == "" {
 		ts = time.Now().UTC().Format(time.RFC3339)
 	}
+	source := frame.Source
+	if source == "" {
+		source = frame.AgentID
+	}
 	l := LogPayload{
-		AgentID:   frame.AgentID,
-		JobID:     frame.JobID,
-		Severity:  frame.Severity,
-		Message:   frame.Message,
-		Timestamp: ts,
+		ComponentID: frame.ComponentID,
+		Level:       frame.resolveLevel(),
+		Message:     frame.Message,
+		Source:      source,
+		JobID:       frame.JobID,
+		Timestamp:   ts,
 	}
+
+	// Persist to the ring buffer for historical queries.
+	a.storeLog(StoredLog{
+		Level:     l.Level,
+		Message:   l.Message,
+		Source:    l.Source,
+		JobID:     l.JobID,
+		Timestamp: l.Timestamp,
+	})
+
 	if err := upstream.SendLog(l); err != nil {
-		a.logger.Warn("failed to relay log upstream", "agent_id", frame.AgentID, "error", err)
+		a.logger.Warn("failed to relay log upstream",
+			"agent_id", frame.AgentID,
+			"job_id", frame.JobID,
+			"error", err,
+		)
 	}
+}
+
+// storeLog appends a log entry to the ring buffer, evicting the oldest
+// entry when capacity is exceeded.
+func (a *Aggregator) storeLog(entry StoredLog) {
+	a.logMu.Lock()
+	defer a.logMu.Unlock()
+
+	a.logRing = append(a.logRing, entry)
+	if len(a.logRing) > maxStoredLogs {
+		// Drop the oldest 10% to avoid constant slice shifting.
+		drop := maxStoredLogs / 10
+		copy(a.logRing, a.logRing[drop:])
+		a.logRing = a.logRing[:len(a.logRing)-drop]
+	}
+}
+
+// storePhaseTransition checks whether a progress frame represents a phase
+// change and, if so, stores a synthetic log entry in the ring buffer. This
+// ensures that historical log queries (used by the Dashboard "Recent Activity"
+// and History "Job Logs" viewers) include a complete timeline of phase
+// transitions, not just explicit log frames from the agent.
+func (a *Aggregator) storePhaseTransition(frame agentFrame) {
+	if frame.Phase == "" || frame.JobID == "" {
+		return
+	}
+
+	detail := frame.PhaseDetail
+	phaseKey := frame.Phase + "|" + detail
+
+	a.logMu.Lock()
+	prev := a.lastPhase[frame.JobID]
+	if prev == phaseKey {
+		a.logMu.Unlock()
+		return
+	}
+	a.lastPhase[frame.JobID] = phaseKey
+	a.logMu.Unlock()
+
+	// Build a human-readable message matching the client-side format.
+	msg := frame.Phase
+	if detail != "" {
+		msg += " — " + detail
+	}
+
+	source := frame.AgentID
+	if source == "" {
+		source = "hub"
+	}
+
+	a.storeLog(StoredLog{
+		Level:     "info",
+		Message:   msg,
+		Source:    source,
+		JobID:     frame.JobID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// CleanupJobPhase removes the tracked phase for a completed job to prevent
+// unbounded growth of the lastPhase map.
+func (a *Aggregator) CleanupJobPhase(jobID string) {
+	a.logMu.Lock()
+	delete(a.lastPhase, jobID)
+	a.logMu.Unlock()
+}
+
+// storeSmartDeltas saves the latest enriched SMART deltas for a job.
+func (a *Aggregator) storeSmartDeltas(jobID string, deltas json.RawMessage) {
+	a.smartMu.Lock()
+	defer a.smartMu.Unlock()
+	a.smartDeltas[jobID] = deltas
+}
+
+// cleanupSmartDeltas removes stored SMART deltas for a completed job.
+func (a *Aggregator) cleanupSmartDeltas(jobID string) {
+	a.smartMu.Lock()
+	defer a.smartMu.Unlock()
+	delete(a.smartDeltas, jobID)
+}
+
+// QuerySmartDeltas returns the latest stored SMART deltas across all active
+// jobs, merged into a single enriched map. If only one job is running this
+// is equivalent to that job's latest deltas.
+func (a *Aggregator) QuerySmartDeltas() json.RawMessage {
+	a.smartMu.Lock()
+	defer a.smartMu.Unlock()
+
+	if len(a.smartDeltas) == 0 {
+		return nil
+	}
+
+	// If there's exactly one job, return its deltas directly.
+	if len(a.smartDeltas) == 1 {
+		for _, v := range a.smartDeltas {
+			return v
+		}
+	}
+
+	// Multiple jobs: merge all deltas into a single map keyed by job ID.
+	merged := make(map[string]json.RawMessage, len(a.smartDeltas))
+	for jobID, v := range a.smartDeltas {
+		merged[jobID] = v
+	}
+	data, err := json.Marshal(merged)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+// storeProgress saves the latest progress payload for an active job.
+func (a *Aggregator) storeProgress(jobID string, p ProgressPayload) {
+	a.progressMu.Lock()
+	defer a.progressMu.Unlock()
+	a.activeProgress[jobID] = p
+}
+
+// cleanupProgress removes stored progress for a completed job.
+func (a *Aggregator) cleanupProgress(jobID string) {
+	a.progressMu.Lock()
+	defer a.progressMu.Unlock()
+	delete(a.activeProgress, jobID)
+}
+
+// QueryActiveJobs returns the latest progress state for all active jobs.
+func (a *Aggregator) QueryActiveJobs() []ProgressPayload {
+	a.progressMu.Lock()
+	defer a.progressMu.Unlock()
+
+	jobs := make([]ProgressPayload, 0, len(a.activeProgress))
+	for _, p := range a.activeProgress {
+		jobs = append(jobs, p)
+	}
+	return jobs
+}
+
+// QueryLogs returns stored log entries, optionally filtered to those
+// with a timestamp within the given time range. An empty timeRange
+// returns all stored logs.
+func (a *Aggregator) QueryLogs(timeRange string) []StoredLog {
+	a.logMu.Lock()
+	snapshot := make([]StoredLog, len(a.logRing))
+	copy(snapshot, a.logRing)
+	a.logMu.Unlock()
+
+	dur, ok := parseTimeRange(timeRange)
+	if !ok || timeRange == "" {
+		return snapshot
+	}
+
+	cutoff := time.Now().Add(-dur)
+	filtered := make([]StoredLog, 0, len(snapshot))
+	for _, entry := range snapshot {
+		t, err := time.Parse(time.RFC3339, entry.Timestamp)
+		if err != nil {
+			filtered = append(filtered, entry) // Fail-open.
+			continue
+		}
+		if t.After(cutoff) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+// storeChartPoint appends a chart data point to the chart ring buffer.
+func (a *Aggregator) storeChartPoint(point StoredChartPoint) {
+	a.chartMu.Lock()
+	defer a.chartMu.Unlock()
+
+	a.chartRing = append(a.chartRing, point)
+	if len(a.chartRing) > maxStoredChartPoints {
+		drop := maxStoredChartPoints / 10
+		copy(a.chartRing, a.chartRing[drop:])
+		a.chartRing = a.chartRing[:len(a.chartRing)-drop]
+	}
+}
+
+// QueryChartHistory returns stored chart data points for a given component,
+// optionally filtered by time range.
+func (a *Aggregator) QueryChartHistory(componentID, timeRange string) []StoredChartPoint {
+	a.chartMu.Lock()
+	snapshot := make([]StoredChartPoint, len(a.chartRing))
+	copy(snapshot, a.chartRing)
+	a.chartMu.Unlock()
+
+	dur, ok := parseTimeRange(timeRange)
+
+	filtered := make([]StoredChartPoint, 0, len(snapshot))
+	for _, pt := range snapshot {
+		if componentID != "" && pt.ComponentID != componentID {
+			continue
+		}
+		if ok && timeRange != "" {
+			t, err := time.Parse(time.RFC3339, pt.Timestamp)
+			if err == nil && !t.After(time.Now().Add(-dur)) {
+				continue
+			}
+		}
+		filtered = append(filtered, pt)
+	}
+	return filtered
 }
 
 // evaluateProgress inspects progress frames for notification triggers.
@@ -289,12 +673,19 @@ func (a *Aggregator) evaluateProgress(upstream *TelemetryClient, frame agentFram
 			a.emitNotification(upstream, frame, "BurninPassed", "info",
 				fmt.Sprintf("Burn-in passed on agent %s, pre-clear beginning", frame.AgentID))
 		}
+
+		// Clean up tracking state for completed or cancelled jobs.
+		if frame.Phase == "COMPLETE" || frame.Phase == "CANCELLED" {
+			a.CleanupJobPhase(frame.JobID)
+			a.cleanupSmartDeltas(frame.JobID)
+			a.cleanupProgress(frame.JobID)
+		}
 	}
 }
 
 // evaluateLog inspects log frames for notification triggers.
 func (a *Aggregator) evaluateLog(upstream *TelemetryClient, frame agentFrame) {
-	switch frame.Severity {
+	switch frame.resolveLevel() {
 	case "error":
 		a.emitNotification(upstream, frame, "JobFailed", "critical",
 			fmt.Sprintf("Agent %s reported error: %s", frame.AgentID, frame.Message))

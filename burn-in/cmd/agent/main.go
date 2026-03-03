@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/pineapple/vigil-addons/burn-in/internal/agent"
 	"github.com/pineapple/vigil-addons/burn-in/internal/config"
+	"github.com/pineapple/vigil-addons/burn-in/internal/jobs"
 )
 
 func main() {
@@ -30,10 +32,19 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	// Resolve the advertise address: explicit config, or fall back to listen addr.
+	// Resolve the advertise address: explicit config, or auto-detect outbound IP.
 	advAddr := cfg.Agent.AdvertiseAddr
 	if advAddr == "" {
-		advAddr = cfg.Agent.Listen
+		_, port, _ := net.SplitHostPort(cfg.Agent.Listen)
+		if port == "" {
+			port = "9200"
+		}
+		if ip := detectOutboundIP(); ip != "" {
+			advAddr = net.JoinHostPort(ip, port)
+		} else {
+			advAddr = cfg.Agent.Listen
+		}
+		logger.Info("auto-detected advertise address", "addr", advAddr)
 	}
 
 	hubClient := agent.NewHubClient(cfg.Hub.URL, cfg.Hub.PSK, cfg.Agent.ID, advAddr, logger)
@@ -46,6 +57,12 @@ func run(logger *slog.Logger) error {
 
 	// Hub telemetry WebSocket client for streaming progress/log frames.
 	hubTelemetry := agent.NewHubTelemetry(cfg.Hub.URL, cfg.Agent.ID, cfg.Hub.PSK, logger)
+
+	// Job manager: dispatches burn-in/preclear/full jobs, streams telemetry.
+	persist := jobs.NewJobPersistence("")
+	jobManager := jobs.NewJobManager(hubTelemetry, persist, agentAPI, cfg.Agent.LogDir, logger)
+	agentAPI.SetJobDispatcher(&jobDispatcherAdapter{manager: jobManager})
+	agentAPI.SetJobHistoryFunc(func() any { return jobManager.ListAllJobs() })
 
 	httpServer := &http.Server{
 		Addr:         cfg.Agent.Listen,
@@ -96,4 +113,31 @@ func run(logger *slog.Logger) error {
 
 	logger.Info("agent stopped")
 	return nil
+}
+
+// jobDispatcherAdapter bridges agent.JobDispatcher to jobs.JobManager,
+// converting between the two packages' JobCommand types.
+type jobDispatcherAdapter struct {
+	manager *jobs.JobManager
+}
+
+func (a *jobDispatcherAdapter) StartJob(cmd agent.JobCommand) (string, error) {
+	return a.manager.StartJob(jobs.JobCommand{
+		AgentID: cmd.AgentID,
+		Command: cmd.Command,
+		Target:  cmd.Target,
+		Params:  cmd.Params,
+	})
+}
+
+// detectOutboundIP returns the preferred outbound IP by dialing a UDP socket.
+// No actual traffic is sent.
+func detectOutboundIP() string {
+	conn, err := net.Dial("udp4", "8.8.8.8:53")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	addr := conn.LocalAddr().(*net.UDPAddr)
+	return addr.IP.String()
 }

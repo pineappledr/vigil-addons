@@ -39,12 +39,54 @@ type SmartDelta struct {
 	Degraded   bool           `json:"degraded"`   // True if any critical attribute increased.
 }
 
+// attrNames maps critical SMART attribute IDs to human-readable names.
+var attrNames = map[int]string{
+	AttrReallocatedSectors:   "Reallocated_Sector_Ct",
+	AttrReallocatedEvents:    "Reallocated_Event_Count",
+	AttrCurrentPendingSector: "Current_Pending_Sector",
+	AttrOfflineUncorrectable: "Offline_Uncorrectable",
+}
+
+// EnrichedAttr is a single SMART attribute with baseline, current value,
+// and human-readable name — formatted for the Dashboard UI table.
+type EnrichedAttr struct {
+	Name     string `json:"name"`
+	Baseline int64  `json:"baseline"`
+	Current  int64  `json:"current"`
+}
+
+// EnrichedDeltas converts a SmartDelta into the map format expected by the
+// Vigil Dashboard UI: { "5": { name, baseline, current }, ... }.
+func EnrichedDeltas(baseline, current *SmartSnapshot) map[string]EnrichedAttr {
+	result := make(map[string]EnrichedAttr, len(criticalAttrs))
+	for _, id := range criticalAttrs {
+		base := int64(0)
+		cur := int64(0)
+		if baseline != nil {
+			base = baseline.Attrs[id]
+		}
+		if current != nil {
+			cur = current.Attrs[id]
+		}
+		result[fmt.Sprintf("%d", id)] = EnrichedAttr{
+			Name:     attrNames[id],
+			Baseline: base,
+			Current:  cur,
+		}
+	}
+	return result
+}
+
 // TestResult describes the outcome of a SMART self-test.
 type TestResult struct {
 	Passed   bool   `json:"passed"`
 	Status   string `json:"status"`
 	Duration time.Duration `json:"duration"`
 }
+
+// SmartProgressCallback is invoked periodically during SMART self-tests to
+// report estimated progress. percent is 0–100, elapsed is time since start.
+type SmartProgressCallback func(percent float64, elapsed time.Duration, message string)
 
 // smartctlCapabilities is the JSON structure for test polling times.
 type smartctlCapabilities struct {
@@ -91,17 +133,27 @@ type smartctlSelfTestLog struct {
 
 // RunShortTest triggers a SMART short self-test and blocks until completion.
 // If the context is cancelled, the hardware test is aborted via smartctl -X.
-func RunShortTest(ctx context.Context, devicePath string) (*TestResult, error) {
-	return runSelfTest(ctx, devicePath, "short")
+// The optional onProgress callback receives periodic heartbeat updates.
+func RunShortTest(ctx context.Context, devicePath string, onProgress ...SmartProgressCallback) (*TestResult, error) {
+	var cb SmartProgressCallback
+	if len(onProgress) > 0 {
+		cb = onProgress[0]
+	}
+	return runSelfTest(ctx, devicePath, "short", cb)
 }
 
 // RunLongTest triggers a SMART extended (long) self-test and blocks until completion.
 // If the context is cancelled, the hardware test is aborted via smartctl -X.
-func RunLongTest(ctx context.Context, devicePath string) (*TestResult, error) {
-	return runSelfTest(ctx, devicePath, "long")
+// The optional onProgress callback receives periodic heartbeat updates.
+func RunLongTest(ctx context.Context, devicePath string, onProgress ...SmartProgressCallback) (*TestResult, error) {
+	var cb SmartProgressCallback
+	if len(onProgress) > 0 {
+		cb = onProgress[0]
+	}
+	return runSelfTest(ctx, devicePath, "long", cb)
 }
 
-func runSelfTest(ctx context.Context, devicePath, testType string) (*TestResult, error) {
+func runSelfTest(ctx context.Context, devicePath, testType string, onProgress SmartProgressCallback) (*TestResult, error) {
 	if !isValidDevicePath(devicePath) {
 		return nil, fmt.Errorf("invalid device path: %q", devicePath)
 	}
@@ -130,15 +182,42 @@ func runSelfTest(ctx context.Context, devicePath, testType string) (*TestResult,
 	})
 	defer cleanup()
 
-	// Poll for completion. Start polling at 90% of estimated time,
-	// then check every 30 seconds.
-	initialWait := time.Duration(float64(pollInterval) * 0.9)
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-time.After(initialWait):
+	// Helper to emit heartbeat with estimated progress based on elapsed time.
+	emitHeartbeat := func(msg string) {
+		if onProgress == nil {
+			return
+		}
+		elapsed := time.Since(start)
+		// Estimate percent based on elapsed vs expected duration. Cap at 95%
+		// since we can't know completion until smartctl confirms it.
+		pct := float64(elapsed) / float64(pollInterval) * 100.0
+		if pct > 95 {
+			pct = 95
+		}
+		onProgress(pct, elapsed, msg)
 	}
 
+	// ── Initial wait phase with periodic heartbeats ──────────────────
+	initialWait := time.Duration(float64(pollInterval) * 0.9)
+	heartbeatTick := time.NewTicker(30 * time.Second)
+	defer heartbeatTick.Stop()
+
+	waitDeadline := time.After(initialWait)
+	emitHeartbeat(fmt.Sprintf("SMART %s test running, estimated %s", testType, pollInterval.Round(time.Second)))
+waitLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-waitDeadline:
+			emitHeartbeat(fmt.Sprintf("SMART %s initial wait complete, polling for result", testType))
+			break waitLoop
+		case <-heartbeatTick.C:
+			emitHeartbeat(fmt.Sprintf("SMART %s test in progress", testType))
+		}
+	}
+
+	// ── Polling phase ────────────────────────────────────────────────
 	const checkInterval = 30 * time.Second
 	for {
 		done, passed, status, err := checkTestComplete(devicePath)
@@ -147,12 +226,17 @@ func runSelfTest(ctx context.Context, devicePath, testType string) (*TestResult,
 		}
 
 		if done {
+			if onProgress != nil {
+				onProgress(100, time.Since(start), fmt.Sprintf("SMART %s test complete", testType))
+			}
 			return &TestResult{
 				Passed:   passed,
 				Status:   status,
 				Duration: time.Since(start),
 			}, nil
 		}
+
+		emitHeartbeat(fmt.Sprintf("SMART %s test polling, awaiting completion", testType))
 
 		select {
 		case <-ctx.Done():
@@ -245,6 +329,33 @@ func checkTestCompleteText(out []byte) (done, passed bool, status string, err er
 func abortSelfTest(devicePath string) {
 	// Best-effort abort; errors are non-fatal since the context is already cancelled.
 	exec.Command("smartctl", "-X", devicePath).Run()
+}
+
+// smartctlTemperature is the JSON structure for the temperature section.
+type smartctlTemperature struct {
+	Temperature struct {
+		Current int `json:"current"`
+	} `json:"temperature"`
+}
+
+// ReadTemperature retrieves the current drive temperature in °C via smartctl.
+// Returns 0 if the temperature cannot be determined.
+func ReadTemperature(devicePath string) (int, error) {
+	if !isValidDevicePath(devicePath) {
+		return 0, fmt.Errorf("invalid device path: %q", devicePath)
+	}
+
+	out, err := runSmartctl("-A", "--json", devicePath)
+	if err != nil {
+		return 0, fmt.Errorf("retrieving temperature for %s: %w", devicePath, err)
+	}
+
+	var t smartctlTemperature
+	if err := json.Unmarshal(out, &t); err != nil {
+		return 0, fmt.Errorf("parsing temperature JSON: %w", err)
+	}
+
+	return t.Temperature.Current, nil
 }
 
 // TakeSnapshot records the current raw values for critical SMART attributes.

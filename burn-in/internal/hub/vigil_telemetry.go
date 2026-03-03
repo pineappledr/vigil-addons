@@ -43,12 +43,14 @@ type ProgressPayload struct {
 }
 
 // LogPayload is the payload for a log telemetry frame.
+// Field names match the Vigil UI contract: "level" and "source".
 type LogPayload struct {
-	AgentID   string `json:"agent_id"`
-	JobID     string `json:"job_id"`
-	Severity  string `json:"severity"`
-	Message   string `json:"message"`
-	Timestamp string `json:"timestamp"`
+	ComponentID string `json:"component_id,omitempty"`
+	Level       string `json:"level"`
+	Message     string `json:"message"`
+	Source      string `json:"source,omitempty"`
+	JobID       string `json:"job_id,omitempty"`
+	Timestamp   string `json:"timestamp,omitempty"`
 }
 
 // NotificationPayload is the payload for a notification telemetry frame.
@@ -60,6 +62,22 @@ type NotificationPayload struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// MetricPayload is the payload for a chart metric telemetry frame.
+type MetricPayload struct {
+	Key       string  `json:"key"`
+	Value     float64 `json:"value"`
+	Timestamp string  `json:"timestamp"`
+}
+
+// ChartPayload is the payload for a targeted chart telemetry frame.
+// ComponentID identifies which chart component should receive the data point.
+type ChartPayload struct {
+	ComponentID string  `json:"component_id"`
+	Key         string  `json:"key"`
+	Value       float64 `json:"value"`
+	Timestamp   string  `json:"timestamp"`
+}
+
 // TelemetryClient manages the persistent WebSocket connection to the Vigil server.
 type TelemetryClient struct {
 	serverURL     string
@@ -68,8 +86,10 @@ type TelemetryClient struct {
 	heartbeatInt  time.Duration
 	logger        *slog.Logger
 
-	mu   sync.Mutex
-	conn *websocket.Conn
+	mu    sync.Mutex
+	conn  *websocket.Conn
+	ready chan struct{} // closed once the first connection succeeds
+	once  sync.Once
 }
 
 // NewTelemetryClient creates an upstream telemetry client.
@@ -80,7 +100,15 @@ func NewTelemetryClient(serverURL string, addonID int64, agentToken string, hear
 		agentToken:   agentToken,
 		heartbeatInt: heartbeatInterval,
 		logger:       logger,
+		ready:        make(chan struct{}),
 	}
+}
+
+// Ready returns a channel that is closed when the first upstream connection
+// is established. Callers can select on this to delay operations until the
+// telemetry pipeline is active.
+func (t *TelemetryClient) Ready() <-chan struct{} {
+	return t.ready
 }
 
 // Run connects to the Vigil server and maintains the connection indefinitely.
@@ -147,7 +175,13 @@ func (t *TelemetryClient) connectAndServe(ctx context.Context) error {
 	t.conn = conn
 	t.mu.Unlock()
 
-	t.logger.Info("upstream websocket connected")
+	// Signal that the upstream pipeline is ready for the first time.
+	t.once.Do(func() { close(t.ready) })
+
+	t.logger.Info("upstream websocket connected",
+		"addon_id", t.addonID,
+		"url", wsURL,
+	)
 
 	// Heartbeat loop in a separate goroutine.
 	// If the heartbeat write fails, close the connection to unblock ReadMessage.
@@ -202,6 +236,16 @@ func (t *TelemetryClient) SendNotification(n NotificationPayload) error {
 	return t.send("notification", n)
 }
 
+// SendMetric transmits a chart metric frame upstream.
+func (t *TelemetryClient) SendMetric(m MetricPayload) error {
+	return t.send("metric", m)
+}
+
+// SendChart transmits a targeted chart data point upstream.
+func (t *TelemetryClient) SendChart(c ChartPayload) error {
+	return t.send("chart", c)
+}
+
 func (t *TelemetryClient) send(frameType string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -217,9 +261,23 @@ func (t *TelemetryClient) send(frameType string, payload any) error {
 	t.mu.Unlock()
 
 	if conn == nil {
+		t.logger.Warn("upstream frame dropped: websocket not connected",
+			"frame_type", frameType,
+			"payload_size", len(data),
+		)
 		return fmt.Errorf("upstream websocket not connected")
 	}
-	return t.writeFrame(conn, frame)
+
+	if err := t.writeFrame(conn, frame); err != nil {
+		t.logger.Warn("upstream frame write failed",
+			"frame_type", frameType,
+			"error", err,
+		)
+		return err
+	}
+
+	t.logger.Debug("upstream frame sent", "frame_type", frameType, "payload_size", len(data))
+	return nil
 }
 
 func (t *TelemetryClient) writeFrame(conn *websocket.Conn, frame TelemetryFrame) error {

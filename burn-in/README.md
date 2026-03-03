@@ -10,12 +10,13 @@ A production-grade drive qualification daemon for the [Vigil](https://github.com
 ## Table of Contents
 
 1. [Architecture](#architecture)
-2. [Execution Pipelines](#execution-pipelines)
-3. [Job Parameters](#job-parameters)
-4. [Deployment](#deployment)
-5. [Configuration Reference](#configuration-reference)
-6. [API Reference](#api-reference)
-7. [Security Model](#security-model)
+2. [Dashboard](#dashboard)
+3. [Execution Pipelines](#execution-pipelines)
+4. [Job Parameters](#job-parameters)
+5. [Deployment](#deployment)
+6. [Configuration Reference](#configuration-reference)
+7. [API Reference](#api-reference)
+8. [Security Model](#security-model)
 
 ---
 
@@ -63,7 +64,7 @@ This tool uses a two-tier architecture that sits below the Vigil server:
 
 | Component | Tier | Role |
 |-----------|------|------|
-| **Hub** | 2 | Central coordinator. Registers with the Vigil server, routes commands to agents, aggregates telemetry from all agents, evaluates notification triggers (temperature alerts, SMART warnings). |
+| **Hub** | 2 | Central coordinator. Registers with the Vigil server, routes commands to agents, aggregates telemetry from all agents, evaluates notification triggers (temperature alerts, SMART warnings). Maintains in-memory state for active job progress, SMART deltas, temperature history, and logs so the Dashboard recovers immediately on page load. |
 | **Agent** | 3 | Runs on each physical host with drives to test. Discovers local drives, executes burn-in/pre-clear pipelines, streams progress to the Hub via WebSocket. |
 
 ### Communication Flow
@@ -73,6 +74,29 @@ This tool uses a two-tier architecture that sits below the Vigil server:
 3. User submits a job from the Vigil dashboard. The Hub routes the signed command to the target agent (`POST /api/execute`).
 4. Agent verifies the Ed25519 signature, dispatches the job to the appropriate orchestrator, and streams telemetry back to the Hub.
 5. Hub aggregates agent telemetry, evaluates notification triggers, and forwards everything upstream to Vigil.
+
+### Dashboard
+
+The Vigil Dashboard tab provides real-time visibility into running jobs. All dashboard data persists in the Hub's in-memory state, so **closing the browser and reopening it** (or opening from a different device) will immediately show the current state of all running jobs.
+
+| Component | Description |
+|-----------|-------------|
+| **Active Jobs** | Live progress cards for every running job. Shows phase tracker chips, progress bar, ETA, drive temperature, and elapsed time. Fetched from `GET /api/jobs/active` on page load, then updated in real-time via SSE. |
+| **SMART Attribute Deltas** | Tracks critical SMART attributes (5, 196, 197, 198) with baseline vs. current values and computed deltas. Updated at every phase transition — not just during badblocks. Fetched from `GET /api/smart/deltas` on page load. |
+| **Drive Temperature** | Time-series chart of drive temperatures polled every 60 seconds during job execution. Historical data fetched from `GET /api/chart/history` on page load. |
+| **Recent Activity** | Log viewer showing phase transitions, SMART warnings, and job events. Includes synthetic entries from progress phase changes so the timeline is complete even if the browser wasn't open during a transition. |
+
+The Dashboard supports **manual refresh** and **auto-refresh** (configurable intervals: 1m, 5m, 10m, 30m) via the toolbar above the components.
+
+### Container Log Visibility
+
+Long-running jobs (badblocks can take 50+ hours for large drives) emit periodic **ALIVE heartbeat** messages to the container's stdout every 2 minutes. These include the current phase, elapsed time, and drive temperature, ensuring `docker logs` or `journalctl` always shows recent activity:
+
+```
+ALIVE job=abc123 phase=BADBLOCKS elapsed=12h34m56s temp=42°C
+```
+
+Each phase also logs its expected duration on entry (e.g., "starting SMART extended test on /dev/sda (typically takes 1-8 hours depending on drive capacity)").
 
 ---
 
@@ -86,7 +110,7 @@ A non-destructive-then-destructive pipeline that thoroughly tests a drive's heal
 |-------|-------------|
 | **PRE-FLIGHT** | Resolve the device path, verify it is not mounted or in a ZFS pool, capture baseline SMART snapshot (attributes 5, 196, 197, 198). |
 | **SMART_SHORT** | Trigger `smartctl --test=short`, poll until completion using the drive's estimated polling time. Take a post-short SMART snapshot and compute deltas. Emit `SmartWarning` if any critical attribute increased. |
-| **BADBLOCKS** | Execute `badblocks -wsv` (destructive 4-pattern write+verify). Stream progress across all 8 passes (4 patterns x write + read-back). Process group killing via `SIGKILL` on cancellation ensures the drive is not left in an indeterminate write state. |
+| **BADBLOCKS** | Execute `badblocks -wsv` (destructive 4-pattern write+verify). Stream progress across all 8 passes (4 patterns x write + read-back). Process group killing via `SIGKILL` on cancellation ensures the drive is not left in an indeterminate write state. **Automatically skipped for SSDs** — destructive write patterns waste flash write endurance without providing meaningful testing due to wear leveling. |
 | **SMART_EXTENDED** | Trigger `smartctl --test=long`, poll until completion. Take final SMART snapshot and compute full deltas against the baseline. |
 | **COMPLETE** | Aggregate results. Pass if: both SMART tests passed, no bad blocks found, no critical attribute degradation. Emit `JobComplete` or `JobFailed`. |
 
@@ -186,7 +210,7 @@ If you are running the binaries directly instead of Docker, the **Agent** host n
 Install on **Debian/Ubuntu**:
 
 ```bash
-sudo apt install smartmontools e2fsprogs gptfdisk util-linux
+sudo apt install smartmontools e2fsprogs gdisk util-linux
 ```
 
 Install on **Alpine** (used by the Docker images):
@@ -250,8 +274,9 @@ Each physical host with drives to test needs a burn-in agent. You can add agents
 2. Navigate to the **Agents** tab.
 3. The **Add Burn-in Agent** section shows your Hub URL and PSK pre-filled.
 4. Enter an **Agent ID** (e.g., `agent-nas-01`).
-5. Click **Copy docker compose**.
-6. Deploy on the target host:
+5. Optionally enter an **Advertise Address** (e.g., `192.168.1.100:9200`) — the IP:port where the Hub can reach this agent.
+6. Click **Copy docker compose**.
+7. Deploy on the target host:
 
 ```yaml
 services:
@@ -266,10 +291,16 @@ services:
       BURNIN_HUB_URL: "http://addon-host:9100"     # pre-filled by the deploy wizard
       BURNIN_HUB_PSK: "<auto-generated>"               # pre-filled by the deploy wizard
       BURNIN_AGENT_ID: "agent-nas-01"
+      BURNIN_AGENT_ADVERTISE_ADDR: "192.168.1.100:9200"  # optional — IP:port where Hub reaches this agent
       BURNIN_AGENT_LISTEN: ":9200"
+      BURNIN_AGENT_LOG_DIR: "/var/lib/vigil-agent/logs"
       TZ: ${TZ:-UTC}
     volumes:
       - /dev:/dev
+      - burnin-agent-logs:/var/lib/vigil-agent/logs
+
+volumes:
+  burnin-agent-logs:
 ```
 
 ```bash
@@ -281,6 +312,8 @@ The agent will discover local drives, register with the Hub, and appear in the A
 > **Why `privileged: true`?** The agent needs raw access to block devices for `smartctl`, `badblocks`, `sgdisk`, `mkfs.ext4`, and `mount` operations. Without privileged mode, these operations will fail with permission errors.
 
 > **Why `/dev:/dev`?** The agent discovers drives by scanning `/dev/disk/by-id/` and resolving symlinks to the underlying block devices. The entire `/dev` tree must be visible inside the container.
+
+> **Why `burnin-agent-logs` volume?** Each burn-in job writes a persistent log file to `/var/lib/vigil-agent/logs/` following the naming convention `burnin-{model}_{serial}_{timestamp}.log`. These logs contain the full test timeline — phase transitions, SMART snapshots, badblocks progress heartbeats, and the final pass/fail verdict. Mount this as a named volume (or bind-mount to a host directory) to review results after the job or container has stopped. Example bind-mount: `./burnin-logs:/var/lib/vigil-agent/logs`.
 
 ### Multi-Host Deployment
 
@@ -303,23 +336,154 @@ For testing drives across multiple physical servers, run one Hub and multiple Ag
 
 Repeat [Step 3](#step-3-deploy-agents) on each host. Each agent registers with the Hub independently. The Hub aggregates all telemetry upstream.
 
-### Pre-compiled Binaries
+### Binary: Systemd Service (Recommended)
 
-Retrieve the latest release for your architecture from the [Releases](https://github.com/pineappledr/vigil-addons/releases) page.
+Deploy the Hub and Agent as systemd services for automatic startup, restart on failure, and proper log management.
+
+#### 1. Download the Binaries
+
+Download the latest release and install to `/usr/local/bin`:
+
+```bash
+# Hub (amd64)
+curl -sL https://github.com/pineappledr/vigil-addons/releases/latest/download/burnin-hub-linux-amd64 \
+  -o burnin-hub && chmod +x burnin-hub && sudo mv burnin-hub /usr/local/bin/
+
+# Hub (arm64)
+curl -sL https://github.com/pineappledr/vigil-addons/releases/latest/download/burnin-hub-linux-arm64 \
+  -o burnin-hub && chmod +x burnin-hub && sudo mv burnin-hub /usr/local/bin/
+```
+
+```bash
+# Agent (amd64 — requires system packages, see System Requirements above)
+curl -sL https://github.com/pineappledr/vigil-addons/releases/latest/download/burnin-agent-linux-amd64 \
+  -o burnin-agent && chmod +x burnin-agent && sudo mv burnin-agent /usr/local/bin/
+
+# Agent (arm64)
+curl -sL https://github.com/pineappledr/vigil-addons/releases/latest/download/burnin-agent-linux-arm64 \
+  -o burnin-agent && chmod +x burnin-agent && sudo mv burnin-agent /usr/local/bin/
+```
+
+#### 2. Create the Hub Service
+
+Create the environment file with your configuration:
+
+```bash
+sudo mkdir -p /etc/burnin
+sudo tee /etc/burnin/hub.env > /dev/null <<'EOF'
+VIGIL_URL=http://YOUR_VIGIL_SERVER:9080
+VIGIL_AGENT_TOKEN=your-vigil-addon-token
+VIGIL_SERVER_PUBKEY=your-server-public-key
+BURNIN_HUB_LISTEN=:9100
+BURNIN_HUB_ADVERTISE_URL=http://THIS_HOST_IP:9100
+BURNIN_HUB_DATA_DIR=/var/lib/burnin-hub
+EOF
+```
+
+Create the systemd unit:
+
+```bash
+sudo tee /etc/systemd/system/burnin-hub.service > /dev/null <<'EOF'
+[Unit]
+Description=Burn-in Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/burnin/hub.env
+ExecStart=/usr/local/bin/burnin-hub
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+Enable and start:
+
+```bash
+sudo mkdir -p /var/lib/burnin-hub
+sudo systemctl daemon-reload
+sudo systemctl enable --now burnin-hub
+```
+
+> The Hub auto-generates its agent PSK on first startup and stores it in `{data_dir}/hub.psk`. The deploy wizard on the Agents tab will pre-fill this key for you.
+
+#### 3. Create the Agent Service
+
+Create the environment file:
+
+```bash
+sudo tee /etc/burnin/agent.env > /dev/null <<'EOF'
+BURNIN_HUB_URL=http://HUB_HOST_IP:9100
+BURNIN_HUB_PSK=<copy from Hub's /var/lib/burnin-hub/hub.psk>
+BURNIN_AGENT_ID=agent-host01
+BURNIN_AGENT_LISTEN=:9200
+EOF
+```
+
+Create the systemd unit:
+
+```bash
+sudo tee /etc/systemd/system/burnin-agent.service > /dev/null <<'EOF'
+[Unit]
+Description=Burn-in Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/burnin/agent.env
+ExecStart=/usr/local/bin/burnin-agent
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+Enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now burnin-agent
+```
+
+#### Checking Status and Logs
+
+```bash
+# Service status
+sudo systemctl status burnin-hub
+sudo systemctl status burnin-agent
+
+# Follow logs
+sudo journalctl -u burnin-hub -f
+sudo journalctl -u burnin-agent -f
+```
+
+#### Upgrading Binary Services
+
+```bash
+# 1. Stop the service
+sudo systemctl stop burnin-hub   # or burnin-agent
+
+# 2. Download and replace the binary
+curl -sL https://github.com/pineappledr/vigil-addons/releases/latest/download/burnin-hub-linux-amd64 \
+  -o burnin-hub && chmod +x burnin-hub && sudo mv burnin-hub /usr/local/bin/
+
+# 3. Restart
+sudo systemctl start burnin-hub   # or burnin-agent
+```
+
+### Binary: Manual (Foreground)
+
+For quick testing or development, you can run the binaries directly:
 
 ```bash
 # Hub
-chmod +x burnin-hub-linux-amd64
-sudo mv burnin-hub-linux-amd64 /usr/local/bin/burnin-hub
-
-# Agent (requires system packages — see System Requirements above)
-chmod +x burnin-agent-linux-amd64
-sudo mv burnin-agent-linux-amd64 /usr/local/bin/burnin-agent
-```
-
-Run the Hub:
-
-```bash
 export VIGIL_URL="http://vigil-server:9080"
 export VIGIL_AGENT_TOKEN="your-token"
 export VIGIL_SERVER_PUBKEY="your-server-public-key"
@@ -327,11 +491,8 @@ export BURNIN_HUB_ADVERTISE_URL="http://addon-host:9100"
 burnin-hub
 ```
 
-> The Hub auto-generates its agent PSK on first startup and stores it in `{data_dir}/hub.psk`. The deploy wizard on the Agents tab will pre-fill this key for you.
-
-Run an Agent:
-
 ```bash
+# Agent
 export BURNIN_HUB_URL="http://addon-host:9100"
 export BURNIN_HUB_PSK="<copy from Hub's data_dir/hub.psk>"
 export BURNIN_AGENT_ID="agent-host01"
@@ -373,6 +534,7 @@ All configuration uses environment variables. Vigil-related variables use the `V
 | `BURNIN_AGENT_SERVER_PUBKEY` | | no | Path to Hub's Ed25519 public key for command signature verification |
 | `BURNIN_AGENT_SMART_POLL_INTERVAL` | `10s` | no | SMART polling interval (Go duration) |
 | `BURNIN_AGENT_TEMP_POLL_INTERVAL` | `10s` | no | Temperature polling interval (Go duration) |
+| `BURNIN_AGENT_LOG_DIR` | `/var/lib/vigil-agent/logs` | no | Directory for persistent per-job log files. Each job writes a Spearfoot-style log file (`burnin-{model}_{serial}_{timestamp}.log`) that can be reviewed after the job completes. Mount this as a Docker volume to persist logs across container restarts. |
 
 ---
 
@@ -388,6 +550,12 @@ All configuration uses environment variables. Vigil-related variables use the `V
 | `POST` | `/api/execute` | PSK | Forward a signed command to an agent |
 | `GET` | `/api/agents/{id}/telemetry` | PSK | WebSocket: agent telemetry stream |
 | `GET` | `/api/deploy-info` | none | Returns Hub URL and PSK for the deploy wizard |
+| `GET` | `/api/jobs/active` | none | Returns the latest progress state for all currently running jobs |
+| `GET` | `/api/jobs/history` | none | Fans out to all agents and returns completed job records |
+| `DELETE` | `/api/jobs/{id}` | none | Cancel a running job (forwarded to the owning agent) |
+| `GET` | `/api/logs/history` | none | Returns stored log entries from the ring buffer (supports `?time_range=1h`) |
+| `GET` | `/api/chart/history` | none | Returns stored chart data points (supports `?component_id=...&time_range=6h`) |
+| `GET` | `/api/smart/deltas` | none | Returns the latest SMART attribute deltas for all active jobs |
 
 ### Agent Endpoints
 

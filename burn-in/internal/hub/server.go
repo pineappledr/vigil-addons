@@ -45,6 +45,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/agents/register", s.requirePSK(s.handleRegisterAgent))
 	s.mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
 	s.mux.HandleFunc("POST /api/execute", s.router.HandleExecute)
+	s.mux.HandleFunc("GET /api/jobs/history", s.router.HandleJobHistory)
+	s.mux.HandleFunc("DELETE /api/jobs/{id}", s.router.HandleCancelJob)
+	s.mux.HandleFunc("GET /api/logs/history", s.handleLogHistory)
+	s.mux.HandleFunc("GET /api/chart/history", s.handleChartHistory)
+	s.mux.HandleFunc("GET /api/jobs/active", s.handleActiveJobs)
+	s.mux.HandleFunc("GET /api/smart/deltas", s.handleSmartDeltas)
 	s.mux.HandleFunc("GET /api/agents/{id}/telemetry", s.aggregator.HandleAgentTelemetry)
 }
 
@@ -96,6 +102,38 @@ func (s *Server) handleListAgents(w http.ResponseWriter, _ *http.Request) {
 	// TODO: pass actual busy agents from job manager when available
 	agents := s.registry.ListViews(nil)
 	writeJSON(w, http.StatusOK, agents)
+}
+
+func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
+	timeRange := r.URL.Query().Get("time_range")
+	logs := s.aggregator.QueryLogs(timeRange)
+	writeJSON(w, http.StatusOK, logs)
+}
+
+func (s *Server) handleChartHistory(w http.ResponseWriter, r *http.Request) {
+	componentID := r.URL.Query().Get("component_id")
+	timeRange := r.URL.Query().Get("time_range")
+	points := s.aggregator.QueryChartHistory(componentID, timeRange)
+	writeJSON(w, http.StatusOK, points)
+}
+
+func (s *Server) handleActiveJobs(w http.ResponseWriter, _ *http.Request) {
+	jobs := s.aggregator.QueryActiveJobs()
+	writeJSON(w, http.StatusOK, jobs)
+}
+
+func (s *Server) handleSmartDeltas(w http.ResponseWriter, r *http.Request) {
+	deltas := s.aggregator.QuerySmartDeltas()
+	if deltas == nil {
+		// Return empty object so the client sees valid JSON.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("{}"))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(deltas)
 }
 
 func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {

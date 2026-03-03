@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -12,7 +13,7 @@ import (
 // PreclearParams holds the configuration for a single pre-clear job.
 type PreclearParams struct {
 	FileSystem  string `json:"file_system"`
-	ReservedPct int    `json:"reserved_pct"`
+	ReservedPct int    `json:"reserved_percent"`
 	LogDir      string `json:"log_dir"`
 }
 
@@ -44,6 +45,11 @@ func RunPreclear(ctx context.Context, jobID, devicePath string, params PreclearP
 	result.DriveInfo = driveInfo
 
 	emit.log(SeverityInfo, "device resolved: %s model=%s serial=%s", driveInfo.Path, driveInfo.Model, driveInfo.Serial)
+
+	// Start periodic alive heartbeat so container logs always show activity.
+	emit.startAliveHeartbeat(nil)
+	defer emit.stopAliveHeartbeat()
+
 	emit.phase(PhasePreflight, "safety check", 5)
 
 	if err := drive.IsSafeTarget(driveInfo.Path); err != nil {
@@ -155,7 +161,11 @@ func RunPreclear(ctx context.Context, jobID, devicePath string, params PreclearP
 		emit.emitComplete("pre-clear passed", 0, nil)
 	} else {
 		emit.log(SeverityError, "pre-clear FAILED for %s (%s): %s", driveInfo.Path, driveInfo.Serial, result.FailReason)
-		emit.emitComplete(result.FailReason, 0, verifyResult.SmartDelta)
+		var failDeltas json.RawMessage
+		if verifyResult.SmartDelta != nil {
+			failDeltas = marshalEnrichedDeltas(baseline, nil)
+		}
+		emit.emitComplete(result.FailReason, 0, failDeltas)
 	}
 
 	emit.phaseComplete(PhaseComplete)

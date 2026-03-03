@@ -426,6 +426,13 @@ func (m *JobManager) finishJob(mj *managedJob) {
 	rec.CompletedAt = &now
 	rec.Phase = PhaseComplete
 
+	// Emit a cancellation frame so the hub/UI know the job ended.
+	if rec.Status == StatusCancelled && m.sink != nil {
+		elapsedSec := int64(now.Sub(rec.StartedAt).Seconds())
+		_ = m.sink.SendProgress(rec.JobID, rec.Command, "CANCELLED", "job cancelled by user", 100, 0, 0, elapsedSec, 0, 0, nil)
+		_ = m.sink.SendLog(rec.JobID, SeverityWarning, "job cancelled by user")
+	}
+
 	elapsed := now.Sub(rec.StartedAt)
 
 	m.saveState(mj)

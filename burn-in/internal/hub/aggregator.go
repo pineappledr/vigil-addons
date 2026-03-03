@@ -674,8 +674,8 @@ func (a *Aggregator) evaluateProgress(upstream *TelemetryClient, frame agentFram
 				fmt.Sprintf("Burn-in passed on agent %s, pre-clear beginning", frame.AgentID))
 		}
 
-		// Clean up tracking state for fully completed jobs.
-		if frame.Phase == "COMPLETE" {
+		// Clean up tracking state for completed or cancelled jobs.
+		if frame.Phase == "COMPLETE" || frame.Phase == "CANCELLED" {
 			a.CleanupJobPhase(frame.JobID)
 			a.cleanupSmartDeltas(frame.JobID)
 			a.cleanupProgress(frame.JobID)

@@ -72,6 +72,10 @@ type Aggregator struct {
 	chartMu   sync.Mutex
 	chartRing []StoredChartPoint
 
+	// smartMu guards smartDeltas.
+	smartMu     sync.Mutex
+	smartDeltas map[string]json.RawMessage // key: jobID → latest enriched deltas JSON
+
 	// lastPhase tracks the most recent progress phase per job so that
 	// phase transitions can be stored as synthetic log entries in the
 	// ring buffer, making them available to historical queries.
@@ -86,8 +90,9 @@ func NewAggregator(upstream *TelemetryClient, registry *AgentRegistry, psk strin
 		psk:        psk,
 		thresholds: thresholds,
 		logger:     logger,
-		conns:     make(map[string]*agentConn),
-		lastPhase: make(map[string]string),
+		conns:       make(map[string]*agentConn),
+		lastPhase:   make(map[string]string),
+		smartDeltas: make(map[string]json.RawMessage),
 	}
 }
 
@@ -327,6 +332,12 @@ func (a *Aggregator) forwardProgress(upstream *TelemetryClient, frame agentFrame
 		BadblockErrs: frame.BadblockErrs,
 		SmartDeltas:  frame.SmartDeltas,
 	}
+
+	// Persist the latest SMART deltas for this job so they survive page navigation.
+	if len(frame.SmartDeltas) > 0 && frame.JobID != "" {
+		a.storeSmartDeltas(frame.JobID, frame.SmartDeltas)
+	}
+
 	if err := upstream.SendProgress(p); err != nil {
 		a.logger.Warn("failed to relay progress upstream",
 			"agent_id", frame.AgentID,
@@ -488,6 +499,50 @@ func (a *Aggregator) CleanupJobPhase(jobID string) {
 	a.logMu.Unlock()
 }
 
+// storeSmartDeltas saves the latest enriched SMART deltas for a job.
+func (a *Aggregator) storeSmartDeltas(jobID string, deltas json.RawMessage) {
+	a.smartMu.Lock()
+	defer a.smartMu.Unlock()
+	a.smartDeltas[jobID] = deltas
+}
+
+// cleanupSmartDeltas removes stored SMART deltas for a completed job.
+func (a *Aggregator) cleanupSmartDeltas(jobID string) {
+	a.smartMu.Lock()
+	defer a.smartMu.Unlock()
+	delete(a.smartDeltas, jobID)
+}
+
+// QuerySmartDeltas returns the latest stored SMART deltas across all active
+// jobs, merged into a single enriched map. If only one job is running this
+// is equivalent to that job's latest deltas.
+func (a *Aggregator) QuerySmartDeltas() json.RawMessage {
+	a.smartMu.Lock()
+	defer a.smartMu.Unlock()
+
+	if len(a.smartDeltas) == 0 {
+		return nil
+	}
+
+	// If there's exactly one job, return its deltas directly.
+	if len(a.smartDeltas) == 1 {
+		for _, v := range a.smartDeltas {
+			return v
+		}
+	}
+
+	// Multiple jobs: merge all deltas into a single map keyed by job ID.
+	merged := make(map[string]json.RawMessage, len(a.smartDeltas))
+	for jobID, v := range a.smartDeltas {
+		merged[jobID] = v
+	}
+	data, err := json.Marshal(merged)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
 // QueryLogs returns stored log entries, optionally filtered to those
 // with a timestamp within the given time range. An empty timeRange
 // returns all stored logs.
@@ -585,9 +640,10 @@ func (a *Aggregator) evaluateProgress(upstream *TelemetryClient, frame agentFram
 				fmt.Sprintf("Burn-in passed on agent %s, pre-clear beginning", frame.AgentID))
 		}
 
-		// Clean up phase tracking for fully completed jobs.
+		// Clean up tracking state for fully completed jobs.
 		if frame.Phase == "COMPLETE" {
 			a.CleanupJobPhase(frame.JobID)
+			a.cleanupSmartDeltas(frame.JobID)
 		}
 	}
 }

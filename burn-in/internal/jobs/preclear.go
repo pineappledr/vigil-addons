@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -160,7 +161,11 @@ func RunPreclear(ctx context.Context, jobID, devicePath string, params PreclearP
 		emit.emitComplete("pre-clear passed", 0, nil)
 	} else {
 		emit.log(SeverityError, "pre-clear FAILED for %s (%s): %s", driveInfo.Path, driveInfo.Serial, result.FailReason)
-		emit.emitComplete(result.FailReason, 0, verifyResult.SmartDelta)
+		var failDeltas json.RawMessage
+		if verifyResult.SmartDelta != nil {
+			failDeltas = marshalEnrichedDeltas(baseline, nil)
+		}
+		emit.emitComplete(result.FailReason, 0, failDeltas)
 	}
 
 	emit.phaseComplete(PhaseComplete)

@@ -42,6 +42,7 @@
           "id": "smart-deltas",
           "title": "SMART Attribute Deltas",
           "config": {
+            "source": "smart_deltas",
             "highlight_deltas": true,
             "critical_ids": [5, 196, 197, 198],
             "columns": [

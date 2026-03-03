@@ -203,10 +203,17 @@ func (e *emitter) smartWarning(delta *drive.SmartDelta) {
 	e.progress("SMART_WARNING", "attribute degradation detected", 0, 0, 0, 0, data)
 }
 
-func (e *emitter) emitComplete(detail string, badblockErrs int, finalDelta *drive.SmartDelta) {
-	var deltaJSON json.RawMessage
-	if finalDelta != nil {
-		deltaJSON, _ = json.Marshal(finalDelta.Deltas)
+// marshalEnrichedDeltas converts baseline and current snapshots into the
+// enriched JSON format expected by the Dashboard SMART Attribute Deltas table.
+func marshalEnrichedDeltas(baseline, current *drive.SmartSnapshot) json.RawMessage {
+	enriched := drive.EnrichedDeltas(baseline, current)
+	data, err := json.Marshal(enriched)
+	if err != nil {
+		return nil
 	}
-	e.progress(PhaseComplete, detail, 100, 0, 0, badblockErrs, deltaJSON)
+	return data
+}
+
+func (e *emitter) emitComplete(detail string, badblockErrs int, enrichedDeltas json.RawMessage) {
+	e.progress(PhaseComplete, detail, 100, 0, 0, badblockErrs, enrichedDeltas)
 }

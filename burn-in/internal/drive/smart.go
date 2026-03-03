@@ -39,6 +39,44 @@ type SmartDelta struct {
 	Degraded   bool           `json:"degraded"`   // True if any critical attribute increased.
 }
 
+// attrNames maps critical SMART attribute IDs to human-readable names.
+var attrNames = map[int]string{
+	AttrReallocatedSectors:   "Reallocated_Sector_Ct",
+	AttrReallocatedEvents:    "Reallocated_Event_Count",
+	AttrCurrentPendingSector: "Current_Pending_Sector",
+	AttrOfflineUncorrectable: "Offline_Uncorrectable",
+}
+
+// EnrichedAttr is a single SMART attribute with baseline, current value,
+// and human-readable name — formatted for the Dashboard UI table.
+type EnrichedAttr struct {
+	Name     string `json:"name"`
+	Baseline int64  `json:"baseline"`
+	Current  int64  `json:"current"`
+}
+
+// EnrichedDeltas converts a SmartDelta into the map format expected by the
+// Vigil Dashboard UI: { "5": { name, baseline, current }, ... }.
+func EnrichedDeltas(baseline, current *SmartSnapshot) map[string]EnrichedAttr {
+	result := make(map[string]EnrichedAttr, len(criticalAttrs))
+	for _, id := range criticalAttrs {
+		base := int64(0)
+		cur := int64(0)
+		if baseline != nil {
+			base = baseline.Attrs[id]
+		}
+		if current != nil {
+			cur = current.Attrs[id]
+		}
+		result[fmt.Sprintf("%d", id)] = EnrichedAttr{
+			Name:     attrNames[id],
+			Baseline: base,
+			Current:  cur,
+		}
+	}
+	return result
+}
+
 // TestResult describes the outcome of a SMART self-test.
 type TestResult struct {
 	Passed   bool   `json:"passed"`

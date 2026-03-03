@@ -44,7 +44,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 
 	driveInfo, err := drive.ResolveDrive(devicePath)
 	if err != nil {
-		return nil, failJob(emit, result, PhasePreflight, "device resolution failed: %v", err)
+		return nil, failJob(emit, result, PhasePreflight, nil, "device resolution failed: %v", err)
 	}
 	result.DriveInfo = driveInfo
 
@@ -96,18 +96,24 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	emit.phase(PhasePreflight, "safety check", 5)
 
 	if err := drive.IsSafeTarget(driveInfo.Path); err != nil {
-		return nil, failJob(emit, result, PhasePreflight, "safety check failed: %v", err)
+		return nil, failJob(emit, result, PhasePreflight, nil, "safety check failed: %v", err)
 	}
 
 	emit.phase(PhasePreflight, "baseline SMART snapshot", 10)
 
 	baseline, err := drive.TakeSnapshot(driveInfo.Path)
 	if err != nil {
-		return nil, failJob(emit, result, PhasePreflight, "baseline snapshot failed: %v", err)
+		return nil, failJob(emit, result, PhasePreflight, nil, "baseline snapshot failed: %v", err)
 	}
 	result.Baseline = baseline
 
 	emit.log(SeverityInfo, "baseline SMART snapshot captured")
+
+	// Send initial baseline deltas so the Dashboard table shows current values
+	// even before any test phase completes.
+	baselineDeltas := marshalEnrichedDeltas(baseline, baseline)
+	emit.progress(PhasePreflight, "baseline captured", 12, 0, int(currentTempC.Load()), 0, baselineDeltas)
+
 	emit.phaseComplete(PhasePreflight)
 
 	if err := ctx.Err(); err != nil {
@@ -122,11 +128,11 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 		// Map short test progress (0-100%) into the overall 15-25% band.
 		overallPct := 15.0 + pct*0.10
 		tempC := int(currentTempC.Load())
-		emit.progress(PhaseSmartShort, msg, overallPct, 0, tempC, 0, nil)
+		emit.progress(PhaseSmartShort, msg, overallPct, 0, tempC, 0, baselineDeltas)
 		emit.log(SeverityInfo, "SMART_SHORT heartbeat: %.1f%% elapsed=%s temp=%d°C", pct, elapsed.Round(time.Second), tempC)
 	})
 	if err != nil {
-		return nil, failJob(emit, result, PhaseSmartShort, "short test failed: %v", err)
+		return nil, failJob(emit, result, PhaseSmartShort, baselineDeltas, "short test failed: %v", err)
 	}
 	result.ShortTest = shortResult
 
@@ -137,9 +143,11 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	emit.phase(PhaseSmartShort, "post-short snapshot", 20)
 
 	postShort, err := drive.TakeSnapshot(driveInfo.Path)
+	var latestDeltas json.RawMessage = baselineDeltas
 	if err != nil {
 		emit.log(SeverityWarning, "post-short snapshot failed: %v", err)
 	} else {
+		latestDeltas = marshalEnrichedDeltas(baseline, postShort)
 		shortDelta := drive.ComputeDelta(baseline, postShort)
 		if shortDelta.Degraded {
 			emit.log(SeverityWarning, "SMART degradation detected after short test")
@@ -147,6 +155,8 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 		}
 	}
 
+	// Send post-short enriched deltas to update the Dashboard table.
+	emit.progress(PhaseSmartShort, "post-short snapshot", 24, 0, int(currentTempC.Load()), 0, latestDeltas)
 	emit.phaseComplete(PhaseSmartShort)
 
 	if err := ctx.Err(); err != nil {
@@ -166,14 +176,14 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	} else {
 		if params.LogDir != "" {
 			if err := drive.EnsureLogDir(params.LogDir); err != nil {
-				return nil, failJob(emit, result, PhaseBadblocks, "cannot create log dir: %v", err)
+				return nil, failJob(emit, result, PhaseBadblocks, latestDeltas, "cannot create log dir: %v", err)
 			}
 		}
 
 		var lastBBLogTime time.Time
 		var lastBBLogPct float64
 		var lastDeltaTime time.Time
-		var liveDeltaJSON json.RawMessage
+		liveDeltaJSON := latestDeltas
 		bbResult, err := drive.RunBadblocks(ctx, driveInfo.Path, params.BlockSize, params.ConcurrentBlocks, params.AbortOnError, params.LogDir, func(progress drive.BadblocksProgress) {
 			now := time.Now()
 			tempC := int(currentTempC.Load())
@@ -182,9 +192,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 			if now.Sub(lastDeltaTime) >= 5*time.Minute {
 				if snap, err := drive.TakeSnapshot(driveInfo.Path); err == nil {
 					delta := drive.ComputeDelta(baseline, snap)
-					if d, err := json.Marshal(delta.Deltas); err == nil {
-						liveDeltaJSON = d
-					}
+					liveDeltaJSON = marshalEnrichedDeltas(baseline, snap)
 					if delta.Degraded {
 						emit.log(SeverityWarning, "SMART degradation detected during badblocks")
 					}
@@ -217,7 +225,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			return nil, failJob(emit, result, PhaseBadblocks, "badblocks failed: %v", err)
+			return nil, failJob(emit, result, PhaseBadblocks, latestDeltas, "badblocks failed: %v", err)
 		}
 
 		result.BadblockErrs = bbResult.Errors
@@ -228,7 +236,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 				result.Passed = false
 				result.FailReason = fmt.Sprintf("badblocks found %d error(s)", bbResult.Errors)
 				emit.phaseComplete(PhaseBadblocks)
-				return result, failJob(emit, result, PhaseBadblocks, "%s", result.FailReason)
+				return result, failJob(emit, result, PhaseBadblocks, latestDeltas, "%s", result.FailReason)
 			}
 		} else {
 			emit.log(SeverityInfo, "badblocks completed with zero errors")
@@ -257,11 +265,11 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 				eta = fmt.Sprintf(" ETA=%s", remaining.Round(time.Second))
 			}
 		}
-		emit.progress(PhaseSmartExtended, msg, overallPct, 0, tempC, 0, nil)
+		emit.progress(PhaseSmartExtended, msg, overallPct, 0, tempC, 0, latestDeltas)
 		emit.log(SeverityInfo, "SMART_EXTENDED heartbeat: %.1f%% elapsed=%s temp=%d°C%s", pct, elapsed.Round(time.Second), tempC, eta)
 	})
 	if err != nil {
-		return nil, failJob(emit, result, PhaseSmartExtended, "extended test failed: %v", err)
+		return nil, failJob(emit, result, PhaseSmartExtended, latestDeltas, "extended test failed: %v", err)
 	}
 	result.LongTest = longResult
 
@@ -277,6 +285,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 	} else {
 		result.FinalSnapshot = finalSnap
 		result.FinalDelta = drive.ComputeDelta(baseline, finalSnap)
+		latestDeltas = marshalEnrichedDeltas(baseline, finalSnap)
 
 		if result.FinalDelta.Degraded {
 			emit.log(SeverityWarning, "SMART degradation detected in final snapshot")
@@ -284,6 +293,8 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 		}
 	}
 
+	// Send final enriched deltas to update the Dashboard table.
+	emit.progress(PhaseSmartExtended, "final snapshot", 94, 0, int(currentTempC.Load()), 0, latestDeltas)
 	emit.phaseComplete(PhaseSmartExtended)
 
 	if err := ctx.Err(); err != nil {
@@ -315,10 +326,10 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 
 	if result.Passed {
 		emit.log(SeverityInfo, "burn-in PASSED for %s (%s) in %s", driveInfo.Path, driveInfo.Serial, result.TotalDuration.Round(time.Second))
-		emit.emitComplete("burn-in passed", result.BadblockErrs, result.FinalDelta)
+		emit.emitComplete("burn-in passed", result.BadblockErrs, latestDeltas)
 	} else {
 		emit.log(SeverityError, "burn-in FAILED for %s (%s): %s", driveInfo.Path, driveInfo.Serial, result.FailReason)
-		emit.emitComplete(result.FailReason, result.BadblockErrs, result.FinalDelta)
+		emit.emitComplete(result.FailReason, result.BadblockErrs, latestDeltas)
 	}
 
 	// Write final result summary to the persistent log file.
@@ -332,12 +343,12 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 }
 
 // failJob marks the result as failed, emits telemetry, and returns an error.
-func failJob(emit *emitter, result *BurninResult, phase, format string, args ...any) error {
+func failJob(emit *emitter, result *BurninResult, phase string, enrichedDeltas json.RawMessage, format string, args ...any) error {
 	msg := fmt.Sprintf(format, args...)
 	result.Passed = false
 	result.FailReason = msg
 	result.TotalDuration = time.Since(emit.start)
 	emit.log(SeverityError, "%s", msg)
-	emit.emitComplete(msg, result.BadblockErrs, result.FinalDelta)
+	emit.emitComplete(msg, result.BadblockErrs, enrichedDeltas)
 	return fmt.Errorf("[%s] %s", phase, msg)
 }

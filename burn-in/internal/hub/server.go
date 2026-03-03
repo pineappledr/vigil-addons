@@ -48,6 +48,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/jobs/history", s.router.HandleJobHistory)
 	s.mux.HandleFunc("DELETE /api/jobs/{id}", s.router.HandleCancelJob)
 	s.mux.HandleFunc("GET /api/logs/history", s.handleLogHistory)
+	s.mux.HandleFunc("GET /api/chart/history", s.handleChartHistory)
 	s.mux.HandleFunc("GET /api/agents/{id}/telemetry", s.aggregator.HandleAgentTelemetry)
 }
 
@@ -105,6 +106,13 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 	timeRange := r.URL.Query().Get("time_range")
 	logs := s.aggregator.QueryLogs(timeRange)
 	writeJSON(w, http.StatusOK, logs)
+}
+
+func (s *Server) handleChartHistory(w http.ResponseWriter, r *http.Request) {
+	componentID := r.URL.Query().Get("component_id")
+	timeRange := r.URL.Query().Get("time_range")
+	points := s.aggregator.QueryChartHistory(componentID, timeRange)
+	writeJSON(w, http.StatusOK, points)
 }
 
 func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {

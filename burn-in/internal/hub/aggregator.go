@@ -41,6 +41,18 @@ type StoredLog struct {
 
 const maxStoredLogs = 10000
 
+// StoredChartPoint is a single data point retained in the hub's chart ring
+// buffer for historical chart queries (e.g., drive temperature over time).
+type StoredChartPoint struct {
+	ComponentID string  `json:"component_id"`
+	Key         string  `json:"key"`
+	Value       float64 `json:"value"`
+	Source      string  `json:"source,omitempty"`
+	Timestamp   string  `json:"timestamp"`
+}
+
+const maxStoredChartPoints = 2000
+
 // Aggregator accepts telemetry WebSocket connections from agents,
 // evaluates frames for notification triggers, and multiplexes
 // everything into the single upstream TelemetryClient.
@@ -56,6 +68,9 @@ type Aggregator struct {
 
 	logMu   sync.Mutex
 	logRing []StoredLog
+
+	chartMu   sync.Mutex
+	chartRing []StoredChartPoint
 
 	// lastPhase tracks the most recent progress phase per job so that
 	// phase transitions can be stored as synthetic log entries in the
@@ -352,6 +367,16 @@ func (a *Aggregator) forwardChart(upstream *TelemetryClient, frame agentFrame) {
 		Value:       frame.Value,
 		Timestamp:   ts,
 	}
+
+	// Persist chart data point for historical queries.
+	a.storeChartPoint(StoredChartPoint{
+		ComponentID: frame.ComponentID,
+		Key:         frame.Key,
+		Value:       frame.Value,
+		Source:      frame.AgentID,
+		Timestamp:   ts,
+	})
+
 	if err := upstream.SendChart(c); err != nil {
 		a.logger.Warn("failed to relay chart upstream",
 			"agent_id", frame.AgentID,
@@ -488,6 +513,45 @@ func (a *Aggregator) QueryLogs(timeRange string) []StoredLog {
 		if t.After(cutoff) {
 			filtered = append(filtered, entry)
 		}
+	}
+	return filtered
+}
+
+// storeChartPoint appends a chart data point to the chart ring buffer.
+func (a *Aggregator) storeChartPoint(point StoredChartPoint) {
+	a.chartMu.Lock()
+	defer a.chartMu.Unlock()
+
+	a.chartRing = append(a.chartRing, point)
+	if len(a.chartRing) > maxStoredChartPoints {
+		drop := maxStoredChartPoints / 10
+		copy(a.chartRing, a.chartRing[drop:])
+		a.chartRing = a.chartRing[:len(a.chartRing)-drop]
+	}
+}
+
+// QueryChartHistory returns stored chart data points for a given component,
+// optionally filtered by time range.
+func (a *Aggregator) QueryChartHistory(componentID, timeRange string) []StoredChartPoint {
+	a.chartMu.Lock()
+	snapshot := make([]StoredChartPoint, len(a.chartRing))
+	copy(snapshot, a.chartRing)
+	a.chartMu.Unlock()
+
+	dur, ok := parseTimeRange(timeRange)
+
+	filtered := make([]StoredChartPoint, 0, len(snapshot))
+	for _, pt := range snapshot {
+		if componentID != "" && pt.ComponentID != componentID {
+			continue
+		}
+		if ok && timeRange != "" {
+			t, err := time.Parse(time.RFC3339, pt.Timestamp)
+			if err == nil && !t.After(time.Now().Add(-dur)) {
+				continue
+			}
+		}
+		filtered = append(filtered, pt)
 	}
 	return filtered
 }

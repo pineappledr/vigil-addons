@@ -89,6 +89,10 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 		}
 	}()
 
+	// Start periodic alive heartbeat so container logs always show activity.
+	emit.startAliveHeartbeat(&currentTempC)
+	defer emit.stopAliveHeartbeat()
+
 	emit.phase(PhasePreflight, "safety check", 5)
 
 	if err := drive.IsSafeTarget(driveInfo.Path); err != nil {
@@ -112,12 +116,14 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 
 	// ── Phase 2: SMART SHORT ────────────────────────────────────────────
 	emit.phase(PhaseSmartShort, "starting short test", 15)
+	emit.log(SeverityInfo, "starting SMART short test on %s (typically takes 1-2 minutes)", driveInfo.Path)
 
 	shortResult, err := drive.RunShortTest(ctx, driveInfo.Path, func(pct float64, elapsed time.Duration, msg string) {
 		// Map short test progress (0-100%) into the overall 15-25% band.
 		overallPct := 15.0 + pct*0.10
-		emit.progress(PhaseSmartShort, msg, overallPct, 0, int(currentTempC.Load()), 0, nil)
-		emit.log(SeverityInfo, "SMART_SHORT heartbeat: %.1f%% elapsed=%s", pct, elapsed.Round(time.Second))
+		tempC := int(currentTempC.Load())
+		emit.progress(PhaseSmartShort, msg, overallPct, 0, tempC, 0, nil)
+		emit.log(SeverityInfo, "SMART_SHORT heartbeat: %.1f%% elapsed=%s temp=%d°C", pct, elapsed.Round(time.Second), tempC)
 	})
 	if err != nil {
 		return nil, failJob(emit, result, PhaseSmartShort, "short test failed: %v", err)
@@ -149,6 +155,7 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 
 	// ── Phase 3: BADBLOCKS ──────────────────────────────────────────────
 	emit.phase(PhaseBadblocks, "preparing", 25)
+	emit.log(SeverityInfo, "starting BADBLOCKS phase on %s (duration depends on drive size, may take many hours for large drives)", driveInfo.Path)
 
 	// Skip badblocks for SSDs — destructive write patterns waste flash write
 	// endurance without providing meaningful testing due to wear leveling.
@@ -191,8 +198,17 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 
 			// Throttled local log heartbeat: every 30s or every 1% progress.
 			if now.Sub(lastBBLogTime) >= 30*time.Second || progress.Percent-lastBBLogPct >= 1.0 {
-				emit.log(SeverityInfo, "BADBLOCKS heartbeat: %.1f%% (%s) errors=%d temp=%d°C elapsed=%ds",
-					progress.Percent, progress.Phase, progress.Errors, tempC, emit.elapsed())
+				eta := ""
+				if progress.Percent > 0 && progress.Percent < 100 {
+					phaseElapsed := time.Since(emit.start)
+					estTotal := time.Duration(float64(phaseElapsed) / (progress.Percent / 100.0))
+					remaining := estTotal - phaseElapsed
+					if remaining > 0 {
+						eta = fmt.Sprintf(" ETA=%s", remaining.Round(time.Second))
+					}
+				}
+				emit.log(SeverityInfo, "BADBLOCKS heartbeat: %.1f%% (%s) errors=%d temp=%d°C elapsed=%ds%s",
+					progress.Percent, progress.Phase, progress.Errors, tempC, emit.elapsed(), eta)
 				lastBBLogTime = now
 				lastBBLogPct = progress.Percent
 			}
@@ -227,12 +243,22 @@ func RunBurnin(ctx context.Context, jobID, devicePath string, params BurninParam
 
 	// ── Phase 4: SMART EXTENDED ─────────────────────────────────────────
 	emit.phase(PhaseSmartExtended, "starting extended test", 75)
+	emit.log(SeverityInfo, "starting SMART extended test on %s (typically takes 1-8 hours depending on drive capacity)", driveInfo.Path)
 
 	longResult, err := drive.RunLongTest(ctx, driveInfo.Path, func(pct float64, elapsed time.Duration, msg string) {
 		// Map extended test progress (0-100%) into the overall 75-95% band.
 		overallPct := 75.0 + pct*0.20
-		emit.progress(PhaseSmartExtended, msg, overallPct, 0, int(currentTempC.Load()), 0, nil)
-		emit.log(SeverityInfo, "SMART_EXTENDED heartbeat: %.1f%% elapsed=%s", pct, elapsed.Round(time.Second))
+		tempC := int(currentTempC.Load())
+		eta := ""
+		if pct > 0 && pct < 100 {
+			estTotal := time.Duration(float64(elapsed) / (pct / 100.0))
+			remaining := estTotal - elapsed
+			if remaining > 0 {
+				eta = fmt.Sprintf(" ETA=%s", remaining.Round(time.Second))
+			}
+		}
+		emit.progress(PhaseSmartExtended, msg, overallPct, 0, tempC, 0, nil)
+		emit.log(SeverityInfo, "SMART_EXTENDED heartbeat: %.1f%% elapsed=%s temp=%d°C%s", pct, elapsed.Round(time.Second), tempC, eta)
 	})
 	if err != nil {
 		return nil, failJob(emit, result, PhaseSmartExtended, "extended test failed: %v", err)

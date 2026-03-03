@@ -44,6 +44,11 @@ func RunPreclear(ctx context.Context, jobID, devicePath string, params PreclearP
 	result.DriveInfo = driveInfo
 
 	emit.log(SeverityInfo, "device resolved: %s model=%s serial=%s", driveInfo.Path, driveInfo.Model, driveInfo.Serial)
+
+	// Start periodic alive heartbeat so container logs always show activity.
+	emit.startAliveHeartbeat(nil)
+	defer emit.stopAliveHeartbeat()
+
 	emit.phase(PhasePreflight, "safety check", 5)
 
 	if err := drive.IsSafeTarget(driveInfo.Path); err != nil {

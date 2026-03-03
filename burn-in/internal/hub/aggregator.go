@@ -56,6 +56,11 @@ type Aggregator struct {
 
 	logMu   sync.Mutex
 	logRing []StoredLog
+
+	// lastPhase tracks the most recent progress phase per job so that
+	// phase transitions can be stored as synthetic log entries in the
+	// ring buffer, making them available to historical queries.
+	lastPhase map[string]string // key: jobID, value: "phase|detail"
 }
 
 // NewAggregator creates a telemetry aggregator.
@@ -66,7 +71,8 @@ func NewAggregator(upstream *TelemetryClient, registry *AgentRegistry, psk strin
 		psk:        psk,
 		thresholds: thresholds,
 		logger:     logger,
-		conns:      make(map[string]*agentConn),
+		conns:     make(map[string]*agentConn),
+		lastPhase: make(map[string]string),
 	}
 }
 
@@ -264,6 +270,7 @@ func (a *Aggregator) processFrame(frame agentFrame) {
 		)
 		a.forwardProgress(upstream, frame)
 		a.evaluateProgress(upstream, frame)
+		a.storePhaseTransition(frame)
 	case "log":
 		a.logger.Info("relaying log frame upstream",
 			"agent_id", frame.AgentID,
@@ -406,6 +413,56 @@ func (a *Aggregator) storeLog(entry StoredLog) {
 	}
 }
 
+// storePhaseTransition checks whether a progress frame represents a phase
+// change and, if so, stores a synthetic log entry in the ring buffer. This
+// ensures that historical log queries (used by the Dashboard "Recent Activity"
+// and History "Job Logs" viewers) include a complete timeline of phase
+// transitions, not just explicit log frames from the agent.
+func (a *Aggregator) storePhaseTransition(frame agentFrame) {
+	if frame.Phase == "" || frame.JobID == "" {
+		return
+	}
+
+	detail := frame.PhaseDetail
+	phaseKey := frame.Phase + "|" + detail
+
+	a.logMu.Lock()
+	prev := a.lastPhase[frame.JobID]
+	if prev == phaseKey {
+		a.logMu.Unlock()
+		return
+	}
+	a.lastPhase[frame.JobID] = phaseKey
+	a.logMu.Unlock()
+
+	// Build a human-readable message matching the client-side format.
+	msg := frame.Phase
+	if detail != "" {
+		msg += " — " + detail
+	}
+
+	source := frame.AgentID
+	if source == "" {
+		source = "hub"
+	}
+
+	a.storeLog(StoredLog{
+		Level:     "info",
+		Message:   msg,
+		Source:    source,
+		JobID:     frame.JobID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// CleanupJobPhase removes the tracked phase for a completed job to prevent
+// unbounded growth of the lastPhase map.
+func (a *Aggregator) CleanupJobPhase(jobID string) {
+	a.logMu.Lock()
+	delete(a.lastPhase, jobID)
+	a.logMu.Unlock()
+}
+
 // QueryLogs returns stored log entries, optionally filtered to those
 // with a timestamp within the given time range. An empty timeRange
 // returns all stored logs.
@@ -462,6 +519,11 @@ func (a *Aggregator) evaluateProgress(upstream *TelemetryClient, frame agentFram
 		if frame.Command == "full" && frame.Phase == "complete" {
 			a.emitNotification(upstream, frame, "BurninPassed", "info",
 				fmt.Sprintf("Burn-in passed on agent %s, pre-clear beginning", frame.AgentID))
+		}
+
+		// Clean up phase tracking for fully completed jobs.
+		if frame.Phase == "COMPLETE" {
+			a.CleanupJobPhase(frame.JobID)
 		}
 	}
 }

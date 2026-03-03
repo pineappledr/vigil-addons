@@ -24,6 +24,7 @@
           "id": "active-jobs",
           "title": "Active Jobs",
           "config": {
+            "source": "active_jobs",
             "multi": true,
             "show_phase": true,
             "show_eta": true,

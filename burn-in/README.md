@@ -10,12 +10,13 @@ A production-grade drive qualification daemon for the [Vigil](https://github.com
 ## Table of Contents
 
 1. [Architecture](#architecture)
-2. [Execution Pipelines](#execution-pipelines)
-3. [Job Parameters](#job-parameters)
-4. [Deployment](#deployment)
-5. [Configuration Reference](#configuration-reference)
-6. [API Reference](#api-reference)
-7. [Security Model](#security-model)
+2. [Dashboard](#dashboard)
+3. [Execution Pipelines](#execution-pipelines)
+4. [Job Parameters](#job-parameters)
+5. [Deployment](#deployment)
+6. [Configuration Reference](#configuration-reference)
+7. [API Reference](#api-reference)
+8. [Security Model](#security-model)
 
 ---
 
@@ -63,7 +64,7 @@ This tool uses a two-tier architecture that sits below the Vigil server:
 
 | Component | Tier | Role |
 |-----------|------|------|
-| **Hub** | 2 | Central coordinator. Registers with the Vigil server, routes commands to agents, aggregates telemetry from all agents, evaluates notification triggers (temperature alerts, SMART warnings). |
+| **Hub** | 2 | Central coordinator. Registers with the Vigil server, routes commands to agents, aggregates telemetry from all agents, evaluates notification triggers (temperature alerts, SMART warnings). Maintains in-memory state for active job progress, SMART deltas, temperature history, and logs so the Dashboard recovers immediately on page load. |
 | **Agent** | 3 | Runs on each physical host with drives to test. Discovers local drives, executes burn-in/pre-clear pipelines, streams progress to the Hub via WebSocket. |
 
 ### Communication Flow
@@ -73,6 +74,29 @@ This tool uses a two-tier architecture that sits below the Vigil server:
 3. User submits a job from the Vigil dashboard. The Hub routes the signed command to the target agent (`POST /api/execute`).
 4. Agent verifies the Ed25519 signature, dispatches the job to the appropriate orchestrator, and streams telemetry back to the Hub.
 5. Hub aggregates agent telemetry, evaluates notification triggers, and forwards everything upstream to Vigil.
+
+### Dashboard
+
+The Vigil Dashboard tab provides real-time visibility into running jobs. All dashboard data persists in the Hub's in-memory state, so **closing the browser and reopening it** (or opening from a different device) will immediately show the current state of all running jobs.
+
+| Component | Description |
+|-----------|-------------|
+| **Active Jobs** | Live progress cards for every running job. Shows phase tracker chips, progress bar, ETA, drive temperature, and elapsed time. Fetched from `GET /api/jobs/active` on page load, then updated in real-time via SSE. |
+| **SMART Attribute Deltas** | Tracks critical SMART attributes (5, 196, 197, 198) with baseline vs. current values and computed deltas. Updated at every phase transition — not just during badblocks. Fetched from `GET /api/smart/deltas` on page load. |
+| **Drive Temperature** | Time-series chart of drive temperatures polled every 60 seconds during job execution. Historical data fetched from `GET /api/chart/history` on page load. |
+| **Recent Activity** | Log viewer showing phase transitions, SMART warnings, and job events. Includes synthetic entries from progress phase changes so the timeline is complete even if the browser wasn't open during a transition. |
+
+The Dashboard supports **manual refresh** and **auto-refresh** (configurable intervals: 1m, 5m, 10m, 30m) via the toolbar above the components.
+
+### Container Log Visibility
+
+Long-running jobs (badblocks can take 50+ hours for large drives) emit periodic **ALIVE heartbeat** messages to the container's stdout every 2 minutes. These include the current phase, elapsed time, and drive temperature, ensuring `docker logs` or `journalctl` always shows recent activity:
+
+```
+ALIVE job=abc123 phase=BADBLOCKS elapsed=12h34m56s temp=42°C
+```
+
+Each phase also logs its expected duration on entry (e.g., "starting SMART extended test on /dev/sda (typically takes 1-8 hours depending on drive capacity)").
 
 ---
 
@@ -524,6 +548,12 @@ All configuration uses environment variables. Vigil-related variables use the `V
 | `POST` | `/api/execute` | PSK | Forward a signed command to an agent |
 | `GET` | `/api/agents/{id}/telemetry` | PSK | WebSocket: agent telemetry stream |
 | `GET` | `/api/deploy-info` | none | Returns Hub URL and PSK for the deploy wizard |
+| `GET` | `/api/jobs/active` | none | Returns the latest progress state for all currently running jobs |
+| `GET` | `/api/jobs/history` | none | Fans out to all agents and returns completed job records |
+| `DELETE` | `/api/jobs/{id}` | none | Cancel a running job (forwarded to the owning agent) |
+| `GET` | `/api/logs/history` | none | Returns stored log entries from the ring buffer (supports `?time_range=1h`) |
+| `GET` | `/api/chart/history` | none | Returns stored chart data points (supports `?component_id=...&time_range=6h`) |
+| `GET` | `/api/smart/deltas` | none | Returns the latest SMART attribute deltas for all active jobs |
 
 ### Agent Endpoints
 

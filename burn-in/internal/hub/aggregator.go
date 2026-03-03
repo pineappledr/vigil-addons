@@ -72,6 +72,10 @@ type Aggregator struct {
 	chartMu   sync.Mutex
 	chartRing []StoredChartPoint
 
+	// progressMu guards activeProgress.
+	progressMu     sync.Mutex
+	activeProgress map[string]ProgressPayload // key: jobID → latest progress state
+
 	// smartMu guards smartDeltas.
 	smartMu     sync.Mutex
 	smartDeltas map[string]json.RawMessage // key: jobID → latest enriched deltas JSON
@@ -90,9 +94,10 @@ func NewAggregator(upstream *TelemetryClient, registry *AgentRegistry, psk strin
 		psk:        psk,
 		thresholds: thresholds,
 		logger:     logger,
-		conns:       make(map[string]*agentConn),
-		lastPhase:   make(map[string]string),
-		smartDeltas: make(map[string]json.RawMessage),
+		conns:          make(map[string]*agentConn),
+		lastPhase:      make(map[string]string),
+		smartDeltas:    make(map[string]json.RawMessage),
+		activeProgress: make(map[string]ProgressPayload),
 	}
 }
 
@@ -333,9 +338,12 @@ func (a *Aggregator) forwardProgress(upstream *TelemetryClient, frame agentFrame
 		SmartDeltas:  frame.SmartDeltas,
 	}
 
-	// Persist the latest SMART deltas for this job so they survive page navigation.
-	if len(frame.SmartDeltas) > 0 && frame.JobID != "" {
-		a.storeSmartDeltas(frame.JobID, frame.SmartDeltas)
+	// Persist latest progress and SMART deltas so they survive page navigation.
+	if frame.JobID != "" {
+		a.storeProgress(frame.JobID, p)
+		if len(frame.SmartDeltas) > 0 {
+			a.storeSmartDeltas(frame.JobID, frame.SmartDeltas)
+		}
 	}
 
 	if err := upstream.SendProgress(p); err != nil {
@@ -543,6 +551,32 @@ func (a *Aggregator) QuerySmartDeltas() json.RawMessage {
 	return data
 }
 
+// storeProgress saves the latest progress payload for an active job.
+func (a *Aggregator) storeProgress(jobID string, p ProgressPayload) {
+	a.progressMu.Lock()
+	defer a.progressMu.Unlock()
+	a.activeProgress[jobID] = p
+}
+
+// cleanupProgress removes stored progress for a completed job.
+func (a *Aggregator) cleanupProgress(jobID string) {
+	a.progressMu.Lock()
+	defer a.progressMu.Unlock()
+	delete(a.activeProgress, jobID)
+}
+
+// QueryActiveJobs returns the latest progress state for all active jobs.
+func (a *Aggregator) QueryActiveJobs() []ProgressPayload {
+	a.progressMu.Lock()
+	defer a.progressMu.Unlock()
+
+	jobs := make([]ProgressPayload, 0, len(a.activeProgress))
+	for _, p := range a.activeProgress {
+		jobs = append(jobs, p)
+	}
+	return jobs
+}
+
 // QueryLogs returns stored log entries, optionally filtered to those
 // with a timestamp within the given time range. An empty timeRange
 // returns all stored logs.
@@ -644,6 +678,7 @@ func (a *Aggregator) evaluateProgress(upstream *TelemetryClient, frame agentFram
 		if frame.Phase == "COMPLETE" {
 			a.CleanupJobPhase(frame.JobID)
 			a.cleanupSmartDeltas(frame.JobID)
+			a.cleanupProgress(frame.JobID)
 		}
 	}
 }

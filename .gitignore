@@ -6,9 +6,12 @@
 *.dylib
 burnin-hub
 burnin-agent
+snapraid-hub
+snapraid-agent
 
 # Build output
 burn-in/dist/
+snapraid/dist/
 dist/
 
 # Test artifacts
@@ -41,6 +44,16 @@ jobs.json
 
 # Docker
 docker-compose.override.yml
+
+# Config files with secrets (examples are tracked)
+config.hub.yaml
+config.agent.yaml
+
+# SQLite databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Project-specific
 ROADMAP.md

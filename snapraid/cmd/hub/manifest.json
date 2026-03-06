@@ -303,14 +303,14 @@
                 "label": "Pause Containers Before Sync",
                 "hint": "Comma-separated Docker container names to pause during sync and unpause after",
                 "type": "text",
-                "placeholder": "plex,sonarr,radarr"
+                "placeholder": "plex,stirling-pdf,home-assistant"
               },
               {
                 "name": "docker_stop_containers",
                 "label": "Stop Containers Before Sync",
                 "hint": "Comma-separated Docker container names to stop during sync and restart after",
                 "type": "text",
-                "placeholder": "qbittorrent"
+                "placeholder": "nextcloud,immich,vaultwarden"
               }
             ],
             "action": "config",

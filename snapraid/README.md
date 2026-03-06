@@ -219,6 +219,59 @@ All schedule and threshold settings are configured per-Agent from the Automation
 
 Schedule fields offer common presets (e.g., "Daily at 3:00 AM", "Sundays at 4:00 AM", "Every 6 hours") plus a **Custom** option that reveals a text input for standard 5-field cron expressions.
 
+### Docker Container Management
+
+The Automation page includes built-in Docker container lifecycle management — no external scripts needed. Before a sync operation, the Agent can automatically pause or stop containers that write to your data disks, then restore them after sync completes.
+
+**Pause vs Stop — when to use each:**
+
+| Action | What Happens | Resume | Best For |
+|--------|-------------|--------|----------|
+| **Pause** | Container process is frozen (SIGSTOP). No CPU, no disk writes. Container stays "running" in Docker. Resumes instantly. | Unpause (~0s) | Media apps, download clients, indexers — anything that can tolerate a brief freeze without losing state |
+| **Stop** | Container receives SIGTERM → SIGKILL after timeout. Full shutdown. | Restart (~5-30s) | Databases, apps with write-ahead logs, anything that needs a clean shutdown to avoid corruption |
+
+**Common container recommendations:**
+
+| Container | Action | Why |
+|-----------|--------|-----|
+| Plex / Jellyfin / Emby | Pause | Freezes mid-stream is fine; transcoder state is disposable |
+| Nextcloud | Stop | PHP workers and DB connections need graceful shutdown |
+| Immich | Stop | Database-backed; needs clean shutdown |
+| Stirling-PDF | Pause | Stateless processing — safe to freeze |
+| Paperless-ngx | Stop | Database-backed document indexer; needs clean shutdown |
+| PostgreSQL / MariaDB / InfluxDB | Stop | Databases must flush WAL/journals cleanly |
+| Vaultwarden | Stop | SQLite-backed; needs clean shutdown to avoid corruption |
+| Home Assistant | Pause | State is in-memory; safe to freeze briefly |
+| Gitea / Forgejo | Stop | Git repos and database need graceful shutdown |
+
+Enter container names as comma-separated values (e.g., `nextcloud,immich,stirling-pdf`). Names must match the Docker container name exactly.
+
+> **Tip:** If you're unsure whether to pause or stop a container, use **stop** — it's always safe. Pause is an optimization for faster resume times.
+
+### Hooks
+
+Pre-sync and post-sync hooks run shell commands on the Agent host before and after each sync operation. They execute inside the Agent's environment (or container if Dockerized).
+
+| Hook | Runs | Use Cases |
+|------|------|-----------|
+| **Pre-Sync** | Before sync starts (after safety gates pass) | Flush caches, stop services not managed by Docker, snapshot filesystems, send "sync starting" webhook |
+| **Post-Sync** | After sync completes (regardless of outcome) | Restart services, trigger backup jobs, send completion reports, update monitoring |
+
+If a pre-sync hook exits with a non-zero code, the entire maintenance pipeline is **aborted** and a `gate_failed` notification is emitted. Post-sync hook failures are logged but do not affect the pipeline outcome.
+
+**Example hooks:**
+
+```bash
+# Pre-sync: flush filesystem caches
+sync && echo 3 > /proc/sys/vm/drop_caches
+
+# Pre-sync: send webhook notification
+curl -s -X POST https://hooks.example.com/snapraid -d '{"event":"sync_starting"}'
+
+# Post-sync: trigger a backup of parity files
+rsync -a /mnt/parity/ /mnt/backup/parity/
+```
+
 ### Recommended Configurations
 
 **Home NAS (1-8 drives, light usage)**
@@ -234,6 +287,8 @@ Schedule fields offer common presets (e.g., "Daily at 3:00 AM", "Sundays at 4:00
 | Default Scrub Plan | 8% | Full array is verified roughly every 3 months |
 | Scrub Min Age (days) | 10 | Avoids re-checking recently verified blocks |
 | Auto-Fix Bad Blocks | Off | Review errors manually before repairing |
+| Pause Containers | — | Not needed for light-usage setups with few services |
+| Stop Containers | — | Not needed unless running a database on the array |
 
 **Media Server (8-24 drives, frequent writes)**
 
@@ -248,7 +303,8 @@ Schedule fields offer common presets (e.g., "Daily at 3:00 AM", "Sundays at 4:00
 | Default Scrub Plan | 8% | Full array verified roughly every 3 months |
 | Scrub Min Age (days) | 7 | Check blocks more frequently due to higher data churn |
 | Auto-Fix Bad Blocks | Off | Investigate root cause before auto-repairing |
-| Pause Containers | plex,sonarr,radarr | Prevents file changes during sync for media apps |
+| Pause Containers | plex,stirling-pdf | Freeze stateless apps to prevent file changes during sync |
+| Stop Containers | nextcloud,immich | Clean shutdown for database-backed services |
 
 **Production / Archive (24+ drives, critical data)**
 
@@ -264,6 +320,9 @@ Schedule fields offer common presets (e.g., "Daily at 3:00 AM", "Sundays at 4:00
 | Scrub Min Age (days) | 3 | Minimize window for undetected bit rot |
 | Auto-Fix Bad Blocks | On | Automated repair minimizes data-at-risk window on large arrays |
 | Pre-Sync Hook | `/usr/local/bin/pre-sync.sh` | Run custom validation or flush caches before sync |
+| Post-Sync Hook | `/usr/local/bin/post-sync.sh` | Trigger backup jobs or send completion reports |
+| Pause Containers | — | Use stop instead for databases and critical services |
+| Stop Containers | nextcloud,immich,postgres | Full shutdown for database-backed services writing to the array |
 
 ### Pre-Flight Safety Gates
 

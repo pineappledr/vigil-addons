@@ -33,6 +33,8 @@ func main() {
 		}))
 	}
 
+	config.LogHubConfig(logger, cfg)
+
 	registry, err := hub.NewRegistry(cfg.Data.RegistryPath)
 	if err != nil {
 		logger.Error("failed to initialize agent registry", "error", err)

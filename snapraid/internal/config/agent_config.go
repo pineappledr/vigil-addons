@@ -101,6 +101,10 @@ func LoadAgentConfig(path string) (*AgentConfig, error) {
 
 	applyAgentEnvOverrides(&cfg)
 
+	if err := ValidateAgentConfig(&cfg); err != nil {
+		return nil, fmt.Errorf("agent config validation: %w", err)
+	}
+
 	return &cfg, nil
 }
 

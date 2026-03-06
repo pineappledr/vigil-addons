@@ -1,8 +1,10 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -89,4 +91,33 @@ func PruneOlderThan(db *sql.DB, retention time.Duration) (int64, error) {
 		return 0, fmt.Errorf("prune jobs: %w", err)
 	}
 	return res.RowsAffected()
+}
+
+// StartPruneLoop runs a daily background loop that deletes job_history records
+// older than the given retention period. It stops when ctx is cancelled.
+func StartPruneLoop(ctx context.Context, database *sql.DB, retention time.Duration, logger *slog.Logger) {
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+
+		// Run once immediately on startup
+		if n, err := PruneOlderThan(database, retention); err != nil {
+			logger.Error("job history prune failed", "error", err)
+		} else if n > 0 {
+			logger.Info("pruned old job history records", "deleted", n)
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if n, err := PruneOlderThan(database, retention); err != nil {
+					logger.Error("job history prune failed", "error", err)
+				} else if n > 0 {
+					logger.Info("pruned old job history records", "deleted", n)
+				}
+			}
+		}
+	}()
 }

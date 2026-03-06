@@ -51,6 +51,10 @@ func LoadHubConfig(path string) (*HubConfig, error) {
 
 	applyHubEnvOverrides(&cfg)
 
+	if err := ValidateHubConfig(&cfg); err != nil {
+		return nil, fmt.Errorf("hub config validation: %w", err)
+	}
+
 	return &cfg, nil
 }
 

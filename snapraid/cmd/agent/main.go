@@ -45,6 +45,13 @@ func main() {
 	}
 	defer db.Close()
 
+	config.LogAgentConfig(logger, cfg)
+
+	appCtx, appCancel := context.WithCancel(context.Background())
+	defer appCancel()
+
+	agentdb.StartPruneLoop(appCtx, db, 90*24*time.Hour, logger)
+
 	eng := engine.NewEngine(cfg.SnapRAID.BinaryPath, cfg.SnapRAID.ConfigPath, logger)
 
 	hostname, _ := os.Hostname()
@@ -68,6 +75,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	appCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

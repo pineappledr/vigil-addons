@@ -8,7 +8,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     -o /snapraid-agent ./cmd/agent
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates tzdata snapraid
+RUN apk add --no-cache ca-certificates tzdata
 RUN mkdir -p /var/lib/vigil-snapraid-agent
 COPY --from=builder /snapraid-agent /usr/local/bin/snapraid-agent
 VOLUME ["/var/lib/vigil-snapraid-agent"]

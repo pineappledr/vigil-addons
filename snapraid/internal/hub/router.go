@@ -36,10 +36,16 @@ func NewCommandRouter(registry *Registry, logger *slog.Logger) *CommandRouter {
 }
 
 // RouteCommand resolves the target Agent and forwards the command as POST /api/execute.
+// The special action "abort" is routed to POST /api/abort instead.
 func (cr *CommandRouter) RouteCommand(cmd CommandMessage) ([]byte, error) {
 	agent := cr.registry.Get(cmd.AgentID)
 	if agent == nil {
 		return nil, fmt.Errorf("agent %s not found in registry", cmd.AgentID)
+	}
+
+	// Abort is routed to a dedicated endpoint.
+	if cmd.Action == "abort" {
+		return cr.postAgent(agent, "/api/abort", nil, cmd.AgentID, "abort")
 	}
 
 	// Build the execute request payload
@@ -60,12 +66,21 @@ func (cr *CommandRouter) RouteCommand(cmd CommandMessage) ([]byte, error) {
 		return nil, fmt.Errorf("marshal command: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/execute", agent.Address)
-	cr.logger.Info("routing command to agent", "agent_id", cmd.AgentID, "url", url, "action", cmd.Action)
+	return cr.postAgent(agent, "/api/execute", body, cmd.AgentID, cmd.Action)
+}
 
-	resp, err := cr.client.Post(url, "application/json", bytes.NewReader(body))
+func (cr *CommandRouter) postAgent(agent *AgentEntry, path string, body []byte, agentID, action string) ([]byte, error) {
+	url := fmt.Sprintf("%s%s", agent.Address, path)
+	cr.logger.Info("routing command to agent", "agent_id", agentID, "url", url, "action", action)
+
+	var bodyReader io.Reader
+	if body != nil {
+		bodyReader = bytes.NewReader(body)
+	}
+
+	resp, err := cr.client.Post(url, "application/json", bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("forward to agent %s: %w", cmd.AgentID, err)
+		return nil, fmt.Errorf("forward to agent %s: %w", agentID, err)
 	}
 	defer resp.Body.Close()
 

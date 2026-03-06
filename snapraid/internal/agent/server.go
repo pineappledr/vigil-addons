@@ -42,6 +42,7 @@ func NewServer(cfg *config.AgentConfig, eng *engine.Engine, database *sql.DB, co
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("POST /api/execute", s.handleExecute)
+	s.mux.HandleFunc("POST /api/abort", s.handleAbort)
 	s.mux.HandleFunc("POST /api/config", s.handleConfig)
 	s.mux.HandleFunc("GET /api/jobs", s.handleJobs)
 }
@@ -190,6 +191,19 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Info("config updated", "keys_count", len(req.Values))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
+	if err := s.engine.Abort(); err != nil {
+		status := http.StatusConflict
+		if err == engine.ErrNoActiveJob {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	s.logger.Info("active operation aborted via API")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "aborted"})
 }
 
 func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {

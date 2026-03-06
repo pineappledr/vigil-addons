@@ -13,11 +13,12 @@ import (
 
 // Scheduler manages recurring SnapRAID jobs via cron expressions.
 type Scheduler struct {
-	cron   *cron.Cron
-	engine *engine.Engine
-	cfg    *config.AgentConfig
-	db     *sql.DB
-	logger *slog.Logger
+	cron    *cron.Cron
+	engine  *engine.Engine
+	cfg     *config.AgentConfig
+	db      *sql.DB
+	emitter EventEmitter
+	logger  *slog.Logger
 
 	// jobMu serializes scheduled job execution so only one pipeline runs at a time,
 	// even if cron fires overlap. The engine mutex guards the binary itself;
@@ -26,13 +27,15 @@ type Scheduler struct {
 }
 
 // New creates a Scheduler wired to the given engine, config, and database.
-func New(eng *engine.Engine, cfg *config.AgentConfig, database *sql.DB, logger *slog.Logger) *Scheduler {
+// The emitter is optional; pass nil to disable event notifications.
+func New(eng *engine.Engine, cfg *config.AgentConfig, database *sql.DB, emitter EventEmitter, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
-		cron:   cron.New(cron.WithSeconds()),
-		engine: eng,
-		cfg:    cfg,
-		db:     database,
-		logger: logger,
+		cron:    cron.New(cron.WithSeconds()),
+		engine:  eng,
+		cfg:     cfg,
+		db:      database,
+		emitter: emitter,
+		logger:  logger,
 	}
 }
 
@@ -86,10 +89,11 @@ func (s *Scheduler) runMaintenance(ctx context.Context) {
 	defer s.jobMu.Unlock()
 
 	p := &Pipeline{
-		engine: s.engine,
-		cfg:    s.cfg,
-		db:     s.db,
-		logger: s.logger,
+		engine:  s.engine,
+		cfg:     s.cfg,
+		db:      s.db,
+		emitter: s.emitter,
+		logger:  s.logger,
 	}
 	p.RunMaintenance(ctx)
 }
@@ -103,10 +107,11 @@ func (s *Scheduler) runScrubOnly(ctx context.Context) {
 	defer s.jobMu.Unlock()
 
 	p := &Pipeline{
-		engine: s.engine,
-		cfg:    s.cfg,
-		db:     s.db,
-		logger: s.logger,
+		engine:  s.engine,
+		cfg:     s.cfg,
+		db:      s.db,
+		emitter: s.emitter,
+		logger:  s.logger,
 	}
 	p.RunScrubOnly(ctx)
 }
@@ -120,10 +125,11 @@ func (s *Scheduler) runSmartCheck(ctx context.Context) {
 	defer s.jobMu.Unlock()
 
 	p := &Pipeline{
-		engine: s.engine,
-		cfg:    s.cfg,
-		db:     s.db,
-		logger: s.logger,
+		engine:  s.engine,
+		cfg:     s.cfg,
+		db:      s.db,
+		emitter: s.emitter,
+		logger:  s.logger,
 	}
 	p.RunSmartCheck(ctx)
 }
@@ -137,10 +143,11 @@ func (s *Scheduler) runStatusRefresh(ctx context.Context) {
 	defer s.jobMu.Unlock()
 
 	p := &Pipeline{
-		engine: s.engine,
-		cfg:    s.cfg,
-		db:     s.db,
-		logger: s.logger,
+		engine:  s.engine,
+		cfg:     s.cfg,
+		db:      s.db,
+		emitter: s.emitter,
+		logger:  s.logger,
 	}
 	p.RunStatusRefresh(ctx)
 }

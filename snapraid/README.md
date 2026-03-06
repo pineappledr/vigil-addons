@@ -35,6 +35,44 @@ The Hub connects to the Vigil Server using the same two-phase pattern as all Vig
 
 If no `vigil.token` is configured, the Hub runs in standalone mode without upstream connectivity.
 
+## Prerequisites
+
+### Agent Host Requirements
+
+Each host running a SnapRAID Agent must have:
+
+1. **SnapRAID installed** — The Agent wraps the `snapraid` binary. Install it via your package manager or from [snapraid.it](https://www.snapraid.it):
+   ```bash
+   # Debian/Ubuntu
+   apt install snapraid
+
+   # Arch
+   pacman -S snapraid
+
+   # From source
+   wget https://github.com/amadvance/snapraid/releases/download/v12.3/snapraid-12.3.tar.gz
+   tar xzf snapraid-12.3.tar.gz && cd snapraid-12.3
+   ./configure && make && sudo make install
+   ```
+
+2. **A valid `snapraid.conf`** — The Agent reads this file to discover content and parity file paths. It must be configured and working before deploying the Agent. Test with `snapraid status` first.
+
+3. **Data and parity disks mounted** — All disks referenced in `snapraid.conf` must be mounted and accessible. When running in Docker, these must be bind-mounted into the Agent container.
+
+4. **Docker (optional)** — Only required if using Docker container pause/stop features or deploying via docker-compose. The Agent itself can run as a standalone binary.
+
+### Hub Requirements
+
+The Hub has no special requirements beyond network connectivity. It can run on any host that can reach both the Vigil Server and the Agent(s).
+
+### Network Ports
+
+| Port | Service | Direction |
+|------|---------|-----------|
+| 9080 | Vigil Server | Hub → Server |
+| 9300 | SnapRAID Hub | Agent → Hub, Server → Hub |
+| 9400 | SnapRAID Agent | Hub → Agent |
+
 ## Deployment
 
 ### Docker Compose (Recommended)
@@ -147,24 +185,135 @@ For multiple NAS hosts, deploy **one Hub** and **one Agent per host**:
 
 All Agents share the same Hub. Each Agent manages its own local SnapRAID array independently.
 
-## Scheduling & Safety
+## Dashboard Pages
 
-The Agent runs a native cron scheduler with four job types:
+The Vigil UI renders five pages from the Hub manifest:
 
-| Job | Default | Pipeline |
-|-----|---------|----------|
-| **Maintenance** | Daily 03:00 | `touch` → `diff` → gates → `sync` → `scrub` |
-| **Scrub** | Sunday 04:00 | Standalone `scrub` |
-| **SMART** | Every 6h | `smart` check with failure detection |
-| **Status** | Every 30m | `status` refresh for dashboard telemetry |
+| Page | Components | Purpose |
+|------|-----------|---------|
+| **Dashboard** | Disk Status table, Active Job progress, SMART Overview | At-a-glance array health and running operations |
+| **Operations** | Execute Command form | Manually trigger sync, scrub, fix, status, smart, diff, or touch against a selected Agent |
+| **Automation** | Schedule Configuration form | Configure maintenance, scrub, and SMART schedules with presets or custom cron; set safety thresholds |
+| **Agents** | Registered Agents table, Deploy Wizard | View connected Agents and deploy new ones via generated docker-compose |
+| **Logs** | Live Output viewer, Job History table | Real-time log streaming and historical job records |
+
+### Automation Settings
+
+All schedule and threshold settings are configured per-Agent from the Automation page:
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| **Maintenance Schedule** | Preset / Custom cron | Daily at 3:00 AM | Runs `touch` → `diff` → safety gates → `sync` → `scrub` |
+| **Scrub Schedule** | Preset / Custom cron | Sundays at 4:00 AM | Standalone scrub to verify data integrity |
+| **SMART Check Schedule** | Preset / Custom cron | Every 6 hours | Polls drive health and reports failures |
+| **Deletion Threshold** | Number | 50 | Abort sync if more files deleted than this limit (0 = no limit) |
+| **Update Threshold** | Number | -1 | Abort sync if more files updated than this limit (-1 = disabled) |
+| **Enable Pre-Hash** | Toggle | Off | Hash files before sync to detect silent corruption (slower but safer) |
+| **Default Scrub Plan** | Select | 8% | How much data to verify per scrub run (bad, new, full, or percentage) |
+| **Scrub Min Age (days)** | Number | 10 | Only scrub blocks older than this many days since last check |
+| **Auto-Fix Bad Blocks** | Toggle | Off | Automatically attempt to repair bad blocks detected during scrub |
+| **Pre-Sync Hook** | Text | — | Shell command to run before each sync (e.g. stop services, flush caches) |
+| **Post-Sync Hook** | Text | — | Shell command to run after each sync (e.g. restart services, send reports) |
+| **Pause Containers Before Sync** | Text | — | Comma-separated Docker container names to pause during sync and unpause after |
+| **Stop Containers Before Sync** | Text | — | Comma-separated Docker container names to stop during sync and restart after |
+
+Schedule fields offer common presets (e.g., "Daily at 3:00 AM", "Sundays at 4:00 AM", "Every 6 hours") plus a **Custom** option that reveals a text input for standard 5-field cron expressions.
+
+### Recommended Configurations
+
+**Home NAS (1-8 drives, light usage)**
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| Maintenance Schedule | Daily at 3:00 AM | Nightly sync keeps parity current with minimal disruption |
+| Scrub Schedule | Sundays at 4:00 AM | Weekly integrity check catches bit rot early |
+| SMART Check Schedule | Every 12 hours | Sufficient for drives under light load |
+| Deletion Threshold | 50 | Catches accidental bulk deletes before parity is updated |
+| Update Threshold | -1 | Disabled — home use rarely sees suspicious update spikes |
+| Enable Pre-Hash | Off | Not needed for low-throughput arrays |
+| Default Scrub Plan | 8% | Full array is verified roughly every 3 months |
+| Scrub Min Age (days) | 10 | Avoids re-checking recently verified blocks |
+| Auto-Fix Bad Blocks | Off | Review errors manually before repairing |
+
+**Media Server (8-24 drives, frequent writes)**
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| Maintenance Schedule | Daily at 2:00 AM | Earlier window to finish before morning activity |
+| Scrub Schedule | Sun & Wed at 4:00 AM | Twice-weekly scrub for larger arrays with more data churn |
+| SMART Check Schedule | Every 6 hours | More frequent checks for drives under heavier load |
+| Deletion Threshold | 100 | Higher limit for libraries where bulk imports/removals are normal |
+| Update Threshold | 500 | Catch runaway processes but allow large media ingests |
+| Enable Pre-Hash | On | Detects silent corruption during write-heavy workloads |
+| Default Scrub Plan | 8% | Full array verified roughly every 3 months |
+| Scrub Min Age (days) | 7 | Check blocks more frequently due to higher data churn |
+| Auto-Fix Bad Blocks | Off | Investigate root cause before auto-repairing |
+| Pause Containers | plex,sonarr,radarr | Prevents file changes during sync for media apps |
+
+**Production / Archive (24+ drives, critical data)**
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| Maintenance Schedule | Daily at 2:00 AM | Consistent nightly parity updates |
+| Scrub Schedule | Daily at 4:00 AM | Daily scrub for maximum data integrity assurance |
+| SMART Check Schedule | Every 4 hours | Aggressive monitoring for early failure detection |
+| Deletion Threshold | 25 | Low tolerance — any unexpected bulk delete is suspicious |
+| Update Threshold | 200 | Flag unusual update volumes for review |
+| Enable Pre-Hash | On | Essential for detecting silent corruption on archive data |
+| Default Scrub Plan | Full | Verify entire array every pass |
+| Scrub Min Age (days) | 3 | Minimize window for undetected bit rot |
+| Auto-Fix Bad Blocks | On | Automated repair minimizes data-at-risk window on large arrays |
+| Pre-Sync Hook | `/usr/local/bin/pre-sync.sh` | Run custom validation or flush caches before sync |
 
 ### Pre-Flight Safety Gates
 
-Before any automated sync, three gates must pass:
+Before any automated sync, four gates must pass:
 
+0. **Config Files Gate** — Validates that all content and parity files referenced in the snapraid configuration exist and are non-empty.
 1. **SMART Gate** — Aborts if any disk reports `FAIL`/`PREFAIL` or exceeds the failure probability threshold.
 2. **Diff Threshold Gate** — Aborts if deleted or updated files exceed configured limits. The `add_del_ratio` can override a deletion breach.
 3. **Concurrency Lock** — Ensures no other SnapRAID operation is running.
+
+### Maintenance Pipeline
+
+The full automated maintenance pipeline runs as:
+
+```
+config files gate → touch → diff → SMART gate → diff threshold gate →
+  pre-sync hook → pause/stop containers → sync → unpause/start containers →
+  post-sync hook → scrub → auto-fix (if bad blocks detected)
+```
+
+### Job Cancellation
+
+Any running SnapRAID operation can be aborted from the Dashboard's Active Job progress card or via the API (`POST /api/command` with `action: "abort"`). The abort sends a termination signal to the underlying snapraid process.
+
+## Notifications
+
+The Hub emits notification frames upstream to the Vigil Server for dispatch through your configured channels (Discord, Telegram, email, Slack, etc. via Shoutrrr). You receive a notification for every operation, every automation run, and every failure.
+
+### Notification Events
+
+| Event | Severity | Trigger |
+|-------|----------|---------|
+| `job_started` | info | Any SnapRAID operation begins (manual or scheduled) |
+| `job_complete` | info | Any SnapRAID operation finishes successfully |
+| `job_failed` | critical | A command routed to an Agent fails |
+| `smart_warning` | warning | SMART status reports `FAIL` or `PREFAIL` on any disk |
+| `maintenance_started` | info | Scheduled maintenance pipeline begins |
+| `maintenance_complete` | info | Scheduled maintenance pipeline finishes successfully |
+| `gate_failed` | warning | A pre-flight safety gate aborts the maintenance pipeline |
+
+### What You Get Notified About
+
+- **Every sync, scrub, touch, diff, smart, fix, and status** operation — whether triggered manually from the Operations page or by the scheduler — emits `job_started` and `job_complete` notifications.
+- **Scheduled maintenance** emits `maintenance_started` at the beginning and `maintenance_complete` at the end. If a safety gate blocks the pipeline, you get a `gate_failed` notification with the reason (e.g., "42 files deleted exceeds threshold of 25").
+- **SMART failures** are detected during periodic health checks and emit `smart_warning` with the affected disk name and device.
+- **Command failures** (e.g., network errors routing to an Agent) emit `job_failed` with the error details.
+
+### Setup
+
+Notifications are dispatched through the Vigil Server's notification system. Configure your notification channels (Discord webhook, Telegram bot, email, etc.) in the Vigil Server settings. The SnapRAID Hub automatically forwards all events upstream — no additional configuration is needed on the Hub or Agent side.
 
 ## API Reference
 
@@ -174,6 +323,7 @@ Before any automated sync, three gates must pass:
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
 | `POST` | `/api/execute` | Trigger a SnapRAID command (sync, scrub, fix, status, smart, diff, touch) |
+| `POST` | `/api/abort` | Cancel the currently running SnapRAID operation |
 | `POST` | `/api/config` | Push configuration updates (persisted to SQLite) |
 | `GET` | `/api/jobs` | Retrieve recent job history |
 
@@ -202,7 +352,7 @@ The Hub retries registration with exponential backoff (2s to 60s). Check:
 
 ### Agent fails to start: "invalid cron expression"
 
-The Agent validates all cron expressions on startup. Ensure you use standard 5-field format:
+The Agent validates all cron expressions on startup. Use one of the preset schedules from the Automation page, or if using the Custom option, ensure you use standard 5-field cron format:
 
 ```
 ┌───────────── minute (0-59)

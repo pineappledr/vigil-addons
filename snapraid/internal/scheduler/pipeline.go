@@ -11,18 +11,35 @@ import (
 	"github.com/pineappledr/vigil-addons/snapraid/internal/engine"
 )
 
+// EventEmitter allows the pipeline to emit notification events upstream
+// without importing the agent package directly.
+type EventEmitter interface {
+	EmitEvent(eventType, severity, message string)
+}
+
 // Pipeline orchestrates SnapRAID operations and records results in the job history.
 type Pipeline struct {
-	engine *engine.Engine
-	cfg    *config.AgentConfig
-	db     *sql.DB
-	logger *slog.Logger
+	engine  *engine.Engine
+	cfg     *config.AgentConfig
+	db      *sql.DB
+	emitter EventEmitter
+	logger  *slog.Logger
 }
 
 // RunMaintenance executes the full automated maintenance pipeline:
 // touch -> diff -> safety gates (SMART + diff thresholds) -> sync -> scrub.
 func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	p.logger.Info("maintenance pipeline started")
+	p.emit("maintenance_started", "info", "Maintenance pipeline started")
+
+	// Gate 0: Validate content and parity files exist and are non-empty.
+	gate := CheckConfigFiles(p.engine)
+	if !gate.Passed {
+		p.logger.Error("maintenance aborted: config files gate failed", "reason", gate.Reason)
+		p.recordGateFailure("config_files_gate", gate.Reason)
+		p.emit("gate_failed", "warning", "Maintenance aborted: "+gate.Reason)
+		return
+	}
 
 	// Step 1: touch
 	if !p.runStep(ctx, "touch", "scheduled", func(ctx context.Context) (int, string, error) {
@@ -62,10 +79,11 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	}
 
 	// Evaluate Gate 1: SMART
-	gate := CheckSMART(smartReport, p.cfg.Thresholds)
+	gate = CheckSMART(smartReport, p.cfg.Thresholds)
 	if !gate.Passed {
 		p.logger.Error("maintenance aborted: SMART gate failed", "reason", gate.Reason)
 		p.recordGateFailure("smart_gate", gate.Reason)
+		p.emit("gate_failed", "warning", "Maintenance aborted: "+gate.Reason)
 		return
 	}
 
@@ -74,13 +92,25 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	if !gate.Passed {
 		p.logger.Error("maintenance aborted: diff threshold gate failed", "reason", gate.Reason)
 		p.recordGateFailure("diff_gate", gate.Reason)
+		p.emit("gate_failed", "warning", "Maintenance aborted: "+gate.Reason)
 		return
 	}
 
 	p.logger.Info("all pre-flight gates passed")
 
+	// Pre-sync hook
+	if err := runHook(ctx, "pre_sync", p.cfg.Hooks.PreSync, p.logger); err != nil {
+		p.logger.Error("maintenance aborted: pre-sync hook failed", "error", err)
+		p.recordGateFailure("pre_sync_hook", err.Error())
+		p.emit("gate_failed", "warning", "Pre-sync hook failed: "+err.Error())
+		return
+	}
+
+	// Docker container management before sync
+	restored := p.manageContainers(ctx, true)
+
 	// Step 4: sync
-	if !p.runStep(ctx, "sync", "scheduled", func(ctx context.Context) (int, string, error) {
+	syncOk := p.runStep(ctx, "sync", "scheduled", func(ctx context.Context) (int, string, error) {
 		report, err := p.engine.Sync(ctx, engine.SyncOptions{
 			PreHash: p.cfg.Sync.PreHash,
 		}, nil)
@@ -88,11 +118,24 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 			return 0, "", err
 		}
 		return report.ExitCode, report.Output, nil
-	}) {
+	})
+
+	// Restore Docker containers after sync (regardless of sync outcome)
+	if restored != nil {
+		restored()
+	}
+
+	// Post-sync hook
+	if hookErr := runHook(ctx, "post_sync", p.cfg.Hooks.PostSync, p.logger); hookErr != nil {
+		p.logger.Warn("post-sync hook failed", "error", hookErr)
+	}
+
+	if !syncOk {
 		return
 	}
 
 	// Step 5: scrub
+	var scrubExitCode int
 	p.runStep(ctx, "scrub", "scheduled", func(ctx context.Context) (int, string, error) {
 		report, err := p.engine.Scrub(ctx, engine.ScrubOptions{
 			Plan:          p.cfg.Scrub.Plan,
@@ -101,14 +144,29 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 		if err != nil {
 			return 0, "", err
 		}
+		scrubExitCode = report.ExitCode
 		return report.ExitCode, report.Output, nil
 	})
 
+	// Step 6: auto-fix bad blocks if scrub reported errors (exit code 2)
+	if p.cfg.Scrub.AutoFixBadBlocks && scrubExitCode == 2 {
+		p.logger.Info("scrub reported bad blocks, running auto-fix")
+		p.runStep(ctx, "fix", "auto-fix", func(ctx context.Context) (int, string, error) {
+			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true})
+			if err != nil {
+				return 0, "", err
+			}
+			return report.ExitCode, report.Output, nil
+		})
+	}
+
 	p.logger.Info("maintenance pipeline completed")
+	p.emit("maintenance_complete", "info", "Maintenance pipeline completed successfully")
 }
 
 // RunScrubOnly executes a standalone scrub job.
 func (p *Pipeline) RunScrubOnly(ctx context.Context) {
+	var scrubExitCode int
 	p.runStep(ctx, "scrub", "scheduled", func(ctx context.Context) (int, string, error) {
 		report, err := p.engine.Scrub(ctx, engine.ScrubOptions{
 			Plan:          p.cfg.Scrub.Plan,
@@ -117,8 +175,20 @@ func (p *Pipeline) RunScrubOnly(ctx context.Context) {
 		if err != nil {
 			return 0, "", err
 		}
+		scrubExitCode = report.ExitCode
 		return report.ExitCode, report.Output, nil
 	})
+
+	if p.cfg.Scrub.AutoFixBadBlocks && scrubExitCode == 2 {
+		p.logger.Info("scrub reported bad blocks, running auto-fix")
+		p.runStep(ctx, "fix", "auto-fix", func(ctx context.Context) (int, string, error) {
+			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true})
+			if err != nil {
+				return 0, "", err
+			}
+			return report.ExitCode, report.Output, nil
+		})
+	}
 }
 
 // RunSmartCheck executes a standalone SMART check.
@@ -200,6 +270,13 @@ func (p *Pipeline) recordGateFailure(gateType, reason string) {
 		return
 	}
 	agentdb.CompleteJob(p.db, jobID, -1, "aborted", reason)
+}
+
+// emit sends a notification event upstream if an emitter is configured.
+func (p *Pipeline) emit(eventType, severity, message string) {
+	if p.emitter != nil {
+		p.emitter.EmitEvent(eventType, severity, message)
+	}
 }
 
 func formatDiffSummary(r *engine.DiffReport) string {

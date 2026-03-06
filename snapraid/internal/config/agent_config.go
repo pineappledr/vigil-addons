@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,7 +17,19 @@ type AgentConfig struct {
 	Thresholds Thresholds      `yaml:"thresholds"`
 	Scrub      ScrubConfig     `yaml:"scrub"`
 	Sync       SyncConfig      `yaml:"sync"`
+	Hooks      HooksConfig     `yaml:"hooks"`
+	Docker     DockerConfig    `yaml:"docker"`
 	Logging    LogConfig       `yaml:"logging"`
+}
+
+type HooksConfig struct {
+	PreSync  string `yaml:"pre_sync"`
+	PostSync string `yaml:"post_sync"`
+}
+
+type DockerConfig struct {
+	PauseContainers []string `yaml:"pause_containers"`
+	StopContainers  []string `yaml:"stop_containers"`
 }
 
 type AgentListen struct {
@@ -171,6 +184,18 @@ func applyAgentEnvOverrides(cfg *AgentConfig) {
 	}
 	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_SYNC_PRE_HASH"); v != "" {
 		cfg.Sync.PreHash = v == "true" || v == "1"
+	}
+	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_HOOKS_PRE_SYNC"); v != "" {
+		cfg.Hooks.PreSync = v
+	}
+	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_HOOKS_POST_SYNC"); v != "" {
+		cfg.Hooks.PostSync = v
+	}
+	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_DOCKER_PAUSE_CONTAINERS"); v != "" {
+		cfg.Docker.PauseContainers = strings.Split(v, ",")
+	}
+	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_DOCKER_STOP_CONTAINERS"); v != "" {
+		cfg.Docker.StopContainers = strings.Split(v, ",")
 	}
 	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_LOGGING_LEVEL"); v != "" {
 		cfg.Logging.Level = v

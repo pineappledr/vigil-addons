@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -20,7 +21,18 @@ type TelemetryPayload struct {
 	DiffStatus     *engine.DiffReport    `json:"diff_status,omitempty"`
 	SchedulerState *SchedulerState       `json:"scheduler_state,omitempty"`
 	ActiveJob      *ActiveJob            `json:"active_job,omitempty"`
+	LastEvent      *AgentEvent           `json:"last_event,omitempty"`
 	DaemonInfo     DaemonInfo            `json:"daemon_info"`
+}
+
+// AgentEvent describes a notable event that occurred on the Agent.
+// The Hub Aggregator watches for new events to emit notifications.
+type AgentEvent struct {
+	ID        string    `json:"id"`
+	Type      string    `json:"type"`      // "gate_failed", "maintenance_started", "maintenance_complete", "auto_fix"
+	Severity  string    `json:"severity"`  // "info", "warning", "critical"
+	Message   string    `json:"message"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // SchedulerState reflects the next/last times for each scheduled job.
@@ -72,6 +84,7 @@ type Collector struct {
 	diffStatus     *engine.DiffReport
 	schedulerState *SchedulerState
 	activeJob      *ActiveJob
+	lastEvent      *AgentEvent
 	logger         *slog.Logger
 }
 
@@ -94,10 +107,30 @@ func (c *Collector) SetActiveJob(j *ActiveJob)               { c.mu.Lock(); c.ac
 func (c *Collector) ClearActiveJob()                         { c.mu.Lock(); c.activeJob = nil; c.mu.Unlock() }
 func (c *Collector) SetHubConnected(v bool)                  { c.mu.Lock(); c.hubConnected = v; c.mu.Unlock() }
 
+// SetLastEvent records a notable event. The event is included in the next
+// telemetry frame and automatically cleared after one transmission.
+func (c *Collector) SetLastEvent(e *AgentEvent) { c.mu.Lock(); c.lastEvent = e; c.mu.Unlock() }
+
+// EmitEvent implements the scheduler.EventEmitter interface.
+func (c *Collector) EmitEvent(eventType, severity, message string) {
+	c.SetLastEvent(&AgentEvent{
+		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
+		Type:      eventType,
+		Severity:  severity,
+		Message:   message,
+		Timestamp: time.Now().UTC(),
+	})
+}
+
 // Build assembles the current telemetry state into a payload.
+// Uses a write lock because it clears LastEvent after reading.
 func (c *Collector) Build() *TelemetryPayload {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	evt := c.lastEvent
+	// Clear event after reading so it's only transmitted once.
+	c.lastEvent = nil
 
 	return &TelemetryPayload{
 		AgentID:        c.agentID,
@@ -108,6 +141,7 @@ func (c *Collector) Build() *TelemetryPayload {
 		DiffStatus:     c.diffStatus,
 		SchedulerState: c.schedulerState,
 		ActiveJob:      c.activeJob,
+		LastEvent:      evt,
 		DaemonInfo: DaemonInfo{
 			Version:      c.version,
 			Uptime:       time.Since(c.startTime).Truncate(time.Second).String(),

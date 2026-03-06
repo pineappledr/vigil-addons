@@ -21,6 +21,14 @@ type agentTelemetry struct {
 	AgentID     string           `json:"agent_id"`
 	ActiveJob   *agentActiveJob  `json:"active_job,omitempty"`
 	SmartStatus *agentSmartState `json:"smart_status,omitempty"`
+	LastEvent   *agentEvent      `json:"last_event,omitempty"`
+}
+
+type agentEvent struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
 }
 
 type agentActiveJob struct {
@@ -55,7 +63,8 @@ type Aggregator struct {
 	logger    *slog.Logger
 
 	// Per-agent tracking for state transition detection.
-	lastJobs    map[string]*trackedJob  // agent_id → last known job
+	lastJobs     map[string]*trackedJob // agent_id → last known job
+	lastEventIDs map[string]string      // agent_id → last forwarded event ID
 	smartAlerted map[string]bool        // "agent:disk" → already alerted
 }
 
@@ -67,6 +76,7 @@ func NewAggregator(registry *Registry, upstream chan<- []byte, logger *slog.Logg
 		upstream:     upstream,
 		logger:       logger,
 		lastJobs:     make(map[string]*trackedJob),
+		lastEventIDs: make(map[string]string),
 		smartAlerted: make(map[string]bool),
 	}
 }
@@ -152,6 +162,25 @@ func (a *Aggregator) evaluateTelemetry(agentID string, raw []byte) {
 
 	a.evaluateJobTransition(tc, agentID, t.ActiveJob)
 	a.evaluateSmartStatus(tc, agentID, t.SmartStatus)
+	a.evaluateAgentEvent(tc, agentID, t.LastEvent)
+}
+
+// evaluateAgentEvent forwards agent-emitted events (gate failures, pipeline
+// lifecycle) as notifications upstream, deduplicating by event ID.
+func (a *Aggregator) evaluateAgentEvent(tc *TelemetryClient, agentID string, evt *agentEvent) {
+	if evt == nil || evt.ID == "" {
+		return
+	}
+
+	a.mu.Lock()
+	if a.lastEventIDs[agentID] == evt.ID {
+		a.mu.Unlock()
+		return
+	}
+	a.lastEventIDs[agentID] = evt.ID
+	a.mu.Unlock()
+
+	a.emitNotification(tc, agentID, evt.Type, evt.Severity, evt.Message+" on "+agentID)
 }
 
 // evaluateJobTransition detects job started/completed transitions.

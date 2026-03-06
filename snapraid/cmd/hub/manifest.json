@@ -283,6 +283,34 @@
                 "hint": "Automatically attempt to repair bad blocks detected during scrub",
                 "type": "toggle",
                 "default": false
+              },
+              {
+                "name": "hooks_pre_sync",
+                "label": "Pre-Sync Hook",
+                "hint": "Shell command to run before each sync (e.g. stop services, flush caches)",
+                "type": "text",
+                "placeholder": "/usr/local/bin/pre-sync.sh"
+              },
+              {
+                "name": "hooks_post_sync",
+                "label": "Post-Sync Hook",
+                "hint": "Shell command to run after each sync (e.g. restart services, send reports)",
+                "type": "text",
+                "placeholder": "/usr/local/bin/post-sync.sh"
+              },
+              {
+                "name": "docker_pause_containers",
+                "label": "Pause Containers Before Sync",
+                "hint": "Comma-separated Docker container names to pause during sync and unpause after",
+                "type": "text",
+                "placeholder": "plex,sonarr,radarr"
+              },
+              {
+                "name": "docker_stop_containers",
+                "label": "Stop Containers Before Sync",
+                "hint": "Comma-separated Docker container names to stop during sync and restart after",
+                "type": "text",
+                "placeholder": "qbittorrent"
               }
             ],
             "action": "config",

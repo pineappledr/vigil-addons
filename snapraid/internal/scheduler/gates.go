@@ -16,6 +16,18 @@ type GateResult struct {
 	Reason  string
 }
 
+// CheckConfigFiles validates that all content and parity files referenced
+// in the snapraid configuration exist and are non-empty (Gate 0).
+func CheckConfigFiles(eng *engine.Engine) GateResult {
+	if err := eng.ValidateConfigFiles(); err != nil {
+		return GateResult{
+			Gate:   "config_files",
+			Reason: err.Error(),
+		}
+	}
+	return GateResult{Passed: true, Gate: "config_files"}
+}
+
 // CheckSMART evaluates the SmartReport against configured thresholds (Gate 1).
 // Returns a failed GateResult if any disk reports FAIL/PREFAIL or exceeds the
 // configured failure probability threshold.

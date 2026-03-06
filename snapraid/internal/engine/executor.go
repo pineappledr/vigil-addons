@@ -12,7 +12,10 @@ import (
 	"sync"
 )
 
-var ErrEngineLocked = errors.New("another snapraid operation is already running")
+var (
+	ErrEngineLocked = errors.New("another snapraid operation is already running")
+	ErrNoActiveJob  = errors.New("no active snapraid operation to abort")
+)
 
 // Engine wraps the snapraid binary and enforces single-command concurrency.
 type Engine struct {
@@ -20,6 +23,9 @@ type Engine struct {
 	configPath string
 	logger     *slog.Logger
 	mu         sync.Mutex
+
+	cancelMu sync.Mutex
+	cancelFn context.CancelFunc // set while a command is running
 }
 
 // NewEngine creates an Engine with explicit binary and config paths.
@@ -34,11 +40,33 @@ func NewEngine(binaryPath, configPath string, logger *slog.Logger) *Engine {
 	}
 }
 
+// Abort cancels the currently running snapraid command, if any.
+func (e *Engine) Abort() error {
+	e.cancelMu.Lock()
+	fn := e.cancelFn
+	e.cancelMu.Unlock()
+
+	if fn == nil {
+		return ErrNoActiveJob
+	}
+
+	e.logger.Warn("aborting active snapraid operation")
+	fn()
+	return nil
+}
+
 // commandResult holds captured output and exit code from a completed command.
 type commandResult struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
+}
+
+// setCancel stores a cancel function for the active command.
+func (e *Engine) setCancel(fn context.CancelFunc) {
+	e.cancelMu.Lock()
+	e.cancelFn = fn
+	e.cancelMu.Unlock()
 }
 
 // runCommand executes the snapraid binary with the given arguments under mutex protection.
@@ -49,10 +77,17 @@ func (e *Engine) runCommand(ctx context.Context, args ...string) (*commandResult
 	}
 	defer e.mu.Unlock()
 
+	cmdCtx, cancel := context.WithCancel(ctx)
+	e.setCancel(cancel)
+	defer func() {
+		e.setCancel(nil)
+		cancel()
+	}()
+
 	fullArgs := append([]string{"--conf", e.configPath}, args...)
 	e.logger.Info("executing snapraid", "args", fullArgs)
 
-	cmd := exec.CommandContext(ctx, e.binaryPath, fullArgs...)
+	cmd := exec.CommandContext(cmdCtx, e.binaryPath, fullArgs...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -88,10 +123,17 @@ func (e *Engine) runCommandStreaming(ctx context.Context, onLine lineFunc, args 
 	}
 	defer e.mu.Unlock()
 
+	cmdCtx, cancel := context.WithCancel(ctx)
+	e.setCancel(cancel)
+	defer func() {
+		e.setCancel(nil)
+		cancel()
+	}()
+
 	fullArgs := append([]string{"--conf", e.configPath}, args...)
 	e.logger.Info("executing snapraid (streaming)", "args", fullArgs)
 
-	cmd := exec.CommandContext(ctx, e.binaryPath, fullArgs...)
+	cmd := exec.CommandContext(cmdCtx, e.binaryPath, fullArgs...)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {

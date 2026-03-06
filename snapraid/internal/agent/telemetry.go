@@ -1,0 +1,157 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/pineappledr/vigil-addons/snapraid/internal/engine"
+)
+
+// TelemetryPayload is the full telemetry frame transmitted to the Hub.
+type TelemetryPayload struct {
+	AgentID        string                `json:"agent_id"`
+	Hostname       string                `json:"hostname"`
+	Timestamp      time.Time             `json:"timestamp"`
+	ArrayStatus    *engine.StatusReport  `json:"array_status,omitempty"`
+	SmartStatus    *engine.SmartReport   `json:"smart_status,omitempty"`
+	DiffStatus     *engine.DiffReport    `json:"diff_status,omitempty"`
+	SchedulerState *SchedulerState       `json:"scheduler_state,omitempty"`
+	ActiveJob      *ActiveJob            `json:"active_job,omitempty"`
+	DaemonInfo     DaemonInfo            `json:"daemon_info"`
+}
+
+// SchedulerState reflects the next/last times for each scheduled job.
+type SchedulerState struct {
+	NextMaintenance *time.Time `json:"next_maintenance,omitempty"`
+	NextScrub       *time.Time `json:"next_scrub,omitempty"`
+	NextSmartCheck  *time.Time `json:"next_smart_check,omitempty"`
+	LastSyncTime    *time.Time `json:"last_sync_time,omitempty"`
+	LastScrubTime   *time.Time `json:"last_scrub_time,omitempty"`
+	LastSmartTime   *time.Time `json:"last_smart_time,omitempty"`
+	LastSyncResult  string     `json:"last_sync_result,omitempty"`
+	LastScrubResult string     `json:"last_scrub_result,omitempty"`
+}
+
+// ActiveJob describes a currently running operation.
+type ActiveJob struct {
+	Type            string    `json:"type"`
+	StartedAt       time.Time `json:"started_at"`
+	ProgressPercent int       `json:"progress_percent"`
+	CurrentPhase    string    `json:"current_phase"`
+}
+
+// DaemonInfo holds static agent metadata.
+type DaemonInfo struct {
+	Version         string `json:"version"`
+	Uptime          string `json:"uptime"`
+	HubConnected    bool   `json:"hub_connected"`
+	SnapraidVersion string `json:"snapraid_version"`
+}
+
+// LogStreamFrame is a single log line transmitted in real-time.
+type LogStreamFrame struct {
+	AgentID   string    `json:"agent_id"`
+	Timestamp time.Time `json:"timestamp"`
+	Stream    string    `json:"stream"` // "stdout" or "stderr"
+	Line      string    `json:"line"`
+}
+
+// Collector aggregates engine data into telemetry payloads.
+type Collector struct {
+	mu             sync.RWMutex
+	agentID        string
+	hostname       string
+	startTime      time.Time
+	version        string
+	hubConnected   bool
+	arrayStatus    *engine.StatusReport
+	smartStatus    *engine.SmartReport
+	diffStatus     *engine.DiffReport
+	schedulerState *SchedulerState
+	activeJob      *ActiveJob
+	logger         *slog.Logger
+}
+
+// NewCollector creates a telemetry Collector with the given identity.
+func NewCollector(agentID, hostname, version string, logger *slog.Logger) *Collector {
+	return &Collector{
+		agentID:   agentID,
+		hostname:  hostname,
+		startTime: time.Now(),
+		version:   version,
+		logger:    logger,
+	}
+}
+
+func (c *Collector) SetArrayStatus(r *engine.StatusReport)  { c.mu.Lock(); c.arrayStatus = r; c.mu.Unlock() }
+func (c *Collector) SetSmartStatus(r *engine.SmartReport)    { c.mu.Lock(); c.smartStatus = r; c.mu.Unlock() }
+func (c *Collector) SetDiffStatus(r *engine.DiffReport)      { c.mu.Lock(); c.diffStatus = r; c.mu.Unlock() }
+func (c *Collector) SetSchedulerState(s *SchedulerState)     { c.mu.Lock(); c.schedulerState = s; c.mu.Unlock() }
+func (c *Collector) SetActiveJob(j *ActiveJob)               { c.mu.Lock(); c.activeJob = j; c.mu.Unlock() }
+func (c *Collector) ClearActiveJob()                         { c.mu.Lock(); c.activeJob = nil; c.mu.Unlock() }
+func (c *Collector) SetHubConnected(v bool)                  { c.mu.Lock(); c.hubConnected = v; c.mu.Unlock() }
+
+// Build assembles the current telemetry state into a payload.
+func (c *Collector) Build() *TelemetryPayload {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return &TelemetryPayload{
+		AgentID:        c.agentID,
+		Hostname:       c.hostname,
+		Timestamp:      time.Now().UTC(),
+		ArrayStatus:    c.arrayStatus,
+		SmartStatus:    c.smartStatus,
+		DiffStatus:     c.diffStatus,
+		SchedulerState: c.schedulerState,
+		ActiveJob:      c.activeJob,
+		DaemonInfo: DaemonInfo{
+			Version:      c.version,
+			Uptime:       time.Since(c.startTime).Truncate(time.Second).String(),
+			HubConnected: c.hubConnected,
+		},
+	}
+}
+
+// MarshalPayload serializes the current telemetry to JSON.
+func (c *Collector) MarshalPayload() ([]byte, error) {
+	return json.Marshal(c.Build())
+}
+
+// WSMessage is a typed WebSocket message envelope.
+type WSMessage struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+// TelemetryLoop periodically builds and sends telemetry to the provided channel.
+// It stops when ctx is cancelled.
+func (c *Collector) TelemetryLoop(ctx context.Context, interval time.Duration, send chan<- []byte) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			data, err := c.MarshalPayload()
+			if err != nil {
+				c.logger.Error("failed to marshal telemetry", "error", err)
+				continue
+			}
+			msg, _ := json.Marshal(WSMessage{
+				Type:    "telemetry",
+				Payload: data,
+			})
+			select {
+			case send <- msg:
+			default:
+				c.logger.Warn("telemetry send channel full, dropping frame")
+			}
+		}
+	}
+}

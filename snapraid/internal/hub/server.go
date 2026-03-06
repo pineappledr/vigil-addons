@@ -2,7 +2,9 @@ package hub
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -10,18 +12,26 @@ import (
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
 )
 
+// Server is the Hub HTTP server exposing registry, command, and telemetry endpoints.
 type Server struct {
-	cfg    *config.HubConfig
-	mux    *http.ServeMux
-	server *http.Server
-	logger *slog.Logger
+	cfg        *config.HubConfig
+	registry   *Registry
+	aggregator *Aggregator
+	router     *CommandRouter
+	mux        *http.ServeMux
+	server     *http.Server
+	logger     *slog.Logger
 }
 
-func NewServer(cfg *config.HubConfig, logger *slog.Logger) *Server {
+// NewServer creates the Hub server with all dependencies.
+func NewServer(cfg *config.HubConfig, registry *Registry, aggregator *Aggregator, router *CommandRouter, logger *slog.Logger) *Server {
 	s := &Server{
-		cfg:    cfg,
-		mux:    http.NewServeMux(),
-		logger: logger,
+		cfg:        cfg,
+		registry:   registry,
+		aggregator: aggregator,
+		router:     router,
+		mux:        http.NewServeMux(),
+		logger:     logger,
 	}
 	s.routes()
 	return s
@@ -29,12 +39,109 @@ func NewServer(cfg *config.HubConfig, logger *slog.Logger) *Server {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
+	s.mux.HandleFunc("POST /api/agents/register", s.handleAgentRegister)
+	s.mux.HandleFunc("GET /api/agents", s.handleAgentList)
+	s.mux.HandleFunc("POST /api/command", s.handleCommand)
+	s.mux.HandleFunc("POST /api/telemetry/ingest", s.handleTelemetryIngest)
+	s.mux.HandleFunc("POST /api/config/{agentID}", s.handleConfigForward)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, `{"status":"ok"}`)
+}
+
+// AgentRegisterRequest is the payload from Agent self-registration.
+type AgentRegisterRequest struct {
+	ID       string `json:"id"`
+	Hostname string `json:"hostname"`
+	Address  string `json:"address"`
+	Version  string `json:"version"`
+}
+
+func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
+	var req AgentRegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	entry := AgentEntry{
+		ID:       req.ID,
+		Hostname: req.Hostname,
+		Address:  req.Address,
+		Version:  req.Version,
+	}
+
+	if err := s.registry.Register(entry); err != nil {
+		s.logger.Error("failed to register agent", "agent_id", req.ID, "error", err)
+		writeHubJSON(w, http.StatusInternalServerError, map[string]string{"error": "registration failed"})
+		return
+	}
+
+	s.logger.Info("agent registered", "agent_id", req.ID, "hostname", req.Hostname, "address", req.Address)
+	writeHubJSON(w, http.StatusOK, map[string]string{"status": "registered"})
+}
+
+func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
+	writeHubJSON(w, http.StatusOK, s.registry.List())
+}
+
+func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
+	var cmd CommandMessage
+	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
+		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid command"})
+		return
+	}
+
+	resp, err := s.router.RouteCommand(cmd)
+	if err != nil {
+		s.logger.Error("command routing failed", "agent_id", cmd.AgentID, "error", err)
+		writeHubJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(resp)
+}
+
+// TelemetryIngestRequest carries a raw telemetry frame from an Agent.
+type TelemetryIngestRequest struct {
+	AgentID string          `json:"agent_id"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+func (s *Server) handleTelemetryIngest(w http.ResponseWriter, r *http.Request) {
+	var req TelemetryIngestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid telemetry"})
+		return
+	}
+
+	s.aggregator.IngestAgentFrame(req.AgentID, req.Payload)
+	writeHubJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
+}
+
+func (s *Server) handleConfigForward(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agentID")
+	if agentID == "" {
+		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "missing agent_id"})
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read body"})
+		return
+	}
+
+	if err := s.router.RouteConfigUpdate(agentID, body); err != nil {
+		s.logger.Error("config forward failed", "agent_id", agentID, "error", err)
+		writeHubJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeHubJSON(w, http.StatusOK, map[string]string{"status": "forwarded"})
 }
 
 func (s *Server) Start() error {
@@ -56,4 +163,10 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("hub server shutting down")
 	return s.server.Shutdown(ctx)
+}
+
+func writeHubJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
 }

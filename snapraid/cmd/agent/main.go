@@ -11,10 +11,15 @@ import (
 
 	"github.com/pineappledr/vigil-addons/snapraid/internal/agent"
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
+	agentdb "github.com/pineappledr/vigil-addons/snapraid/internal/db"
+	"github.com/pineappledr/vigil-addons/snapraid/internal/engine"
 )
+
+var version = "dev"
 
 func main() {
 	configPath := flag.String("config", "config.agent.yaml", "path to agent configuration file")
+	dbPath := flag.String("db", "/var/lib/vigil-snapraid-agent/agent.db", "path to agent SQLite database")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -33,7 +38,19 @@ func main() {
 		}))
 	}
 
-	srv := agent.NewServer(cfg, logger)
+	db, err := agentdb.Open(*dbPath)
+	if err != nil {
+		logger.Error("failed to open database", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	eng := engine.NewEngine(cfg.SnapRAID.BinaryPath, cfg.SnapRAID.ConfigPath, logger)
+
+	hostname, _ := os.Hostname()
+	collector := agent.NewCollector(hostname, hostname, version, logger)
+
+	srv := agent.NewServer(cfg, eng, db, collector, logger)
 
 	errCh := make(chan error, 1)
 	go func() {

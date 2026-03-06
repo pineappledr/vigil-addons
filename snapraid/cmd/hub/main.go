@@ -33,7 +33,17 @@ func main() {
 		}))
 	}
 
-	srv := hub.NewServer(cfg, logger)
+	registry, err := hub.NewRegistry(cfg.Data.RegistryPath)
+	if err != nil {
+		logger.Error("failed to initialize agent registry", "error", err)
+		os.Exit(1)
+	}
+
+	upstreamCh := make(chan []byte, 256)
+	aggregator := hub.NewAggregator(registry, upstreamCh, logger)
+	router := hub.NewCommandRouter(registry, logger)
+
+	srv := hub.NewServer(cfg, registry, aggregator, router, logger)
 
 	errCh := make(chan error, 1)
 	go func() {

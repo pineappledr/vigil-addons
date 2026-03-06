@@ -31,7 +31,7 @@ type HubData struct {
 func DefaultHubConfig() HubConfig {
 	return HubConfig{
 		Listen:  HubListen{Port: 9300},
-		Vigil:   HubVigil{ServerURL: "wss://vigil.local:9443/ws/addons"},
+		Vigil:   HubVigil{ServerURL: "http://vigil.local:9080"},
 		Data:    HubData{RegistryPath: "/data/agents.json"},
 		Logging: LogConfig{Level: "info"},
 	}

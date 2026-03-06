@@ -1,0 +1,370 @@
+{
+  "name": "SnapRAID",
+  "version": "0.1.0",
+  "description": "SnapRAID array management and automation",
+  "author": "Vigil Add-ons",
+  "pages": [
+    {
+      "id": "dashboard",
+      "title": "Dashboard",
+      "icon": "shield-check",
+      "page_config": {
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 60, "label": "1 Minute" },
+            { "value": 300, "label": "5 Minutes" },
+            { "value": 1800, "label": "30 Minutes" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "disk-status",
+          "title": "Disk Status",
+          "config": {
+            "source": "telemetry",
+            "telemetry_key": "array_status.disks",
+            "columns": [
+              { "key": "name", "label": "Disk" },
+              { "key": "device", "label": "Device" },
+              { "key": "used", "label": "Used", "format": "bytes" },
+              { "key": "free", "label": "Free", "format": "bytes" },
+              { "key": "wasted", "label": "Wasted", "format": "bytes" }
+            ]
+          }
+        },
+        {
+          "type": "progress",
+          "id": "active-job",
+          "title": "Active Job",
+          "config": {
+            "source": "active_jobs",
+            "multi": false,
+            "show_phase": true,
+            "show_eta": false,
+            "cancel": {
+              "enabled": true,
+              "endpoint": "/api/command",
+              "method": "POST",
+              "confirm_message": "Abort the running SnapRAID operation?"
+            }
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "smart-overview",
+          "title": "SMART Overview",
+          "config": {
+            "source": "telemetry",
+            "telemetry_key": "smart_status.disks",
+            "columns": [
+              { "key": "disk_name", "label": "Disk" },
+              { "key": "device", "label": "Device" },
+              { "key": "serial", "label": "Serial" },
+              { "key": "temperature", "label": "Temp" },
+              { "key": "power_on_days", "label": "Power-On Days" },
+              { "key": "error_count", "label": "Errors" },
+              { "key": "failure_probability", "label": "Fail %" },
+              { "key": "status", "label": "Status" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "operations",
+      "title": "Operations",
+      "icon": "terminal",
+      "components": [
+        {
+          "type": "form",
+          "id": "snapraid-command",
+          "title": "Execute Command",
+          "config": {
+            "fields": [
+              {
+                "name": "agent_id",
+                "label": "Agent",
+                "type": "select",
+                "required": true,
+                "source": "addon_agents",
+                "placeholder": "Select an agent..."
+              },
+              {
+                "name": "command",
+                "label": "Command",
+                "type": "select",
+                "required": true,
+                "options": [
+                  { "value": "sync", "label": "Sync" },
+                  { "value": "scrub", "label": "Scrub" },
+                  { "value": "status", "label": "Status" },
+                  { "value": "smart", "label": "SMART" },
+                  { "value": "diff", "label": "Diff" },
+                  { "value": "touch", "label": "Touch" },
+                  { "value": "fix", "label": "Fix" }
+                ]
+              },
+              {
+                "name": "force_thresholds",
+                "label": "Bypass Threshold Checks",
+                "type": "toggle",
+                "default": false,
+                "visible_when": { "command": ["sync"] }
+              },
+              {
+                "name": "scrub_plan",
+                "label": "Scrub Plan",
+                "type": "select",
+                "default": "standard",
+                "options": [
+                  { "value": "standard", "label": "Standard (-p 8 -o 10)" },
+                  { "value": "bad", "label": "Bad Blocks Only (-p bad)" },
+                  { "value": "new", "label": "New Blocks Only (-p new)" },
+                  { "value": "full", "label": "Full Scrub (-p full)" }
+                ],
+                "visible_when": { "command": ["scrub"] }
+              },
+              {
+                "name": "fix_disk",
+                "label": "Disk Name (-d)",
+                "type": "text",
+                "placeholder": "disk name",
+                "visible_when": { "command": ["fix"] }
+              },
+              {
+                "name": "fix_filter",
+                "label": "File Filter (-f)",
+                "type": "text",
+                "placeholder": "file pattern",
+                "visible_when": { "command": ["fix"] }
+              },
+              {
+                "name": "fix_bad_only",
+                "label": "Bad blocks only (-e)",
+                "type": "toggle",
+                "default": false,
+                "visible_when": { "command": ["fix"] }
+              },
+              {
+                "name": "confirm_destructive",
+                "label": "I understand this may modify data on the array.",
+                "type": "checkbox",
+                "required": true,
+                "security_gate": true,
+                "visible_when": { "command": ["sync", "fix"] }
+              }
+            ],
+            "action": "command",
+            "submit_label": "Execute"
+          }
+        }
+      ]
+    },
+    {
+      "id": "automation",
+      "title": "Automation",
+      "icon": "clock",
+      "components": [
+        {
+          "type": "form",
+          "id": "schedule-config",
+          "title": "Schedule Configuration",
+          "config": {
+            "fields": [
+              {
+                "name": "agent_id",
+                "label": "Agent",
+                "type": "select",
+                "required": true,
+                "source": "addon_agents",
+                "placeholder": "Select an agent..."
+              },
+              {
+                "name": "maintenance_cron",
+                "label": "Maintenance Schedule",
+                "type": "text",
+                "placeholder": "0 3 * * *"
+              },
+              {
+                "name": "scrub_cron",
+                "label": "Scrub Schedule",
+                "type": "text",
+                "placeholder": "0 4 * * 0"
+              },
+              {
+                "name": "smart_cron",
+                "label": "SMART Check Schedule",
+                "type": "text",
+                "placeholder": "0 */6 * * *"
+              },
+              {
+                "name": "max_deleted",
+                "label": "Deletion Threshold",
+                "type": "number",
+                "default": 50,
+                "min": 0
+              },
+              {
+                "name": "max_updated",
+                "label": "Update Threshold",
+                "type": "number",
+                "default": -1
+              },
+              {
+                "name": "pre_hash",
+                "label": "Enable Pre-Hash",
+                "type": "toggle",
+                "default": false
+              },
+              {
+                "name": "scrub_plan",
+                "label": "Default Scrub Plan",
+                "type": "select",
+                "default": "8",
+                "options": [
+                  { "value": "bad", "label": "Bad Blocks Only" },
+                  { "value": "new", "label": "New Blocks Only" },
+                  { "value": "full", "label": "Full Scrub" },
+                  { "value": "8", "label": "8% (default)" }
+                ]
+              },
+              {
+                "name": "scrub_older_than_days",
+                "label": "Scrub Min Age (days)",
+                "type": "number",
+                "default": 10,
+                "min": 0
+              },
+              {
+                "name": "auto_fix_bad_blocks",
+                "label": "Auto-Fix Bad Blocks",
+                "type": "toggle",
+                "default": false
+              }
+            ],
+            "action": "config",
+            "submit_label": "Save Configuration"
+          }
+        }
+      ]
+    },
+    {
+      "id": "agents",
+      "title": "Agents",
+      "icon": "server",
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "agent-list",
+          "title": "Registered Agents",
+          "config": {
+            "source": "addon_agents",
+            "columns": [
+              { "key": "status", "label": "Status", "format": "status_dot" },
+              { "key": "id", "label": "Agent ID" },
+              { "key": "hostname", "label": "Hostname" },
+              { "key": "address", "label": "Address" },
+              { "key": "version", "label": "Version" },
+              { "key": "last_seen", "label": "Last Seen", "format": "relative_time" },
+              { "key": "_actions", "label": "", "format": "actions", "actions": [{ "type": "delete", "id_key": "id", "label": "Delete agent" }] }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "id", "direction": "asc" }
+          }
+        },
+        {
+          "type": "deploy-wizard",
+          "id": "add-snapraid-agent",
+          "title": "Add SnapRAID Agent",
+          "config": {
+            "target_label": "Agent",
+            "docker": {
+              "image": "ghcr.io/pineappledr/vigil-addons-snapraid-agent",
+              "default_tag": "latest",
+              "container_name": "snapraid-agent",
+              "privileged": true,
+              "ports": ["9400:9400"],
+              "volumes": [
+                "agent-data:/var/lib/vigil-snapraid-agent",
+                "/etc/snapraid.conf:/etc/snapraid.conf:ro"
+              ],
+              "named_volumes": ["agent-data"],
+              "environment": {
+                "VIGIL_SNAPRAID_AGENT_HUB_URL": { "source": "prefill", "key": "hub_url", "label": "Hub URL", "hint": "The URL where agents can reach the SnapRAID Hub" },
+                "VIGIL_SNAPRAID_AGENT_HUB_TOKEN": { "source": "prefill", "key": "hub_token", "label": "Hub Token", "hint": "Token for agent registration with the Hub" },
+                "VIGIL_SNAPRAID_AGENT_LISTEN_PORT": { "source": "literal", "value": "9400" },
+                "VIGIL_SNAPRAID_AGENT_SNAPRAID_CONFIG_PATH": { "source": "user_input", "label": "SnapRAID Config Path", "placeholder": "/etc/snapraid.conf" },
+                "TZ": { "source": "literal", "value": "${TZ:-UTC}" }
+              },
+              "platforms": {
+                "linux": {
+                  "label": "Standard Linux",
+                  "hint": "Copy the docker-compose.yml to deploy the SnapRAID agent. Mount all data and parity disks used by snapraid."
+                }
+              }
+            },
+            "prefill_endpoint": "/api/deploy-info"
+          }
+        }
+      ]
+    },
+    {
+      "id": "logs",
+      "title": "Logs",
+      "icon": "scroll-text",
+      "components": [
+        {
+          "type": "log-viewer",
+          "id": "live-logs",
+          "title": "Live Output",
+          "config": {
+            "max_lines": 500,
+            "levels": ["info", "warn", "error"],
+            "show_timestamp": true,
+            "show_source": true,
+            "source": "log_history",
+            "time_filter": {
+              "default": "1h",
+              "options": [
+                { "value": "5m", "label": "Last 5 Min" },
+                { "value": "15m", "label": "Last 15 Min" },
+                { "value": "1h", "label": "Last 1 Hour" },
+                { "value": "6h", "label": "Last 6 Hours" }
+              ]
+            }
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "job-history",
+          "title": "Job History",
+          "config": {
+            "source": "job_history",
+            "columns": [
+              { "key": "job_type", "label": "Type" },
+              { "key": "trigger", "label": "Trigger" },
+              { "key": "started_at", "label": "Started", "format": "datetime" },
+              { "key": "finished_at", "label": "Finished", "format": "datetime" },
+              { "key": "status", "label": "Status" },
+              { "key": "exit_code", "label": "Exit Code" }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "started_at", "direction": "desc" },
+            "time_filter": {
+              "default": "7d",
+              "options": [
+                { "value": "24h", "label": "Last 24 Hours" },
+                { "value": "7d", "label": "Last 7 Days" },
+                { "value": "30d", "label": "Last 30 Days" },
+                { "value": "", "label": "All Time" }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

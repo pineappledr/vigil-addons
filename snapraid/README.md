@@ -7,8 +7,9 @@ Full lifecycle management of local SnapRAID arrays through the Vigil ecosystem. 
 The add-on uses a **two-tier Hub/Agent model** consistent with all Vigil add-ons:
 
 ```
-Vigil Server (:9443)
-    │  WebSocket (telemetry, commands)
+Vigil Server (:9080)
+    │  POST /api/addons/connect   (registration + manifest)
+    │  WS   /api/addons/ws        (telemetry upstream)
     │
 SnapRAID Hub (:9300)
     │  REST + WebSocket
@@ -25,44 +26,59 @@ SnapRAID Agent (:9400)   ← one per NAS host
 
 The Hub is lightweight and stateless aside from a JSON-persisted Agent registry. All heavy state (job history, config cache, telemetry queue) lives on the Agent in a local SQLite database.
 
+### Vigil Server Connection
+
+The Hub connects to the Vigil Server using the same two-phase pattern as all Vigil add-ons:
+
+1. **Registration** — On startup, the Hub sends `POST /api/addons/connect` with its embedded manifest and the one-time registration token (generated in the Vigil UI "Add Add-on" dialog). The server responds with an `addon_id`.
+2. **Telemetry** — The Hub opens a persistent WebSocket to `/api/addons/ws?addon_id=N` and forwards aggregated Agent telemetry upstream. Heartbeats are sent every 30 seconds. The connection auto-reconnects with exponential backoff on failure.
+
+If no `vigil.token` is configured, the Hub runs in standalone mode without upstream connectivity.
+
 ## Deployment
 
 ### Docker Compose (Recommended)
 
 Create a `docker-compose.yml`:
 
+A `docker-compose.yml` is included in the repository. Copy it alongside your config files:
+
 ```yaml
 services:
   snapraid-hub:
+    container_name: Snapraid-Hub
     image: ghcr.io/pineappledr/vigil-addons-snapraid-hub:latest
+    restart: unless-stopped
     ports:
       - "9300:9300"
+    command: ["-config", "/etc/snapraid-hub/config.hub.yaml"]
     volumes:
       - hub-data:/data
       - ./config.hub.yaml:/etc/snapraid-hub/config.hub.yaml:ro
-    command: ["-config", "/etc/snapraid-hub/config.hub.yaml"]
-    restart: unless-stopped
 
   snapraid-agent:
+    container_name: Snapraid-Agent
     image: ghcr.io/pineappledr/vigil-addons-snapraid-agent:latest
+    restart: unless-stopped
+    privileged: true
     ports:
       - "9400:9400"
+    command: ["-config", "/etc/snapraid-agent/config.agent.yaml"]
     volumes:
       - agent-data:/var/lib/vigil-snapraid-agent
       - ./config.agent.yaml:/etc/snapraid-agent/config.agent.yaml:ro
       - /etc/snapraid.conf:/etc/snapraid.conf:ro
-      # Mount all data and parity disks used by snapraid
-      - /mnt/data1:/mnt/data1
-      - /mnt/data2:/mnt/data2
-      - /mnt/parity:/mnt/parity
-    command: ["-config", "/etc/snapraid-agent/config.agent.yaml"]
-    privileged: true
-    restart: unless-stopped
+      # Mount all data and parity disks used by snapraid:
+      # - /mnt/data1:/mnt/data1
+      # - /mnt/data2:/mnt/data2
+      # - /mnt/parity:/mnt/parity
 
 volumes:
   hub-data:
   agent-data:
 ```
+
+Uncomment and adjust the disk mount lines for your array layout.
 
 Pull and start both services:
 
@@ -166,6 +182,7 @@ Before any automated sync, three gates must pass:
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
+| `GET` | `/api/deploy-info` | Returns Hub URL and token for the deploy-wizard prefill |
 | `POST` | `/api/agents/register` | Agent self-registration |
 | `GET` | `/api/agents` | List registered Agents |
 | `POST` | `/api/command` | Route a command to a target Agent |
@@ -173,6 +190,15 @@ Before any automated sync, three gates must pass:
 | `POST` | `/api/config/{agentID}` | Forward config update to Agent |
 
 ## Troubleshooting
+
+### Hub cannot connect to Vigil Server
+
+The Hub retries registration with exponential backoff (2s to 60s). Check:
+
+1. `vigil.server_url` in `config.hub.yaml` points to the correct Vigil Server HTTP address (e.g., `http://192.168.1.10:9080`).
+2. `vigil.token` matches a token generated in the Vigil UI "Add Add-on" dialog. Tokens expire after 1 hour.
+3. The token must be bound to an add-on in the Vigil UI before the Hub can connect. If you see `"Token not yet bound"` errors, complete the registration form in the Vigil UI first.
+4. If the Hub starts without a token (`vigil.token: ""`), it runs in standalone mode and logs a warning.
 
 ### Agent fails to start: "invalid cron expression"
 

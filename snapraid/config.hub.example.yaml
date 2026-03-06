@@ -15,10 +15,11 @@ listen:
 
 # ── Vigil Server Connection ─────────────────────────────────────────
 vigil:
-  # WebSocket URL for the upstream Vigil Server add-on endpoint.
-  # The Hub maintains a persistent connection here for telemetry push
-  # and inbound command dispatch.
-  server_url: "wss://vigil.local:9443/ws/addons"
+  # HTTP(S) URL of the Vigil Server. Used for:
+  #   1. Registration: POST /api/addons/connect (sends manifest + token)
+  #   2. Telemetry: WebSocket at /api/addons/ws (derived automatically)
+  # The Hub converts http:// to ws:// (or https:// to wss://) for WebSocket.
+  server_url: "http://vigil.local:9080"
 
   # One-time registration token generated in the Vigil UI.
   # Used only on the first connection to register this add-on.

@@ -1,12 +1,10 @@
 package hub
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
@@ -19,7 +17,6 @@ type Server struct {
 	aggregator *Aggregator
 	router     *CommandRouter
 	mux        *http.ServeMux
-	server     *http.Server
 	logger     *slog.Logger
 }
 
@@ -37,8 +34,14 @@ func NewServer(cfg *config.HubConfig, registry *Registry, aggregator *Aggregator
 	return s
 }
 
+// Handler returns the root HTTP handler.
+func (s *Server) Handler() http.Handler {
+	return s.mux
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
+	s.mux.HandleFunc("GET /api/deploy-info", s.handleDeployInfo)
 	s.mux.HandleFunc("POST /api/agents/register", s.handleAgentRegister)
 	s.mux.HandleFunc("GET /api/agents", s.handleAgentList)
 	s.mux.HandleFunc("POST /api/command", s.handleCommand)
@@ -49,6 +52,15 @@ func (s *Server) routes() {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprint(w, `{"status":"ok"}`)
+}
+
+// handleDeployInfo returns connection details that the deploy-wizard
+// prefills into the agent docker-compose template.
+func (s *Server) handleDeployInfo(w http.ResponseWriter, r *http.Request) {
+	writeHubJSON(w, http.StatusOK, map[string]string{
+		"hub_url":   fmt.Sprintf("http://%s:%d", r.Host, s.cfg.Listen.Port),
+		"hub_token": s.cfg.Vigil.Token,
+	})
 }
 
 // AgentRegisterRequest is the payload from Agent self-registration.
@@ -144,26 +156,6 @@ func (s *Server) handleConfigForward(w http.ResponseWriter, r *http.Request) {
 	writeHubJSON(w, http.StatusOK, map[string]string{"status": "forwarded"})
 }
 
-func (s *Server) Start() error {
-	addr := fmt.Sprintf(":%d", s.cfg.Listen.Port)
-	s.server = &http.Server{
-		Addr:    addr,
-		Handler: s.mux,
-	}
-
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("hub listen on %s: %w", addr, err)
-	}
-
-	s.logger.Info("hub server started", "addr", addr)
-	return s.server.Serve(ln)
-}
-
-func (s *Server) Shutdown(ctx context.Context) error {
-	s.logger.Info("hub server shutting down")
-	return s.server.Shutdown(ctx)
-}
 
 func writeHubJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

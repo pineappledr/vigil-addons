@@ -1,0 +1,32 @@
+services:
+  snapraid-hub:
+    container_name: Snapraid-Hub
+    image: ghcr.io/pineappledr/vigil-addons-snapraid-hub:latest
+    restart: unless-stopped
+    ports:
+      - "9300:9300"
+    command: ["-config", "/etc/snapraid-hub/config.hub.yaml"]
+    volumes:
+      - hub-data:/data
+      - ./config.hub.yaml:/etc/snapraid-hub/config.hub.yaml:ro
+
+  snapraid-agent:
+    container_name: Snapraid-Agent
+    image: ghcr.io/pineappledr/vigil-addons-snapraid-agent:latest
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "9400:9400"
+    command: ["-config", "/etc/snapraid-agent/config.agent.yaml"]
+    volumes:
+      - agent-data:/var/lib/vigil-snapraid-agent
+      - ./config.agent.yaml:/etc/snapraid-agent/config.agent.yaml:ro
+      - /etc/snapraid.conf:/etc/snapraid.conf:ro
+      # Mount all data and parity disks used by snapraid:
+      # - /mnt/data1:/mnt/data1
+      # - /mnt/data2:/mnt/data2
+      # - /mnt/parity:/mnt/parity
+
+volumes:
+  hub-data:
+  agent-data:

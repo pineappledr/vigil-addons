@@ -109,6 +109,10 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.router.RouteCommand(cmd)
 	if err != nil {
 		s.logger.Error("command routing failed", "agent_id", cmd.AgentID, "error", err)
+
+		// Emit a job_failed notification upstream.
+		s.aggregator.emitCommandFailure(cmd.AgentID, cmd.Action, err)
+
 		writeHubJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}

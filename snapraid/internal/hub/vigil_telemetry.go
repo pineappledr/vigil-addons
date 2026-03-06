@@ -26,6 +26,33 @@ type TelemetryFrame struct {
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
+// NotificationPayload is the payload for a notification telemetry frame.
+type NotificationPayload struct {
+	EventType string `json:"event_type"`
+	Severity  string `json:"severity"`
+	Source    string `json:"source"`
+	Message   string `json:"message"`
+	Timestamp string `json:"timestamp"`
+}
+
+// LogPayload is the payload for a log telemetry frame.
+type LogPayload struct {
+	Level     string `json:"level"`
+	Message   string `json:"message"`
+	Source    string `json:"source,omitempty"`
+	JobID     string `json:"job_id,omitempty"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// ProgressPayload is the payload for a progress telemetry frame.
+type ProgressPayload struct {
+	AgentID  string  `json:"agent_id"`
+	JobID    string  `json:"job_id"`
+	Command  string  `json:"command"`
+	Phase    string  `json:"phase"`
+	Percent  float64 `json:"percent"`
+}
+
 // TelemetryClient manages the persistent WebSocket connection to the Vigil server.
 // It reads aggregated frames from the upstream channel and transmits them to Vigil.
 type TelemetryClient struct {
@@ -189,6 +216,54 @@ func (t *TelemetryClient) writeFrame(conn *websocket.Conn, frame TelemetryFrame)
 		return err
 	}
 	return conn.WriteJSON(frame)
+}
+
+// SendNotification transmits a notification frame upstream to Vigil.
+func (t *TelemetryClient) SendNotification(n NotificationPayload) error {
+	return t.sendTyped("notification", n)
+}
+
+// SendLog transmits a log frame upstream to Vigil.
+func (t *TelemetryClient) SendLog(l LogPayload) error {
+	return t.sendTyped("log", l)
+}
+
+// SendProgress transmits a progress frame upstream to Vigil.
+func (t *TelemetryClient) SendProgress(p ProgressPayload) error {
+	return t.sendTyped("progress", p)
+}
+
+func (t *TelemetryClient) sendTyped(frameType string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshaling %s payload: %w", frameType, err)
+	}
+	frame := TelemetryFrame{
+		Type:    frameType,
+		Payload: json.RawMessage(data),
+	}
+
+	t.mu.Lock()
+	conn := t.conn
+	t.mu.Unlock()
+
+	if conn == nil {
+		t.logger.Warn("upstream frame dropped: websocket not connected",
+			"frame_type", frameType,
+		)
+		return fmt.Errorf("upstream websocket not connected")
+	}
+
+	if err := t.writeFrame(conn, frame); err != nil {
+		t.logger.Warn("upstream frame write failed",
+			"frame_type", frameType,
+			"error", err,
+		)
+		return err
+	}
+
+	t.logger.Debug("upstream frame sent", "frame_type", frameType, "payload_size", len(data))
+	return nil
 }
 
 func (t *TelemetryClient) wsURL() string {

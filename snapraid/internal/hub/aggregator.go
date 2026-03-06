@@ -15,23 +15,68 @@ type AggregatedFrame struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
+// agentTelemetry is the subset of the agent's TelemetryPayload that the
+// Aggregator inspects for notification triggers.
+type agentTelemetry struct {
+	AgentID     string           `json:"agent_id"`
+	ActiveJob   *agentActiveJob  `json:"active_job,omitempty"`
+	SmartStatus *agentSmartState `json:"smart_status,omitempty"`
+}
+
+type agentActiveJob struct {
+	Type         string `json:"type"`
+	CurrentPhase string `json:"current_phase"`
+}
+
+type agentSmartState struct {
+	Disks []agentSmartDisk `json:"disks"`
+}
+
+type agentSmartDisk struct {
+	DiskName           string  `json:"disk_name"`
+	Device             string  `json:"device"`
+	Status             string  `json:"status"`
+	FailureProbability float64 `json:"failure_probability"`
+}
+
+// trackedJob records the last-known job state for an agent.
+type trackedJob struct {
+	Type  string
+	Phase string
+}
+
 // Aggregator multiplexes inbound WebSocket telemetry from multiple Agents
 // and pushes wrapped frames upstream to the Vigil Server.
 type Aggregator struct {
-	mu       sync.RWMutex
-	registry *Registry
-	upstream chan<- []byte
-	logger   *slog.Logger
+	mu        sync.RWMutex
+	registry  *Registry
+	upstream  chan<- []byte
+	telemetry *TelemetryClient // optional, for typed notification frames
+	logger    *slog.Logger
+
+	// Per-agent tracking for state transition detection.
+	lastJobs    map[string]*trackedJob  // agent_id → last known job
+	smartAlerted map[string]bool        // "agent:disk" → already alerted
 }
 
 // NewAggregator creates a telemetry Aggregator. Upstream frames are sent
 // to the provided channel for the Vigil Client to transmit.
 func NewAggregator(registry *Registry, upstream chan<- []byte, logger *slog.Logger) *Aggregator {
 	return &Aggregator{
-		registry: registry,
-		upstream: upstream,
-		logger:   logger,
+		registry:     registry,
+		upstream:     upstream,
+		logger:       logger,
+		lastJobs:     make(map[string]*trackedJob),
+		smartAlerted: make(map[string]bool),
 	}
+}
+
+// SetTelemetryClient attaches a TelemetryClient for sending typed notification
+// frames directly upstream. Must be called before IngestAgentFrame.
+func (a *Aggregator) SetTelemetryClient(tc *TelemetryClient) {
+	a.mu.Lock()
+	a.telemetry = tc
+	a.mu.Unlock()
 }
 
 // IngestAgentFrame receives a raw telemetry payload from an Agent,
@@ -44,6 +89,9 @@ func (a *Aggregator) IngestAgentFrame(agentID string, raw []byte) {
 	}
 
 	a.registry.Touch(agentID)
+
+	// Evaluate for notification triggers before forwarding.
+	a.evaluateTelemetry(agentID, raw)
 
 	frame := AggregatedFrame{
 		AgentID:   agentID,
@@ -84,4 +132,121 @@ func (a *Aggregator) IngestLogStream(agentID string, raw []byte) {
 	default:
 		a.logger.Warn("upstream channel full, dropping log frame", "agent_id", agentID)
 	}
+}
+
+// evaluateTelemetry inspects agent telemetry for job state transitions
+// and SMART warnings, emitting notifications upstream when detected.
+func (a *Aggregator) evaluateTelemetry(agentID string, raw []byte) {
+	a.mu.RLock()
+	tc := a.telemetry
+	a.mu.RUnlock()
+
+	if tc == nil {
+		return
+	}
+
+	var t agentTelemetry
+	if err := json.Unmarshal(raw, &t); err != nil {
+		return
+	}
+
+	a.evaluateJobTransition(tc, agentID, t.ActiveJob)
+	a.evaluateSmartStatus(tc, agentID, t.SmartStatus)
+}
+
+// evaluateJobTransition detects job started/completed transitions.
+func (a *Aggregator) evaluateJobTransition(tc *TelemetryClient, agentID string, job *agentActiveJob) {
+	a.mu.Lock()
+	prev := a.lastJobs[agentID]
+
+	if job != nil && prev == nil {
+		// Job started.
+		a.lastJobs[agentID] = &trackedJob{Type: job.Type, Phase: job.CurrentPhase}
+		a.mu.Unlock()
+
+		a.emitNotification(tc, agentID, "job_started", "info",
+			"SnapRAID "+job.Type+" started on "+agentID)
+		return
+	}
+
+	if job == nil && prev != nil {
+		// Job completed (disappeared from active telemetry).
+		delete(a.lastJobs, agentID)
+		a.mu.Unlock()
+
+		a.emitNotification(tc, agentID, "job_complete", "info",
+			"SnapRAID "+prev.Type+" completed on "+agentID)
+		return
+	}
+
+	if job != nil {
+		a.lastJobs[agentID] = &trackedJob{Type: job.Type, Phase: job.CurrentPhase}
+	}
+	a.mu.Unlock()
+}
+
+// evaluateSmartStatus checks for SMART failures and emits warnings.
+func (a *Aggregator) evaluateSmartStatus(tc *TelemetryClient, agentID string, smart *agentSmartState) {
+	if smart == nil {
+		return
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for _, disk := range smart.Disks {
+		if disk.Status != "FAIL" && disk.Status != "PREFAIL" {
+			continue
+		}
+
+		key := agentID + ":" + disk.Device
+		if a.smartAlerted[key] {
+			continue
+		}
+		a.smartAlerted[key] = true
+
+		a.mu.Unlock()
+		a.emitNotification(tc, agentID, "smart_warning", "warning",
+			"SMART "+disk.Status+" detected on "+disk.DiskName+" ("+disk.Device+") on "+agentID)
+		a.mu.Lock()
+	}
+}
+
+// emitCommandFailure sends a job_failed notification when a command route fails.
+func (a *Aggregator) emitCommandFailure(agentID, action string, err error) {
+	a.mu.RLock()
+	tc := a.telemetry
+	a.mu.RUnlock()
+
+	if tc == nil {
+		return
+	}
+
+	a.emitNotification(tc, agentID, "job_failed", "critical",
+		"SnapRAID "+action+" failed on "+agentID+": "+err.Error())
+}
+
+func (a *Aggregator) emitNotification(tc *TelemetryClient, agentID, eventType, severity, message string) {
+	n := NotificationPayload{
+		EventType: eventType,
+		Severity:  severity,
+		Source:    "snapraid-hub",
+		Message:   message,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	if err := tc.SendNotification(n); err != nil {
+		a.logger.Warn("failed to transmit notification upstream",
+			"event_type", eventType,
+			"agent_id", agentID,
+			"error", err,
+		)
+		return
+	}
+
+	a.logger.Info("notification emitted",
+		"event_type", eventType,
+		"severity", severity,
+		"agent_id", agentID,
+	)
 }

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "SnapRAID array management and automation",
   "author": "Vigil Add-ons",
+  "docker_image": "ghcr.io/pineappledr/vigil-addons-snapraid-hub:latest",
   "pages": [
     {
       "id": "dashboard",
@@ -185,24 +186,52 @@
               {
                 "name": "maintenance_cron",
                 "label": "Maintenance Schedule",
-                "type": "text",
-                "placeholder": "0 3 * * *"
+                "hint": "Runs touch, diff, safety checks, sync, and scrub in sequence",
+                "type": "select",
+                "default": "0 3 * * *",
+                "options": [
+                  { "value": "", "label": "Disabled" },
+                  { "value": "0 3 * * *", "label": "Daily at 3:00 AM" },
+                  { "value": "0 4 * * *", "label": "Daily at 4:00 AM" },
+                  { "value": "0 2 * * *", "label": "Daily at 2:00 AM" },
+                  { "value": "0 3 * * 1-5", "label": "Weekdays at 3:00 AM" },
+                  { "value": "0 3 * * 0", "label": "Sundays at 3:00 AM" },
+                  { "value": "0 3 */2 * *", "label": "Every 2 days at 3:00 AM" }
+                ]
               },
               {
                 "name": "scrub_cron",
                 "label": "Scrub Schedule",
-                "type": "text",
-                "placeholder": "0 4 * * 0"
+                "hint": "Standalone scrub to verify data integrity (separate from maintenance)",
+                "type": "select",
+                "default": "0 4 * * 0",
+                "options": [
+                  { "value": "", "label": "Disabled" },
+                  { "value": "0 4 * * 0", "label": "Sundays at 4:00 AM" },
+                  { "value": "0 4 * * 6", "label": "Saturdays at 4:00 AM" },
+                  { "value": "0 4 * * 0,3", "label": "Sun & Wed at 4:00 AM" },
+                  { "value": "0 4 * * *", "label": "Daily at 4:00 AM" },
+                  { "value": "0 4 1,15 * *", "label": "1st & 15th at 4:00 AM" }
+                ]
               },
               {
                 "name": "smart_cron",
                 "label": "SMART Check Schedule",
-                "type": "text",
-                "placeholder": "0 */6 * * *"
+                "hint": "Polls drive health and reports disk failures",
+                "type": "select",
+                "default": "0 */6 * * *",
+                "options": [
+                  { "value": "", "label": "Disabled" },
+                  { "value": "0 */6 * * *", "label": "Every 6 hours" },
+                  { "value": "0 */4 * * *", "label": "Every 4 hours" },
+                  { "value": "0 */12 * * *", "label": "Every 12 hours" },
+                  { "value": "0 0 * * *", "label": "Daily at midnight" }
+                ]
               },
               {
                 "name": "max_deleted",
                 "label": "Deletion Threshold",
+                "hint": "Abort sync if more files deleted than this limit. Set 0 for no limit.",
                 "type": "number",
                 "default": 50,
                 "min": 0
@@ -210,18 +239,21 @@
               {
                 "name": "max_updated",
                 "label": "Update Threshold",
+                "hint": "Abort sync if more files updated than this limit. Set -1 to disable.",
                 "type": "number",
                 "default": -1
               },
               {
                 "name": "pre_hash",
                 "label": "Enable Pre-Hash",
+                "hint": "Hash files before sync to detect silent corruption. Slower but safer.",
                 "type": "toggle",
                 "default": false
               },
               {
                 "name": "scrub_plan",
                 "label": "Default Scrub Plan",
+                "hint": "How much data to verify during each scrub run",
                 "type": "select",
                 "default": "8",
                 "options": [
@@ -234,6 +266,7 @@
               {
                 "name": "scrub_older_than_days",
                 "label": "Scrub Min Age (days)",
+                "hint": "Only scrub blocks older than this many days since last check",
                 "type": "number",
                 "default": 10,
                 "min": 0
@@ -241,6 +274,7 @@
               {
                 "name": "auto_fix_bad_blocks",
                 "label": "Auto-Fix Bad Blocks",
+                "hint": "Automatically attempt to repair bad blocks detected during scrub",
                 "type": "toggle",
                 "default": false
               }

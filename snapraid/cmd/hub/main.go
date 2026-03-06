@@ -103,6 +103,9 @@ func main() {
 				logger,
 			)
 
+			// Wire the telemetry client to the aggregator for typed notifications.
+			aggregator.SetTelemetryClient(telemetry)
+
 			go telemetry.Run(ctx)
 
 			select {

@@ -2,6 +2,7 @@
   "name": "burnin-preclear",
   "version": "1.0.0",
   "description": "Disk burn-in, SMART testing, and pre-clear formatting tool for new and repurposed drives.",
+  "docker_image": "ghcr.io/pineappledr/vigil-addons-burnin-hub:latest",
   "pages": [
     {
       "id": "dashboard",

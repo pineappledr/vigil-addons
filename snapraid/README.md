@@ -259,17 +259,65 @@ Pre-sync and post-sync hooks run shell commands on the Agent host before and aft
 
 If a pre-sync hook exits with a non-zero code, the entire maintenance pipeline is **aborted** and a `gate_failed` notification is emitted. Post-sync hook failures are logged but do not affect the pipeline outcome.
 
-**Example hooks:**
+#### Using the Example Scripts
+
+Ready-to-use hook scripts are included in the `scripts/` folder:
+
+| Script | Purpose |
+|--------|---------|
+| [`scripts/pre-sync.sh`](scripts/pre-sync.sh) | Flush caches, send webhooks, stop non-Docker services, run custom validation |
+| [`scripts/post-sync.sh`](scripts/post-sync.sh) | Send completion webhooks, backup parity/content files, restart services, ping healthchecks |
+
+Each script is commented with multiple optional sections — uncomment and customize the parts you need.
+
+**Standalone Agent setup:**
+
+```bash
+# Copy the scripts to a permanent location
+cp scripts/pre-sync.sh /usr/local/bin/pre-sync.sh
+cp scripts/post-sync.sh /usr/local/bin/post-sync.sh
+chmod +x /usr/local/bin/pre-sync.sh /usr/local/bin/post-sync.sh
+```
+
+Then set `/usr/local/bin/pre-sync.sh` and `/usr/local/bin/post-sync.sh` in Vigil UI → SnapRAID → Automation.
+
+**Docker Agent setup:**
+
+Mount the scripts into the Agent container by adding volumes to your `docker-compose.yml`:
+
+```yaml
+snapraid-agent:
+  volumes:
+    # ... existing volumes ...
+    - ./scripts/pre-sync.sh:/usr/local/bin/pre-sync.sh:ro
+    - ./scripts/post-sync.sh:/usr/local/bin/post-sync.sh:ro
+```
+
+Then set the paths in the Automation page as above.
+
+#### Writing Custom Hooks
+
+You can use any executable as a hook — shell scripts, Python scripts, compiled binaries. The only requirements are:
+
+1. The file must be executable (`chmod +x`)
+2. It must be accessible from the Agent's environment
+3. **Pre-sync hooks**: exit `0` to proceed, non-zero to abort
+4. **Post-sync hooks**: exit code is logged but doesn't affect the pipeline
+
+**Example inline hooks** (for simple one-liners, enter directly in the UI):
 
 ```bash
 # Pre-sync: flush filesystem caches
 sync && echo 3 > /proc/sys/vm/drop_caches
 
 # Pre-sync: send webhook notification
-curl -s -X POST https://hooks.example.com/snapraid -d '{"event":"sync_starting"}'
+curl -sf -X POST https://hooks.example.com/snapraid -d '{"event":"sync_starting"}'
 
 # Post-sync: trigger a backup of parity files
 rsync -a /mnt/parity/ /mnt/backup/parity/
+
+# Post-sync: ping a dead man's switch
+curl -sf https://hc-ping.com/YOUR-UUID-HERE
 ```
 
 ### Recommended Configurations

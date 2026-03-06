@@ -314,7 +314,8 @@
               }
             ],
             "action": "config",
-            "submit_label": "Save Configuration"
+            "submit_label": "Save Configuration",
+            "reset_label": "Reset to Defaults"
           }
         }
       ]

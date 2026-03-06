@@ -47,6 +47,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/command", s.handleCommand)
 	s.mux.HandleFunc("POST /api/telemetry/ingest", s.handleTelemetryIngest)
 	s.mux.HandleFunc("POST /api/config/{agentID}", s.handleConfigForward)
+	s.mux.HandleFunc("POST /api/config", s.handleConfigFromBody)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -136,6 +137,32 @@ func (s *Server) handleTelemetryIngest(w http.ResponseWriter, r *http.Request) {
 
 	s.aggregator.IngestAgentFrame(req.AgentID, req.Payload)
 	writeHubJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
+}
+
+// handleConfigFromBody handles POST /api/config where agent_id is in the JSON body.
+// This is the path used by the Vigil action proxy (which sends to /api/{action}).
+func (s *Server) handleConfigFromBody(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read body"})
+		return
+	}
+
+	var envelope struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope.AgentID == "" {
+		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "missing agent_id in body"})
+		return
+	}
+
+	if err := s.router.RouteConfigUpdate(envelope.AgentID, body); err != nil {
+		s.logger.Error("config forward failed", "agent_id", envelope.AgentID, "error", err)
+		writeHubJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeHubJSON(w, http.StatusOK, map[string]string{"status": "forwarded"})
 }
 
 func (s *Server) handleConfigForward(w http.ResponseWriter, r *http.Request) {

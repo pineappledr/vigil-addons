@@ -26,6 +26,9 @@ services:
       # - /mnt/data1:/mnt/data1
       # - /mnt/data2:/mnt/data2
       # - /mnt/parity:/mnt/parity
+      # Mount hook scripts (optional):
+      # - ./scripts/pre-sync.sh:/usr/local/bin/pre-sync.sh:ro
+      # - ./scripts/post-sync.sh:/usr/local/bin/post-sync.sh:ro
 
 volumes:
   hub-data:

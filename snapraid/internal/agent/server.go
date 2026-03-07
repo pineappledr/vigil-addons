@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
@@ -25,6 +26,9 @@ type Server struct {
 	mux       *http.ServeMux
 	server    *http.Server
 	logger    *slog.Logger
+
+	refreshingStatus atomic.Bool
+	refreshingSmart  atomic.Bool
 }
 
 // NewServer creates the Agent server with all dependencies.
@@ -351,20 +355,12 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleArrayStatus returns the cached disk status from the collector.
-// If no cache exists, runs `snapraid status` on demand to populate it.
+// If no cache exists, triggers a background refresh and returns empty immediately.
 func (s *Server) handleArrayStatus(w http.ResponseWriter, r *http.Request) {
 	report := s.collector.GetArrayStatus()
 	if report == nil {
-		// Run status on-demand to populate the cache.
-		fresh, err := s.engine.Status(r.Context())
-		if err != nil {
-			writeJSON(w, http.StatusOK, []any{}) // empty array, not error
-			return
-		}
-		s.collector.SetArrayStatus(fresh)
-		report = s.collector.GetArrayStatus()
-	}
-	if report == nil {
+		// Trigger background refresh so data is available on next request.
+		go s.backgroundRefreshStatus()
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
@@ -372,19 +368,11 @@ func (s *Server) handleArrayStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSmartStatus returns the cached SMART disk data from the collector.
-// If no cache exists, runs `snapraid smart` on demand to populate it.
+// If no cache exists, triggers a background refresh and returns empty immediately.
 func (s *Server) handleSmartStatus(w http.ResponseWriter, r *http.Request) {
 	report := s.collector.GetSmartStatus()
 	if report == nil {
-		fresh, err := s.engine.Smart(r.Context())
-		if err != nil {
-			writeJSON(w, http.StatusOK, []any{})
-			return
-		}
-		s.collector.SetSmartStatus(fresh)
-		report = s.collector.GetSmartStatus()
-	}
-	if report == nil {
+		go s.backgroundRefreshSmart()
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
@@ -400,6 +388,44 @@ func (s *Server) handleActiveJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
+}
+
+// backgroundRefreshStatus runs snapraid status in the background to populate the cache.
+func (s *Server) backgroundRefreshStatus() {
+	if !s.refreshingStatus.CompareAndSwap(false, true) {
+		return // already running
+	}
+	defer s.refreshingStatus.Store(false)
+
+	s.logger.Info("background refresh: running snapraid status")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	report, err := s.engine.Status(ctx)
+	if err != nil {
+		s.logger.Error("background refresh status failed", "error", err)
+		return
+	}
+	s.collector.SetArrayStatus(report)
+	s.logger.Info("background refresh: status cache populated")
+}
+
+// backgroundRefreshSmart runs snapraid smart in the background to populate the cache.
+func (s *Server) backgroundRefreshSmart() {
+	if !s.refreshingSmart.CompareAndSwap(false, true) {
+		return // already running
+	}
+	defer s.refreshingSmart.Store(false)
+
+	s.logger.Info("background refresh: running snapraid smart")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	report, err := s.engine.Smart(ctx)
+	if err != nil {
+		s.logger.Error("background refresh smart failed", "error", err)
+		return
+	}
+	s.collector.SetSmartStatus(report)
+	s.logger.Info("background refresh: smart cache populated")
 }
 
 // parseTimeRange converts strings like "24h", "7d", "30d", "5m" to a duration.

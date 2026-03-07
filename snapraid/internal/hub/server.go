@@ -422,13 +422,14 @@ func (s *Server) handleTelemetryField(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if agentID != "" {
+		s.logger.Debug("telemetry cache miss, proxying to agent", "agent_id", agentID, "path", info.agentPath)
 		body, statusCode, err := s.router.ProxyGet(agentID, info.agentPath)
 		if err == nil && statusCode < 400 {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(body)
 			return
 		}
-		s.logger.Debug("agent fallback failed", "agent_id", agentID, "path", info.agentPath, "error", err)
+		s.logger.Warn("agent fallback failed", "agent_id", agentID, "path", info.agentPath, "status", statusCode, "error", err)
 	}
 
 	// Final fallback: empty response.

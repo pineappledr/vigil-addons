@@ -100,9 +100,28 @@ func NewCollector(agentID, hostname, version string, logger *slog.Logger) *Colle
 	}
 }
 
-func (c *Collector) SetArrayStatus(r *engine.StatusReport)  { c.mu.Lock(); c.arrayStatus = r; c.mu.Unlock() }
-func (c *Collector) SetSmartStatus(r *engine.SmartReport)    { c.mu.Lock(); c.smartStatus = r; c.mu.Unlock() }
-func (c *Collector) SetDiffStatus(r *engine.DiffReport)      { c.mu.Lock(); c.diffStatus = r; c.mu.Unlock() }
+func (c *Collector) SetArrayStatus(r *engine.StatusReport) {
+	// Strip raw output to avoid bloating telemetry payloads.
+	clean := *r
+	clean.Output = ""
+	c.mu.Lock()
+	c.arrayStatus = &clean
+	c.mu.Unlock()
+}
+func (c *Collector) SetSmartStatus(r *engine.SmartReport) {
+	clean := *r
+	clean.Output = ""
+	c.mu.Lock()
+	c.smartStatus = &clean
+	c.mu.Unlock()
+}
+func (c *Collector) SetDiffStatus(r *engine.DiffReport) {
+	clean := *r
+	clean.Output = ""
+	c.mu.Lock()
+	c.diffStatus = &clean
+	c.mu.Unlock()
+}
 func (c *Collector) SetSchedulerState(s *SchedulerState)     { c.mu.Lock(); c.schedulerState = s; c.mu.Unlock() }
 func (c *Collector) SetActiveJob(j *ActiveJob)               { c.mu.Lock(); c.activeJob = j; c.mu.Unlock() }
 func (c *Collector) ClearActiveJob()                         { c.mu.Lock(); c.activeJob = nil; c.mu.Unlock() }

@@ -295,7 +295,7 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 			level = "warn"
 		}
 
-		msg := fmt.Sprintf("[%s] %s — %s", j.JobType, j.Trigger, j.Status)
+		msg := fmt.Sprintf("%s — %s", j.Trigger, j.Status)
 		if j.ExitCode != nil {
 			msg += fmt.Sprintf(" (exit %d)", *j.ExitCode)
 		}

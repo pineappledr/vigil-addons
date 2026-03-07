@@ -356,7 +356,8 @@
               { "key": "agent_id", "label": "Agent ID" },
               { "key": "hostname", "label": "Hostname" },
               { "key": "address", "label": "Address" },
-              { "key": "version", "label": "Version" },
+              { "key": "version", "label": "Agent Version" },
+              { "key": "snapraid_version", "label": "SnapRAID Version" },
               { "key": "last_seen_at", "label": "Last Seen", "format": "relative_time" },
               { "key": "_actions", "label": "", "format": "actions", "actions": [{ "type": "delete", "id_key": "agent_id", "label": "Delete agent" }] }
             ],

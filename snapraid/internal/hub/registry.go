@@ -10,12 +10,13 @@ import (
 
 // AgentEntry represents a registered Agent in the Hub's registry.
 type AgentEntry struct {
-	ID           string    `json:"agent_id"`
-	Hostname     string    `json:"hostname"`
-	Address      string    `json:"address"`
-	Version      string    `json:"version"`
-	RegisteredAt time.Time `json:"registered_at"`
-	LastSeenAt   time.Time `json:"last_seen_at"`
+	ID              string    `json:"agent_id"`
+	Hostname        string    `json:"hostname"`
+	Address         string    `json:"address"`
+	Version         string    `json:"version"`
+	SnapraidVersion string    `json:"snapraid_version,omitempty"`
+	RegisteredAt    time.Time `json:"registered_at"`
+	LastSeenAt      time.Time `json:"last_seen_at"`
 }
 
 // Registry tracks connected Agents and persists state to a JSON file.
@@ -124,6 +125,15 @@ func (r *Registry) Touch(id string) {
 	defer r.mu.Unlock()
 	if e, ok := r.agents[id]; ok {
 		e.LastSeenAt = time.Now().UTC()
+	}
+}
+
+// SetSnapraidVersion updates the cached SnapRAID version for an agent.
+func (r *Registry) SetSnapraidVersion(id, version string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.agents[id]; ok && version != "" {
+		e.SnapraidVersion = version
 	}
 }
 

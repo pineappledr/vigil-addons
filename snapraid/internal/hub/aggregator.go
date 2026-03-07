@@ -22,6 +22,11 @@ type agentTelemetry struct {
 	ActiveJob   *agentActiveJob  `json:"active_job,omitempty"`
 	SmartStatus *agentSmartState `json:"smart_status,omitempty"`
 	LastEvent   *agentEvent      `json:"last_event,omitempty"`
+	DaemonInfo  *agentDaemonInfo `json:"daemon_info,omitempty"`
+}
+
+type agentDaemonInfo struct {
+	SnapraidVersion string `json:"snapraid_version"`
 }
 
 type agentEvent struct {
@@ -158,6 +163,11 @@ func (a *Aggregator) evaluateTelemetry(agentID string, raw []byte) {
 	var t agentTelemetry
 	if err := json.Unmarshal(raw, &t); err != nil {
 		return
+	}
+
+	// Cache snapraid version from daemon_info into the registry.
+	if t.DaemonInfo != nil && t.DaemonInfo.SnapraidVersion != "" {
+		a.registry.SetSnapraidVersion(agentID, t.DaemonInfo.SnapraidVersion)
 	}
 
 	a.evaluateJobTransition(tc, agentID, t.ActiveJob)

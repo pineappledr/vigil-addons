@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"sync"
 )
 
@@ -38,6 +39,23 @@ func NewEngine(binaryPath, configPath string, logger *slog.Logger) *Engine {
 		configPath: configPath,
 		logger:     logger,
 	}
+}
+
+// Version returns the snapraid version string by running `snapraid --version`.
+// Returns empty string if the binary is not found or fails.
+func (e *Engine) Version() string {
+	cmd := exec.Command(e.binaryPath, "--version")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	// Output is typically "snapraid v12.3\n" — trim and return.
+	s := strings.TrimSpace(string(out))
+	// Take only the first line.
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return s
 }
 
 // Abort cancels the currently running snapraid command, if any.

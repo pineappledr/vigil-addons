@@ -83,9 +83,10 @@ type Collector struct {
 	smartStatus    *engine.SmartReport
 	diffStatus     *engine.DiffReport
 	schedulerState *SchedulerState
-	activeJob      *ActiveJob
-	lastEvent      *AgentEvent
-	logger         *slog.Logger
+	activeJob       *ActiveJob
+	lastEvent       *AgentEvent
+	snapraidVersion string
+	logger          *slog.Logger
 }
 
 // NewCollector creates a telemetry Collector with the given identity.
@@ -106,6 +107,7 @@ func (c *Collector) SetSchedulerState(s *SchedulerState)     { c.mu.Lock(); c.sc
 func (c *Collector) SetActiveJob(j *ActiveJob)               { c.mu.Lock(); c.activeJob = j; c.mu.Unlock() }
 func (c *Collector) ClearActiveJob()                         { c.mu.Lock(); c.activeJob = nil; c.mu.Unlock() }
 func (c *Collector) SetHubConnected(v bool)                  { c.mu.Lock(); c.hubConnected = v; c.mu.Unlock() }
+func (c *Collector) SetSnapraidVersion(v string)             { c.mu.Lock(); c.snapraidVersion = v; c.mu.Unlock() }
 
 // SetLastEvent records a notable event. The event is included in the next
 // telemetry frame and automatically cleared after one transmission.
@@ -143,9 +145,10 @@ func (c *Collector) Build() *TelemetryPayload {
 		ActiveJob:      c.activeJob,
 		LastEvent:      evt,
 		DaemonInfo: DaemonInfo{
-			Version:      c.version,
-			Uptime:       time.Since(c.startTime).Truncate(time.Second).String(),
-			HubConnected: c.hubConnected,
+			Version:         c.version,
+			Uptime:          time.Since(c.startTime).Truncate(time.Second).String(),
+			HubConnected:    c.hubConnected,
+			SnapraidVersion: c.snapraidVersion,
 		},
 	}
 }

@@ -65,6 +65,7 @@ func main() {
 	advertiseAddr := cfg.Identity.AdvertiseAddr
 
 	collector := agent.NewCollector(agentID, hostname, version, logger)
+	collector.SetSnapraidVersion(eng.Version())
 
 	srv := agent.NewServer(cfg, eng, db, collector, logger)
 

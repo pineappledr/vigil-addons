@@ -87,6 +87,9 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	s.logger.Info("execute requested", "command", req.Command)
 
+	// Record the job in history so it appears in the Logs tab.
+	jobID, _ := agentdb.InsertJob(s.db, req.Command, "manual")
+
 	var exitCode int
 	var output string
 	var execErr error
@@ -133,18 +136,21 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 		report, execErr = s.engine.Status(ctx)
 		if report != nil {
 			s.collector.SetArrayStatus(report)
+			output = report.Output
 		}
 	case "smart":
 		var report *engine.SmartReport
 		report, execErr = s.engine.Smart(ctx)
 		if report != nil {
 			s.collector.SetSmartStatus(report)
+			output = report.Output
 		}
 	case "diff":
 		var report *engine.DiffReport
 		report, execErr = s.engine.Diff(ctx)
 		if report != nil {
 			s.collector.SetDiffStatus(report)
+			output = report.Output
 		}
 	case "touch":
 		var report *engine.TouchReport
@@ -159,12 +165,24 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if execErr != nil {
+		if jobID > 0 {
+			agentdb.CompleteJob(s.db, jobID, -1, "error", execErr.Error())
+		}
 		status := http.StatusInternalServerError
 		if execErr == engine.ErrEngineLocked {
 			status = http.StatusConflict
 		}
 		writeJSON(w, status, ExecuteResponse{Status: "error", Error: execErr.Error()})
 		return
+	}
+
+	if jobID > 0 {
+		agentdb.CompleteJob(s.db, jobID, exitCode, "success", output)
+	}
+
+	// Log the full command output to container logs.
+	if output != "" {
+		s.logger.Info("command output", "command", req.Command, "output", output)
 	}
 
 	writeJSON(w, http.StatusOK, ExecuteResponse{

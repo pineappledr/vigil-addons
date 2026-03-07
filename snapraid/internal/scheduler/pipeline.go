@@ -238,7 +238,7 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 		} else {
 			status = "error"
 		}
-		p.logger.Error("pipeline step failed", "job", jobType, "error", err)
+		p.logger.Error("pipeline step failed", "job", jobType, "error", err, "output", output)
 		if jobID > 0 {
 			agentdb.CompleteJob(p.db, jobID, -1, status, err.Error())
 		}
@@ -259,6 +259,12 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 	}
 
 	p.logger.Info("pipeline step completed", "job", jobType, "exit_code", exitCode, "status", status)
+
+	// Log the full command output so it appears in container logs.
+	if output != "" {
+		p.logger.Info("snapraid output", "job", jobType, "output", output)
+	}
+
 	return status == "success" || status == "warning"
 }
 

@@ -1,6 +1,6 @@
 module github.com/pineappledr/vigil-addons/snapraid
 
-go 1.25.0
+go 1.26.1
 
 require (
 	github.com/gorilla/websocket v1.5.3

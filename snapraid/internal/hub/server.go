@@ -341,29 +341,21 @@ func (s *Server) handleProxyToAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	agent := s.registry.Get(agentID)
-	if agent == nil {
-		writeHubJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
-		return
-	}
-
-	// Forward the request path and query to the agent.
-	targetURL := agent.Address + r.URL.Path
+	// Build the path + query to forward.
+	pathAndQuery := r.URL.Path
 	if r.URL.RawQuery != "" {
-		targetURL += "?" + r.URL.RawQuery
+		pathAndQuery += "?" + r.URL.RawQuery
 	}
 
-	resp, err := http.Get(targetURL)
+	body, statusCode, err := s.router.ProxyGet(agentID, pathAndQuery)
 	if err != nil {
-		s.logger.Error("proxy to agent failed", "agent_id", agentID, "url", targetURL, "error", err)
+		s.logger.Error("proxy to agent failed", "agent_id", agentID, "error", err)
 		writeHubJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
-	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
+	w.WriteHeader(statusCode)
 	w.Write(body)
 }
 

@@ -122,6 +122,28 @@ func (cr *CommandRouter) FetchAgentConfig(agentID string) ([]byte, error) {
 	return body, nil
 }
 
+// ProxyGet forwards a GET request to a registered agent and returns the raw response.
+// The path should include query string if needed (e.g. "/api/jobs/history?time_range=7d").
+func (cr *CommandRouter) ProxyGet(agentID, pathAndQuery string) ([]byte, int, error) {
+	agent := cr.registry.Get(agentID)
+	if agent == nil {
+		return nil, 0, fmt.Errorf("agent %s not found in registry", agentID)
+	}
+
+	url := agent.Address + pathAndQuery
+	resp, err := cr.client.Get(url)
+	if err != nil {
+		return nil, 0, fmt.Errorf("proxy GET to agent %s: %w", agentID, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("read agent response: %w", err)
+	}
+	return body, resp.StatusCode, nil
+}
+
 // RouteConfigUpdate forwards a config update to the target Agent via POST /api/config.
 func (cr *CommandRouter) RouteConfigUpdate(agentID string, configPayload []byte) error {
 	agent := cr.registry.Get(agentID)

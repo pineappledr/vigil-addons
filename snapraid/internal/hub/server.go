@@ -99,7 +99,7 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
-	writeHubJSON(w, http.StatusOK, s.registry.List())
+	writeHubJSON(w, http.StatusOK, s.registry.ListViews())
 }
 
 func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {

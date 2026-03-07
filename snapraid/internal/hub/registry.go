@@ -81,6 +81,30 @@ func (r *Registry) List() []AgentEntry {
 	return entries
 }
 
+const agentOnlineThreshold = 2 * time.Minute
+
+// AgentView is the API representation with a computed status field.
+type AgentView struct {
+	AgentEntry
+	Status string `json:"status"` // "online", "offline"
+}
+
+// ListViews returns all agents with a computed online/offline status.
+func (r *Registry) ListViews() []AgentView {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	views := make([]AgentView, 0, len(r.agents))
+	for _, e := range r.agents {
+		status := "offline"
+		if time.Since(e.LastSeenAt) < agentOnlineThreshold {
+			status = "online"
+		}
+		views = append(views, AgentView{AgentEntry: *e, Status: status})
+	}
+	return views
+}
+
 // Delete removes an Agent from the registry. Returns true if the agent existed.
 func (r *Registry) Delete(id string) bool {
 	r.mu.Lock()

@@ -88,6 +88,8 @@ func LogAgentConfig(logger *slog.Logger, cfg *AgentConfig) {
 		"listen_port", cfg.Listen.Port,
 		"hub_url", cfg.Hub.URL,
 		"hub_token", RedactedToken(cfg.Hub.Token),
+		"agent_id", cfg.Identity.AgentID,
+		"advertise_addr", cfg.Identity.AdvertiseAddr,
 		"snapraid_binary", cfg.SnapRAID.BinaryPath,
 		"snapraid_config", cfg.SnapRAID.ConfigPath,
 		"maintenance_cron", cfg.Scheduler.MaintenanceCron,

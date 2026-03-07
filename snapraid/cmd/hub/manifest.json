@@ -333,12 +333,12 @@
             "source": "addon_agents",
             "columns": [
               { "key": "status", "label": "Status", "format": "status_dot" },
-              { "key": "id", "label": "Agent ID" },
+              { "key": "agent_id", "label": "Agent ID" },
               { "key": "hostname", "label": "Hostname" },
               { "key": "address", "label": "Address" },
               { "key": "version", "label": "Version" },
               { "key": "last_seen_at", "label": "Last Seen", "format": "relative_time" },
-              { "key": "_actions", "label": "", "format": "actions", "actions": [{ "type": "delete", "id_key": "id", "label": "Delete agent" }] }
+              { "key": "_actions", "label": "", "format": "actions", "actions": [{ "type": "delete", "id_key": "agent_id", "label": "Delete agent" }] }
             ],
             "sortable": true,
             "default_sort": { "key": "id", "direction": "asc" }

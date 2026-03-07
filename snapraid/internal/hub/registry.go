@@ -10,7 +10,7 @@ import (
 
 // AgentEntry represents a registered Agent in the Hub's registry.
 type AgentEntry struct {
-	ID           string    `json:"id"`
+	ID           string    `json:"agent_id"`
 	Hostname     string    `json:"hostname"`
 	Address      string    `json:"address"`
 	Version      string    `json:"version"`

@@ -45,8 +45,7 @@
           "id": "disk-status",
           "title": "Disk Status",
           "config": {
-            "source": "telemetry",
-            "telemetry_key": "array_status.disks",
+            "source": "disk_status",
             "columns": [
               { "key": "name", "label": "Disk" },
               { "key": "device", "label": "Device" },
@@ -78,8 +77,7 @@
           "id": "smart-overview",
           "title": "SMART Overview",
           "config": {
-            "source": "telemetry",
-            "telemetry_key": "smart_status.disks",
+            "source": "smart_status",
             "columns": [
               { "key": "disk_name", "label": "Disk" },
               { "key": "device", "label": "Device" },

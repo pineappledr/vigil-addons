@@ -85,10 +85,12 @@ func scanJobs(rows *sql.Rows) ([]JobRecord, error) {
 			return nil, fmt.Errorf("scan job row: %w", err)
 		}
 
-		j.StartedAt, _ = time.Parse(timeFmt, startStr)
+		j.StartedAt = parseFlexTime(startStr)
 		if finishStr.Valid {
-			t, _ := time.Parse(timeFmt, finishStr.String)
-			j.FinishedAt = &t
+			t := parseFlexTime(finishStr.String)
+			if !t.IsZero() {
+				j.FinishedAt = &t
+			}
 		}
 		if exitCode.Valid {
 			code := int(exitCode.Int64)
@@ -98,6 +100,23 @@ func scanJobs(rows *sql.Rows) ([]JobRecord, error) {
 		jobs = append(jobs, j)
 	}
 	return jobs, rows.Err()
+}
+
+// parseFlexTime tries multiple formats to handle driver-level DATETIME variations.
+func parseFlexTime(s string) time.Time {
+	for _, fmt := range []string{
+		timeFmt,
+		time.RFC3339,
+		time.RFC3339Nano,
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02 15:04:05+00:00",
+	} {
+		if t, err := time.Parse(fmt, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // PruneOlderThan deletes job records older than the given duration.

@@ -60,7 +60,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 		if err != nil {
 			return 0, "", err
 		}
-		return 0, formatDiffSummary(diffReport), nil
+		return 0, diffReport.Output, nil
 	}) {
 		return
 	}
@@ -198,7 +198,7 @@ func (p *Pipeline) RunSmartCheck(ctx context.Context) {
 		if err != nil {
 			return 0, "", err
 		}
-		return 0, formatSmartSummary(report), nil
+		return 0, report.Output, nil
 	})
 }
 
@@ -209,7 +209,7 @@ func (p *Pipeline) RunStatusRefresh(ctx context.Context) {
 		if err != nil {
 			return 0, "", err
 		}
-		return 0, formatStatusSummary(report), nil
+		return 0, report.Output, nil
 	})
 }
 

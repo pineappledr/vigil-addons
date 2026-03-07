@@ -15,6 +15,7 @@ type StatusReport struct {
 	BadBlocks        int              `json:"bad_blocks"`
 	ScrubAge         ScrubAgeReport   `json:"scrub_age"`
 	DiskStatus       []DiskInfo       `json:"disk_status"`
+	Output           string           `json:"output,omitempty"`
 }
 
 type ScrubAgeReport struct {
@@ -41,6 +42,7 @@ type DiffReport struct {
 	Restored    int         `json:"restored"`
 	HasChanges  bool        `json:"has_changes"`
 	FileDetails []DiffEntry `json:"file_details,omitempty"`
+	Output      string      `json:"output,omitempty"`
 }
 
 type DiffEntry struct {
@@ -52,6 +54,7 @@ type DiffEntry struct {
 type SmartReport struct {
 	Disks                  []SmartDisk `json:"disks"`
 	OverallFailProbability float64     `json:"overall_fail_probability"`
+	Output                 string      `json:"output,omitempty"`
 }
 
 type SmartDisk struct {

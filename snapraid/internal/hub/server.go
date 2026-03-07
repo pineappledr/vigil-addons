@@ -52,6 +52,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/agents/{id}", s.handleAgentDelete)
 	s.mux.HandleFunc("GET /api/jobs/history", s.handleProxyToAgent)
 	s.mux.HandleFunc("GET /api/logs/history", s.handleProxyToAgent)
+	s.mux.HandleFunc("GET /api/disk_status", s.handleTelemetryField)
+	s.mux.HandleFunc("GET /api/smart_status", s.handleTelemetryField)
+	s.mux.HandleFunc("GET /api/active_job", s.handleTelemetryField)
+	s.mux.HandleFunc("GET /api/jobs/active", s.handleActiveJobs)
 	s.mux.HandleFunc("POST /api/rotate-token", s.handleRotateToken)
 }
 
@@ -357,6 +361,73 @@ func (s *Server) handleProxyToAgent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	w.Write(body)
+}
+
+// handleTelemetryField serves cached telemetry data from the aggregator.
+// The API path determines which field is returned:
+//
+//	/api/disk_status  → array_status (contains .disks array)
+//	/api/smart_status → smart_status (contains .disks array)
+//	/api/active_job   → active_job
+func (s *Server) handleTelemetryField(w http.ResponseWriter, r *http.Request) {
+	// Map URL path to telemetry payload field name.
+	fieldMap := map[string]string{
+		"/api/disk_status":  "array_status",
+		"/api/smart_status": "smart_status",
+		"/api/active_job":   "active_job",
+	}
+
+	field, ok := fieldMap[r.URL.Path]
+	if !ok {
+		writeHubJSON(w, http.StatusNotFound, map[string]string{"error": "unknown telemetry field"})
+		return
+	}
+
+	agentID := r.URL.Query().Get("agent_id")
+	data := s.aggregator.LatestTelemetryField(agentID, field)
+	if data == nil {
+		// Return empty array/null so the frontend shows "No data" instead of error.
+		w.Header().Set("Content-Type", "application/json")
+		if field == "active_job" {
+			w.Write([]byte("null"))
+		} else {
+			w.Write([]byte("[]"))
+		}
+		return
+	}
+
+	// For disk_status and smart_status, the frontend expects an array of disks.
+	// The telemetry field is an object like {"disks": [...], ...}, so extract .disks.
+	if field == "array_status" || field == "smart_status" {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(data, &obj); err == nil {
+			if disks, exists := obj["disks"]; exists {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(disks)
+				return
+			}
+		}
+		// Fallback: return as-is
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+// handleActiveJobs returns the current active job (if any) as a JSON array
+// for the progress component's initial fetch.
+func (s *Server) handleActiveJobs(w http.ResponseWriter, r *http.Request) {
+	agentID := r.URL.Query().Get("agent_id")
+	data := s.aggregator.LatestTelemetryField(agentID, "active_job")
+	if data == nil || string(data) == "null" {
+		writeHubJSON(w, http.StatusOK, []any{})
+		return
+	}
+	// Wrap single job in array for the progress component.
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte("["))
+	w.Write(data)
+	w.Write([]byte("]"))
 }
 
 func writeHubJSON(w http.ResponseWriter, status int, v any) {

@@ -22,7 +22,9 @@ func (e *Engine) Diff(ctx context.Context) (*DiffReport, error) {
 		return nil, fmt.Errorf("diff: %w", err)
 	}
 
-	return parseDiff(result.Stdout), nil
+	report := parseDiff(result.Stdout)
+	report.Output = result.Stdout
+	return report, nil
 }
 
 func parseDiff(output string) *DiffReport {

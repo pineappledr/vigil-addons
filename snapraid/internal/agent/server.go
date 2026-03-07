@@ -309,10 +309,10 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 
 		// If job has output, add it as a separate log line
 		if j.OutputLog != "" {
-			// Truncate long output for the log viewer
+			// Truncate very long output for the log viewer
 			output := j.OutputLog
-			if len(output) > 2000 {
-				output = output[:2000] + "... (truncated)"
+			if len(output) > 8000 {
+				output = output[:8000] + "... (truncated)"
 			}
 			entries = append(entries, LogEntry{
 				Timestamp: j.StartedAt.UTC().Format(time.RFC3339),

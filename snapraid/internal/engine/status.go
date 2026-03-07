@@ -41,6 +41,7 @@ func (e *Engine) Status(ctx context.Context) (*StatusReport, error) {
 		return nil, fmt.Errorf("status parse: %w", err)
 	}
 
+	report.Output = result.Stdout
 	return report, nil
 }
 

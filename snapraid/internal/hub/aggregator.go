@@ -71,18 +71,22 @@ type Aggregator struct {
 	lastJobs     map[string]*trackedJob // agent_id → last known job
 	lastEventIDs map[string]string      // agent_id → last forwarded event ID
 	smartAlerted map[string]bool        // "agent:disk" → already alerted
+
+	// Cached latest telemetry per agent for API serving.
+	latestPayloads map[string]json.RawMessage // agent_id → raw payload
 }
 
 // NewAggregator creates a telemetry Aggregator. Upstream frames are sent
 // to the provided channel for the Vigil Client to transmit.
 func NewAggregator(registry *Registry, upstream chan<- []byte, logger *slog.Logger) *Aggregator {
 	return &Aggregator{
-		registry:     registry,
-		upstream:     upstream,
-		logger:       logger,
-		lastJobs:     make(map[string]*trackedJob),
-		lastEventIDs: make(map[string]string),
-		smartAlerted: make(map[string]bool),
+		registry:       registry,
+		upstream:        upstream,
+		logger:          logger,
+		lastJobs:        make(map[string]*trackedJob),
+		lastEventIDs:    make(map[string]string),
+		smartAlerted:    make(map[string]bool),
+		latestPayloads:  make(map[string]json.RawMessage),
 	}
 }
 
@@ -104,6 +108,11 @@ func (a *Aggregator) IngestAgentFrame(agentID string, raw []byte) {
 	}
 
 	a.registry.Touch(agentID)
+
+	// Cache the raw payload for API serving.
+	a.mu.Lock()
+	a.latestPayloads[agentID] = json.RawMessage(raw)
+	a.mu.Unlock()
 
 	// Evaluate for notification triggers before forwarding.
 	a.evaluateTelemetry(agentID, raw)
@@ -263,6 +272,33 @@ func (a *Aggregator) emitCommandFailure(agentID, action string, err error) {
 
 	a.emitNotification(tc, agentID, "job_failed", "critical",
 		"SnapRAID "+action+" failed on "+agentID+": "+err.Error())
+}
+
+// LatestTelemetryField extracts a top-level field from the cached telemetry of
+// the first online agent (or the specified agent). Returns nil if not available.
+func (a *Aggregator) LatestTelemetryField(agentID, field string) json.RawMessage {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	// If no agent specified, pick the first one with cached data.
+	if agentID == "" {
+		for id := range a.latestPayloads {
+			agentID = id
+			break
+		}
+	}
+
+	raw, ok := a.latestPayloads[agentID]
+	if !ok {
+		return nil
+	}
+
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+
+	return m[field]
 }
 
 func (a *Aggregator) emitNotification(tc *TelemetryClient, agentID, eventType, severity, message string) {

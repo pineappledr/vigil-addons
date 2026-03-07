@@ -28,7 +28,9 @@ func (e *Engine) Smart(ctx context.Context) (*SmartReport, error) {
 		return nil, fmt.Errorf("smart: %w", err)
 	}
 
-	return parseSmart(result.Stdout), nil
+	report := parseSmart(result.Stdout)
+	report.Output = result.Stdout
+	return report, nil
 }
 
 func parseSmart(output string) *SmartReport {

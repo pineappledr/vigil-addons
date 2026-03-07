@@ -397,14 +397,17 @@ func (s *Server) handleTelemetryField(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// For disk_status and smart_status, the frontend expects an array of disks.
-	// The telemetry field is an object like {"disks": [...], ...}, so extract .disks.
+	// StatusReport uses "disk_status" key, SmartReport uses "disks" key.
 	if field == "array_status" || field == "smart_status" {
 		var obj map[string]json.RawMessage
 		if err := json.Unmarshal(data, &obj); err == nil {
-			if disks, exists := obj["disks"]; exists {
-				w.Header().Set("Content-Type", "application/json")
-				w.Write(disks)
-				return
+			// Try both key names: SmartReport → "disks", StatusReport → "disk_status"
+			for _, key := range []string{"disks", "disk_status"} {
+				if arr, exists := obj[key]; exists {
+					w.Header().Set("Content-Type", "application/json")
+					w.Write(arr)
+					return
+				}
 			}
 		}
 		// Fallback: return as-is

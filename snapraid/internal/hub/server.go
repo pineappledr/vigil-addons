@@ -48,6 +48,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/telemetry/ingest", s.handleTelemetryIngest)
 	s.mux.HandleFunc("POST /api/config/{agentID}", s.handleConfigForward)
 	s.mux.HandleFunc("POST /api/config", s.handleConfigFromBody)
+	s.mux.HandleFunc("DELETE /api/agents/{id}", s.handleAgentDelete)
 	s.mux.HandleFunc("POST /api/rotate-token", s.handleRotateToken)
 }
 
@@ -99,6 +100,22 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
 	writeHubJSON(w, http.StatusOK, s.registry.List())
+}
+
+func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "missing agent id"})
+		return
+	}
+
+	if !s.registry.Delete(agentID) {
+		writeHubJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+
+	s.logger.Info("agent deleted", "agent_id", agentID)
+	writeHubJSON(w, http.StatusOK, map[string]string{"status": "deleted", "agent_id": agentID})
 }
 
 func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {

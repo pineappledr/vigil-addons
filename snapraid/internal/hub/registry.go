@@ -81,6 +81,19 @@ func (r *Registry) List() []AgentEntry {
 	return entries
 }
 
+// Delete removes an Agent from the registry. Returns true if the agent existed.
+func (r *Registry) Delete(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, ok := r.agents[id]; !ok {
+		return false
+	}
+	delete(r.agents, id)
+	r.save()
+	return true
+}
+
 // Touch updates the LastSeenAt timestamp for an Agent.
 func (r *Registry) Touch(id string) {
 	r.mu.Lock()

@@ -21,12 +21,15 @@ type TelemetryIngestRequest struct {
 func StartHubForwarder(ctx context.Context, collector *Collector, hubURL, agentID string, interval time.Duration, logger *slog.Logger) {
 	ingestURL := hubURL + "/api/telemetry/ingest"
 
+	logger.Info("hub telemetry forwarder started", "hub_url", hubURL, "interval", interval)
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			logger.Info("hub telemetry forwarder stopped")
 			return
 		case <-ticker.C:
 			payload, err := collector.MarshalPayload()
@@ -49,11 +52,15 @@ func StartHubForwarder(ctx context.Context, collector *Collector, hubURL, agentI
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				if ctx.Err() == nil {
-					logger.Debug("hub telemetry forward failed", "error", err)
+					logger.Warn("hub telemetry forward failed", "error", err)
 				}
 				continue
 			}
 			resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				logger.Warn("hub telemetry forward returned non-OK", "status", resp.StatusCode)
+			}
 		}
 	}
 }

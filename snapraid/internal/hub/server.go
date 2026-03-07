@@ -159,6 +159,8 @@ func (s *Server) handleTelemetryIngest(w http.ResponseWriter, r *http.Request) {
 
 // handleConfigFromBody handles POST /api/config where agent_id is in the JSON body.
 // This is the path used by the Vigil action proxy (which sends to /api/{action}).
+// The proxy sends flat form data: {"agent_id":"x", "key1":"val1", ...}
+// The agent expects: {"values": {"key1":"val1", ...}}
 func (s *Server) handleConfigFromBody(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -166,16 +168,35 @@ func (s *Server) handleConfigFromBody(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var envelope struct {
-		AgentID string `json:"agent_id"`
+	var flat map[string]interface{}
+	if err := json.Unmarshal(body, &flat); err != nil {
+		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
 	}
-	if err := json.Unmarshal(body, &envelope); err != nil || envelope.AgentID == "" {
+
+	agentID, _ := flat["agent_id"].(string)
+	if agentID == "" {
 		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "missing agent_id in body"})
 		return
 	}
 
-	if err := s.router.RouteConfigUpdate(envelope.AgentID, body); err != nil {
-		s.logger.Error("config forward failed", "agent_id", envelope.AgentID, "error", err)
+	// Restructure: extract config values (everything except agent_id)
+	values := make(map[string]string, len(flat)-1)
+	for k, v := range flat {
+		if k == "agent_id" {
+			continue
+		}
+		values[k] = fmt.Sprintf("%v", v)
+	}
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"values": values,
+	})
+
+	s.logger.Info("forwarding config update", "agent_id", agentID, "keys", len(values))
+
+	if err := s.router.RouteConfigUpdate(agentID, payload); err != nil {
+		s.logger.Error("config forward failed", "agent_id", agentID, "error", err)
 		writeHubJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}

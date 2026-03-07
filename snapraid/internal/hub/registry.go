@@ -139,6 +139,9 @@ func (r *Registry) load() error {
 	}
 
 	for i := range entries {
+		if entries[i].ID == "" {
+			continue
+		}
 		r.agents[entries[i].ID] = &entries[i]
 	}
 	return nil

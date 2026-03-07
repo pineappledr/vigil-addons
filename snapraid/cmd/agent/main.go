@@ -13,6 +13,7 @@ import (
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
 	agentdb "github.com/pineappledr/vigil-addons/snapraid/internal/db"
 	"github.com/pineappledr/vigil-addons/snapraid/internal/engine"
+	"github.com/pineappledr/vigil-addons/snapraid/internal/scheduler"
 )
 
 var version = "dev"
@@ -66,6 +67,14 @@ func main() {
 	collector := agent.NewCollector(agentID, hostname, version, logger)
 
 	srv := agent.NewServer(cfg, eng, db, collector, logger)
+
+	// Start the cron scheduler for automated jobs.
+	sched := scheduler.New(eng, cfg, db, collector, logger)
+	if err := sched.Start(appCtx); err != nil {
+		logger.Error("failed to start scheduler", "error", err)
+		os.Exit(1)
+	}
+	defer sched.Stop()
 
 	// Self-register with the Hub (retries in background)
 	if cfg.Hub.URL != "" {

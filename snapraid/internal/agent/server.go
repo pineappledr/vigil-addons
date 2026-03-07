@@ -182,6 +182,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for key, value := range req.Values {
+		s.logger.Info("config value received", "key", key, "value", value)
 		if err := agentdb.SetCacheValue(s.db, key, value); err != nil {
 			s.logger.Error("failed to persist config value", "key", key, "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist config"})

@@ -128,6 +128,27 @@ func (c *Collector) ClearActiveJob()                         { c.mu.Lock(); c.ac
 func (c *Collector) SetHubConnected(v bool)                  { c.mu.Lock(); c.hubConnected = v; c.mu.Unlock() }
 func (c *Collector) SetSnapraidVersion(v string)             { c.mu.Lock(); c.snapraidVersion = v; c.mu.Unlock() }
 
+// GetArrayStatus returns the cached array status, or nil if not yet populated.
+func (c *Collector) GetArrayStatus() *engine.StatusReport {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.arrayStatus
+}
+
+// GetSmartStatus returns the cached SMART status, or nil if not yet populated.
+func (c *Collector) GetSmartStatus() *engine.SmartReport {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.smartStatus
+}
+
+// GetActiveJob returns the cached active job, or nil if none.
+func (c *Collector) GetActiveJob() *ActiveJob {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.activeJob
+}
+
 // SetLastEvent records a notable event. The event is included in the next
 // telemetry frame and automatically cleared after one transmission.
 func (c *Collector) SetLastEvent(e *AgentEvent) { c.mu.Lock(); c.lastEvent = e; c.mu.Unlock() }

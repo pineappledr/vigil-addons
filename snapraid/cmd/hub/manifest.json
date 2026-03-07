@@ -10,6 +10,7 @@
       "title": "Dashboard",
       "icon": "shield-check",
       "page_config": {
+        "agent_selector": true,
         "refresh": {
           "manual": true,
           "auto_options": [

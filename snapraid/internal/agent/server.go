@@ -50,6 +50,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/jobs", s.handleJobs)
 	s.mux.HandleFunc("GET /api/jobs/history", s.handleJobHistory)
 	s.mux.HandleFunc("GET /api/logs/history", s.handleLogHistory)
+	s.mux.HandleFunc("GET /api/array_status", s.handleArrayStatus)
+	s.mux.HandleFunc("GET /api/smart_status", s.handleSmartStatus)
+	s.mux.HandleFunc("GET /api/active_job", s.handleActiveJob)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -345,6 +348,58 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 		entries = []LogEntry{}
 	}
 	writeJSON(w, http.StatusOK, entries)
+}
+
+// handleArrayStatus returns the cached disk status from the collector.
+// If no cache exists, runs `snapraid status` on demand to populate it.
+func (s *Server) handleArrayStatus(w http.ResponseWriter, r *http.Request) {
+	report := s.collector.GetArrayStatus()
+	if report == nil {
+		// Run status on-demand to populate the cache.
+		fresh, err := s.engine.Status(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusOK, []any{}) // empty array, not error
+			return
+		}
+		s.collector.SetArrayStatus(fresh)
+		report = s.collector.GetArrayStatus()
+	}
+	if report == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, report.DiskStatus)
+}
+
+// handleSmartStatus returns the cached SMART disk data from the collector.
+// If no cache exists, runs `snapraid smart` on demand to populate it.
+func (s *Server) handleSmartStatus(w http.ResponseWriter, r *http.Request) {
+	report := s.collector.GetSmartStatus()
+	if report == nil {
+		fresh, err := s.engine.Smart(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusOK, []any{})
+			return
+		}
+		s.collector.SetSmartStatus(fresh)
+		report = s.collector.GetSmartStatus()
+	}
+	if report == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, report.Disks)
+}
+
+// handleActiveJob returns the current active job, or null if none.
+func (s *Server) handleActiveJob(w http.ResponseWriter, r *http.Request) {
+	job := s.collector.GetActiveJob()
+	if job == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("null"))
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
 }
 
 // parseTimeRange converts strings like "24h", "7d", "30d", "5m" to a duration.

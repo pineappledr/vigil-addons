@@ -364,57 +364,80 @@ func (s *Server) handleProxyToAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTelemetryField serves cached telemetry data from the aggregator.
-// The API path determines which field is returned:
+// When no cached data exists, falls back to fetching directly from the agent.
 //
-//	/api/disk_status  → array_status (contains .disks array)
+//	/api/disk_status  → array_status (contains .disk_status array)
 //	/api/smart_status → smart_status (contains .disks array)
 //	/api/active_job   → active_job
 func (s *Server) handleTelemetryField(w http.ResponseWriter, r *http.Request) {
-	// Map URL path to telemetry payload field name.
-	fieldMap := map[string]string{
-		"/api/disk_status":  "array_status",
-		"/api/smart_status": "smart_status",
-		"/api/active_job":   "active_job",
+	// Map URL path to telemetry payload field name and agent fallback path.
+	type fieldInfo struct {
+		telemetryKey string
+		agentPath    string
+	}
+	fieldMap := map[string]fieldInfo{
+		"/api/disk_status":  {telemetryKey: "array_status", agentPath: "/api/array_status"},
+		"/api/smart_status": {telemetryKey: "smart_status", agentPath: "/api/smart_status"},
+		"/api/active_job":   {telemetryKey: "active_job", agentPath: "/api/active_job"},
 	}
 
-	field, ok := fieldMap[r.URL.Path]
+	info, ok := fieldMap[r.URL.Path]
 	if !ok {
 		writeHubJSON(w, http.StatusNotFound, map[string]string{"error": "unknown telemetry field"})
 		return
 	}
 
 	agentID := r.URL.Query().Get("agent_id")
-	data := s.aggregator.LatestTelemetryField(agentID, field)
-	if data == nil {
-		// Return empty array/null so the frontend shows "No data" instead of error.
-		w.Header().Set("Content-Type", "application/json")
-		if field == "active_job" {
-			w.Write([]byte("null"))
-		} else {
-			w.Write([]byte("[]"))
-		}
-		return
-	}
 
-	// For disk_status and smart_status, the frontend expects an array of disks.
-	// StatusReport uses "disk_status" key, SmartReport uses "disks" key.
-	if field == "array_status" || field == "smart_status" {
-		var obj map[string]json.RawMessage
-		if err := json.Unmarshal(data, &obj); err == nil {
-			// Try both key names: SmartReport → "disks", StatusReport → "disk_status"
-			for _, key := range []string{"disks", "disk_status"} {
-				if arr, exists := obj[key]; exists {
-					w.Header().Set("Content-Type", "application/json")
-					w.Write(arr)
-					return
+	// Try cached telemetry first.
+	data := s.aggregator.LatestTelemetryField(agentID, info.telemetryKey)
+	if data != nil {
+		// For disk_status and smart_status, extract the disk array from the object.
+		if info.telemetryKey == "array_status" || info.telemetryKey == "smart_status" {
+			var obj map[string]json.RawMessage
+			if err := json.Unmarshal(data, &obj); err == nil {
+				for _, key := range []string{"disks", "disk_status"} {
+					if arr, exists := obj[key]; exists {
+						w.Header().Set("Content-Type", "application/json")
+						w.Write(arr)
+						return
+					}
 				}
 			}
 		}
-		// Fallback: return as-is
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+		return
 	}
 
+	// No cached telemetry — fall back to fetching directly from agent.
+	if agentID == "" {
+		views := s.registry.ListViews()
+		for _, v := range views {
+			if v.Status == "online" {
+				agentID = v.ID
+				break
+			}
+		}
+	}
+
+	if agentID != "" {
+		body, statusCode, err := s.router.ProxyGet(agentID, info.agentPath)
+		if err == nil && statusCode < 400 {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(body)
+			return
+		}
+		s.logger.Debug("agent fallback failed", "agent_id", agentID, "path", info.agentPath, "error", err)
+	}
+
+	// Final fallback: empty response.
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
+	if info.telemetryKey == "active_job" {
+		w.Write([]byte("null"))
+	} else {
+		w.Write([]byte("[]"))
+	}
 }
 
 // handleActiveJobs returns the current active job (if any) as a JSON array

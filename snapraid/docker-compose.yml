@@ -17,10 +17,16 @@ services:
     privileged: true
     ports:
       - "9400:9400"
-    command: ["-config", "/etc/snapraid-agent/config.agent.yaml"]
+    environment:
+      VIGIL_SNAPRAID_AGENT_HUB_URL: http://snapraid-hub:9300
+      # VIGIL_SNAPRAID_AGENT_HUB_TOKEN: <from Hub deploy wizard>
+      VIGIL_SNAPRAID_AGENT_ID: snapraid-agent-01
+      # VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR: http://192.168.1.100:9400
+      VIGIL_SNAPRAID_AGENT_LISTEN_PORT: 9400
+      VIGIL_SNAPRAID_AGENT_SNAPRAID_CONFIG_PATH: /etc/snapraid.conf
+      TZ: ${TZ:-UTC}
     volumes:
       - agent-data:/var/lib/vigil-snapraid-agent
-      - ./config.agent.yaml:/etc/snapraid-agent/config.agent.yaml:ro
       - /etc/snapraid.conf:/etc/snapraid.conf:ro
       # Mount all data and parity disks used by snapraid:
       # - /mnt/data1:/mnt/data1

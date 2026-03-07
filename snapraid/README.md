@@ -77,9 +77,9 @@ The Hub has no special requirements beyond network connectivity. It can run on a
 
 ### Docker Compose (Recommended)
 
-Create a `docker-compose.yml`:
+#### Hub
 
-A `docker-compose.yml` is included in the repository. Copy it alongside your config files:
+Deploy the Hub on any host that can reach both the Vigil Server and your Agent(s):
 
 ```yaml
 services:
@@ -94,17 +94,34 @@ services:
       - hub-data:/data
       - ./config.hub.yaml:/etc/snapraid-hub/config.hub.yaml:ro
 
+volumes:
+  hub-data:
+```
+
+#### Agent (via Deploy Wizard)
+
+The easiest way to deploy an Agent is through the **Vigil UI → SnapRAID → Agents → Add SnapRAID Agent** deploy wizard. Fill in the Agent ID, Advertise Address, and SnapRAID config path, then click **Copy docker compose** to get a ready-to-use compose file:
+
+```yaml
+# snapraid-agent — docker-compose.yml (Standard Linux)
+services:
   snapraid-agent:
-    container_name: Snapraid-Agent
     image: ghcr.io/pineappledr/vigil-addons-snapraid-agent:latest
+    container_name: snapraid-agent
     restart: unless-stopped
     privileged: true
     ports:
       - "9400:9400"
-    command: ["-config", "/etc/snapraid-agent/config.agent.yaml"]
+    environment:
+      VIGIL_SNAPRAID_AGENT_HUB_URL: http://snapraid-hub:9300
+      VIGIL_SNAPRAID_AGENT_HUB_TOKEN: <auto-filled from Hub>
+      VIGIL_SNAPRAID_AGENT_ID: snapraid-agent-nas01
+      VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR: http://snapraid-agent:9400
+      VIGIL_SNAPRAID_AGENT_LISTEN_PORT: 9400
+      VIGIL_SNAPRAID_AGENT_SNAPRAID_CONFIG_PATH: /etc/snapraid.conf
+      TZ: ${TZ:-UTC}
     volumes:
       - agent-data:/var/lib/vigil-snapraid-agent
-      - ./config.agent.yaml:/etc/snapraid-agent/config.agent.yaml:ro
       - /etc/snapraid.conf:/etc/snapraid.conf:ro
       # Mount all data and parity disks used by snapraid:
       # - /mnt/data1:/mnt/data1
@@ -112,18 +129,26 @@ services:
       # - /mnt/parity:/mnt/parity
 
 volumes:
-  hub-data:
   agent-data:
 ```
 
-Uncomment and adjust the disk mount lines for your array layout.
+The Agent **does not require a YAML config file** — all settings are provided via environment variables. The Hub URL and Token are pre-filled by the deploy wizard from the Hub's `/api/deploy-info` endpoint.
 
-Pull and start both services:
+Uncomment and adjust the disk mount lines for your array layout, then:
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
+
+> **Important:** Set `VIGIL_SNAPRAID_AGENT_ID` to a meaningful name (e.g., `snapraid-nas01`). Without it, the Agent defaults to the Docker container hostname (a random hex ID), which is not useful in the Hub UI.
+
+#### Agent Identity
+
+| Variable | Purpose |
+|----------|---------|
+| `VIGIL_SNAPRAID_AGENT_ID` | Displayed as the agent name in the Registered Agents table. Defaults to OS hostname. |
+| `VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR` | The URL the Hub uses to reach this agent for commands. Defaults to `http://<agent-id>:<port>`. Set this to the host's LAN IP if the Hub can't resolve the agent ID as a hostname. |
 
 ### Standalone Binaries
 
@@ -152,17 +177,43 @@ See the example files for comprehensive documentation of every option.
 
 ### Environment Variable Overrides
 
-All configuration values can be overridden via environment variables:
+All configuration values can be overridden via environment variables. The Agent can run **without a YAML config file** — if the file is missing, it starts with defaults and applies environment overrides.
 
 | Prefix | Binary |
 |--------|--------|
 | `VIGIL_SNAPRAID_HUB_` | Hub |
 | `VIGIL_SNAPRAID_AGENT_` | Agent |
 
-Variable names use uppercase with underscores matching the YAML path:
+#### Agent Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VIGIL_SNAPRAID_AGENT_ID` | *(hostname)* | Human-readable agent identifier shown in the Hub UI |
+| `VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR` | `http://<agent-id>:<port>` | URL where the Hub can reach this agent |
+| `VIGIL_SNAPRAID_AGENT_LISTEN_PORT` | `9400` | Port the agent listens on |
+| `VIGIL_SNAPRAID_AGENT_HUB_URL` | `http://snapraid-hub:9300` | Hub URL for registration and telemetry |
+| `VIGIL_SNAPRAID_AGENT_HUB_TOKEN` | — | Token for agent registration with the Hub |
+| `VIGIL_SNAPRAID_AGENT_SNAPRAID_CONFIG_PATH` | `/etc/snapraid.conf` | Path to snapraid.conf |
+| `VIGIL_SNAPRAID_AGENT_SNAPRAID_BINARY_PATH` | — | Path to snapraid binary (auto-detected if on PATH) |
+| `VIGIL_SNAPRAID_AGENT_SCHEDULER_MAINTENANCE_CRON` | `0 3 * * *` | Maintenance schedule |
+| `VIGIL_SNAPRAID_AGENT_SCHEDULER_SCRUB_CRON` | `0 4 * * 0` | Scrub schedule |
+| `VIGIL_SNAPRAID_AGENT_SCHEDULER_SMART_CRON` | `0 */6 * * *` | SMART check schedule |
+| `VIGIL_SNAPRAID_AGENT_THRESHOLDS_MAX_DELETED` | `50` | Deletion threshold |
+| `VIGIL_SNAPRAID_AGENT_THRESHOLDS_MAX_UPDATED` | `-1` | Update threshold (-1 = disabled) |
+| `VIGIL_SNAPRAID_AGENT_SCRUB_PLAN` | `8` | Scrub plan (bad, new, full, or percentage) |
+| `VIGIL_SNAPRAID_AGENT_SCRUB_OLDER_THAN_DAYS` | `10` | Min age for scrub blocks |
+| `VIGIL_SNAPRAID_AGENT_SCRUB_AUTO_FIX_BAD_BLOCKS` | `false` | Auto-fix bad blocks |
+| `VIGIL_SNAPRAID_AGENT_SYNC_PRE_HASH` | `false` | Enable pre-hash |
+| `VIGIL_SNAPRAID_AGENT_HOOKS_PRE_SYNC` | — | Pre-sync hook command |
+| `VIGIL_SNAPRAID_AGENT_HOOKS_POST_SYNC` | — | Post-sync hook command |
+| `VIGIL_SNAPRAID_AGENT_DOCKER_PAUSE_CONTAINERS` | — | Comma-separated containers to pause during sync |
+| `VIGIL_SNAPRAID_AGENT_DOCKER_STOP_CONTAINERS` | — | Comma-separated containers to stop during sync |
+
+Example:
 
 ```bash
-VIGIL_SNAPRAID_AGENT_LISTEN_PORT=9400
+VIGIL_SNAPRAID_AGENT_ID=snapraid-agent-nas01
+VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR=http://192.168.1.100:9400
 VIGIL_SNAPRAID_AGENT_SCHEDULER_MAINTENANCE_CRON="0 3 * * *"
 VIGIL_SNAPRAID_AGENT_THRESHOLDS_MAX_DELETED=100
 ```
@@ -418,6 +469,18 @@ The Hub emits notification frames upstream to the Vigil Server for dispatch thro
 - **SMART failures** are detected during periodic health checks and emit `smart_warning` with the affected disk name and device.
 - **Command failures** (e.g., network errors routing to an Agent) emit `job_failed` with the error details.
 
+### Token Rotation
+
+The Hub token used for agent registration can be rotated from the Vigil UI:
+
+1. Navigate to **SnapRAID → Agents → Add SnapRAID Agent**.
+2. Click the **rotate** button (↻) next to the Hub Token field.
+3. Confirm the rotation when prompted.
+
+The Hub generates a new 32-byte cryptographic token, persists it to `hub.token` in the data directory, and updates the in-memory value immediately. **Existing agents are not affected** — they only use the token during initial registration. New agents must use the updated token.
+
+The rotated token survives Hub restarts (loaded from disk on startup).
+
 ### Setup
 
 Notifications are dispatched through the Vigil Server's notification system. Configure your notification channels (Discord webhook, Telegram bot, email, etc.) in the Vigil Server settings. The SnapRAID Hub automatically forwards all events upstream — no additional configuration is needed on the Hub or Agent side.
@@ -442,9 +505,12 @@ Notifications are dispatched through the Vigil Server's notification system. Con
 | `GET` | `/api/deploy-info` | Returns Hub URL and token for the deploy-wizard prefill |
 | `POST` | `/api/agents/register` | Agent self-registration |
 | `GET` | `/api/agents` | List registered Agents |
+| `DELETE` | `/api/agents/{id}` | Remove an Agent from the registry |
 | `POST` | `/api/command` | Route a command to a target Agent |
 | `POST` | `/api/telemetry/ingest` | Receive Agent telemetry |
 | `POST` | `/api/config/{agentID}` | Forward config update to Agent |
+| `POST` | `/api/config` | Forward config update (agent_id in body, used by Vigil proxy) |
+| `POST` | `/api/rotate-token` | Rotate the Hub token (requires `{"confirm":"ROTATE"}`) |
 
 ## Troubleshooting
 
@@ -475,9 +541,23 @@ The Agent validates all cron expressions on startup. Use one of the preset sched
 
 Only one SnapRAID operation can run at a time. The engine uses a mutex to enforce this. Wait for the current operation to finish, or use the Abort button on the Operations page.
 
+### Agent shows as container ID in Registered Agents
+
+If the Agent ID and Hostname appear as a random hex string (e.g., `79b24c6ead06`), the Agent is using the Docker container hostname as its identity. Set `VIGIL_SNAPRAID_AGENT_ID` to a meaningful name in your `docker-compose.yml`:
+
+```yaml
+environment:
+  VIGIL_SNAPRAID_AGENT_ID: snapraid-nas01
+  VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR: http://192.168.1.100:9400
+```
+
+Delete the stale entries from the Registered Agents table using the trash icon, then restart the Agent container.
+
 ### Hub cannot reach Agent
 
 Verify the Agent's `listen.port` is accessible from the Hub host. In Docker, ensure both containers share a network or use `host.docker.internal`. Check firewall rules for the Agent port (default 9400).
+
+If the Agent's Advertise Address shows a container ID (e.g., `http://79b24c6ead06:9400`), the Hub can't route commands to it. Set `VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR` to the host's LAN IP.
 
 ### Job history growing too large
 

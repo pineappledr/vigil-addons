@@ -48,6 +48,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/telemetry/ingest", s.handleTelemetryIngest)
 	s.mux.HandleFunc("POST /api/config/{agentID}", s.handleConfigForward)
 	s.mux.HandleFunc("POST /api/config", s.handleConfigFromBody)
+	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	s.mux.HandleFunc("DELETE /api/agents/{id}", s.handleAgentDelete)
 	s.mux.HandleFunc("POST /api/rotate-token", s.handleRotateToken)
 }
@@ -226,6 +227,37 @@ func (s *Server) handleConfigForward(w http.ResponseWriter, r *http.Request) {
 	writeHubJSON(w, http.StatusOK, map[string]string{"status": "forwarded"})
 }
 
+
+// handleGetConfig proxies GET /api/config?agent_id=xxx to the target agent.
+// If no agent_id is given, it returns config from the first online agent.
+func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	agentID := r.URL.Query().Get("agent_id")
+
+	if agentID == "" {
+		// Default to first online agent
+		views := s.registry.ListViews()
+		for _, v := range views {
+			if v.Status == "online" {
+				agentID = v.ID
+				break
+			}
+		}
+		if agentID == "" {
+			writeHubJSON(w, http.StatusNotFound, map[string]string{"error": "no online agents"})
+			return
+		}
+	}
+
+	body, err := s.router.FetchAgentConfig(agentID)
+	if err != nil {
+		s.logger.Error("failed to fetch agent config", "agent_id", agentID, "error", err)
+		writeHubJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body)
+}
 
 func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 	// The Vigil proxy sends form data as {"data": {"confirm": "ROTATE"}}

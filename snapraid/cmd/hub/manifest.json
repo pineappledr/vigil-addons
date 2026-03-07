@@ -21,6 +21,26 @@
       },
       "components": [
         {
+          "type": "config-card",
+          "id": "agent-config",
+          "title": "Configuration",
+          "config": {
+            "source": "agent_config",
+            "link_page": "automation",
+            "labels": {
+              "maintenance_cron": "Maintenance Schedule",
+              "scrub_cron": "Scrub Schedule",
+              "smart_cron": "SMART Check Schedule",
+              "max_deleted": "Deletion Threshold",
+              "max_updated": "Update Threshold",
+              "pre_hash": "Pre-Hash",
+              "scrub_plan": "Default Scrub Plan",
+              "scrub_older_than_days": "Scrub Min Age (days)",
+              "auto_fix_bad_blocks": "Auto-Fix Bad Blocks"
+            }
+          }
+        },
+        {
           "type": "smart-table",
           "id": "disk-status",
           "title": "Disk Status",

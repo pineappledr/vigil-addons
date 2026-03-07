@@ -96,6 +96,32 @@ func (cr *CommandRouter) postAgent(agent *AgentEntry, path string, body []byte, 
 	return respBody, nil
 }
 
+// FetchAgentConfig retrieves the current config from an Agent via GET /api/config.
+func (cr *CommandRouter) FetchAgentConfig(agentID string) ([]byte, error) {
+	agent := cr.registry.Get(agentID)
+	if agent == nil {
+		return nil, fmt.Errorf("agent %s not found in registry", agentID)
+	}
+
+	url := fmt.Sprintf("%s/api/config", agent.Address)
+	resp, err := cr.client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetch config from agent %s: %w", agentID, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read agent config response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("agent returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return body, nil
+}
+
 // RouteConfigUpdate forwards a config update to the target Agent via POST /api/config.
 func (cr *CommandRouter) RouteConfigUpdate(agentID string, configPayload []byte) error {
 	agent := cr.registry.Get(agentID)

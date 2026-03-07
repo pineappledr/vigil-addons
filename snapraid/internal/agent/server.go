@@ -43,6 +43,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("POST /api/execute", s.handleExecute)
 	s.mux.HandleFunc("POST /api/abort", s.handleAbort)
+	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	s.mux.HandleFunc("POST /api/config", s.handleConfig)
 	s.mux.HandleFunc("GET /api/jobs", s.handleJobs)
 }
@@ -167,6 +168,15 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 		ExitCode: exitCode,
 		Output:   output,
 	})
+}
+
+func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	values, err := agentdb.GetAllCacheValues(s.db)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, values)
 }
 
 // ConfigUpdateRequest is the payload for POST /api/config.

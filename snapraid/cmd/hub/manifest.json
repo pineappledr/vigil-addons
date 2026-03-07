@@ -379,7 +379,8 @@
               "ports": ["9400:9400"],
               "volumes": [
                 "agent-data:/var/lib/vigil-snapraid-agent",
-                "/etc/snapraid.conf:/etc/snapraid.conf:ro"
+                "/etc/snapraid.conf:/etc/snapraid.conf:ro",
+                "/usr/bin/snapraid:/usr/bin/snapraid:ro"
               ],
               "named_volumes": ["agent-data"],
               "environment": {
@@ -394,7 +395,7 @@
               "platforms": {
                 "linux": {
                   "label": "Standard Linux",
-                  "hint": "Copy the docker-compose.yml to deploy the SnapRAID agent. Mount all data and parity disks used by snapraid."
+                  "hint": "Copy the docker-compose.yml to deploy the SnapRAID agent. Mount all data and parity disks used by snapraid. If your snapraid binary is not at /usr/bin/snapraid, adjust the volume mount (run 'which snapraid' to find it)."
                 }
               }
             },

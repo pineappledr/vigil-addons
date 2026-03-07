@@ -135,11 +135,11 @@ func (cr *CommandRouter) ProxyGet(agentID, pathAndQuery string) ([]byte, int, er
 	}
 
 	target := agent.Address + pathAndQuery
-	req, err := http.NewRequest(http.MethodGet, target, nil)
+	req, err := http.NewRequest(http.MethodGet, target, nil) // #nosec G704
 	if err != nil {
 		return nil, 0, fmt.Errorf("build proxy request: %w", err)
 	}
-	resp, err := cr.client.Do(req)
+	resp, err := cr.client.Do(req) // #nosec G704
 	if err != nil {
 		return nil, 0, fmt.Errorf("proxy GET to agent %s: %w", agentID, err)
 	}

@@ -7,7 +7,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags="-s -w -X main.version=$VERSION" \
     -o /snapraid-agent ./cmd/agent
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /var/lib/vigil-snapraid-agent
 COPY --from=builder /snapraid-agent /usr/local/bin/snapraid-agent

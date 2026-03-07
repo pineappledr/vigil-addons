@@ -116,7 +116,7 @@ services:
       VIGIL_SNAPRAID_AGENT_HUB_URL: http://snapraid-hub:9300
       VIGIL_SNAPRAID_AGENT_HUB_TOKEN: <auto-filled from Hub>
       VIGIL_SNAPRAID_AGENT_ID: snapraid-agent-nas01
-      VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR: http://snapraid-agent:9400
+      VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR: http://192.168.1.100:9400
       VIGIL_SNAPRAID_AGENT_LISTEN_PORT: 9400
       VIGIL_SNAPRAID_AGENT_SNAPRAID_CONFIG_PATH: /etc/snapraid.conf
       TZ: ${TZ:-UTC}
@@ -148,7 +148,7 @@ docker compose up -d
 | Variable | Purpose |
 |----------|---------|
 | `VIGIL_SNAPRAID_AGENT_ID` | Displayed as the agent name in the Registered Agents table. Defaults to OS hostname. |
-| `VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR` | The URL the Hub uses to reach this agent for commands. Defaults to `http://<agent-id>:<port>`. Set this to the host's LAN IP if the Hub can't resolve the agent ID as a hostname. |
+| `VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR` | The URL the Hub uses to reach this agent for commands (e.g., `http://192.168.1.100:9400`). **Required for Docker deployments** — without it, the default uses the container hostname which isn't routable. |
 
 ### Standalone Binaries
 
@@ -189,7 +189,7 @@ All configuration values can be overridden via environment variables. The Agent 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VIGIL_SNAPRAID_AGENT_ID` | *(hostname)* | Human-readable agent identifier shown in the Hub UI |
-| `VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR` | `http://<agent-id>:<port>` | URL where the Hub can reach this agent |
+| `VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR` | `http://<hostname>:<port>` | URL where the Hub can reach this agent. Set to host LAN IP for Docker. |
 | `VIGIL_SNAPRAID_AGENT_LISTEN_PORT` | `9400` | Port the agent listens on |
 | `VIGIL_SNAPRAID_AGENT_HUB_URL` | `http://snapraid-hub:9300` | Hub URL for registration and telemetry |
 | `VIGIL_SNAPRAID_AGENT_HUB_TOKEN` | — | Token for agent registration with the Hub |

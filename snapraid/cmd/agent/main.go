@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -63,9 +62,6 @@ func main() {
 	}
 
 	advertiseAddr := cfg.Identity.AdvertiseAddr
-	if advertiseAddr == "" {
-		advertiseAddr = fmt.Sprintf("http://%s:%d", agentID, cfg.Listen.Port)
-	}
 
 	collector := agent.NewCollector(agentID, hostname, version, logger)
 
@@ -73,7 +69,11 @@ func main() {
 
 	// Self-register with the Hub (retries in background)
 	if cfg.Hub.URL != "" {
-		go agent.RegisterWithHub(appCtx, cfg.Hub.URL, agentID, hostname, advertiseAddr, version, logger)
+		if advertiseAddr == "" {
+			logger.Error("VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR is required for Hub registration (set to http://<host-LAN-IP>:<port>)")
+		} else {
+			go agent.RegisterWithHub(appCtx, cfg.Hub.URL, agentID, hostname, advertiseAddr, version, logger)
+		}
 	}
 
 	errCh := make(chan error, 1)

@@ -120,10 +120,26 @@ func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
-	var cmd CommandMessage
-	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
+	// Accept both {"action":"status"} and {"command":"status"} since the
+	// Vigil action proxy forwards form data as-is (which uses "command").
+	var raw struct {
+		AgentID string          `json:"agent_id"`
+		Action  string          `json:"action"`
+		Command string          `json:"command"`
+		Params  json.RawMessage `json:"params"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid command"})
 		return
+	}
+
+	cmd := CommandMessage{
+		AgentID: raw.AgentID,
+		Action:  raw.Action,
+		Params:  raw.Params,
+	}
+	if cmd.Action == "" {
+		cmd.Action = raw.Command
 	}
 
 	resp, err := s.router.RouteCommand(cmd)

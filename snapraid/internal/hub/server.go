@@ -48,6 +48,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/telemetry/ingest", s.handleTelemetryIngest)
 	s.mux.HandleFunc("POST /api/config/{agentID}", s.handleConfigForward)
 	s.mux.HandleFunc("POST /api/config", s.handleConfigFromBody)
+	s.mux.HandleFunc("POST /api/rotate-token", s.handleRotateToken)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -187,6 +188,50 @@ func (s *Server) handleConfigForward(w http.ResponseWriter, r *http.Request) {
 	writeHubJSON(w, http.StatusOK, map[string]string{"status": "forwarded"})
 }
 
+
+func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
+	// The Vigil proxy sends form data as {"data": {"confirm": "ROTATE"}}
+	var req struct {
+		Data struct {
+			Confirm string `json:"confirm"`
+		} `json:"data"`
+		// Direct call (not via proxy)
+		Confirm string `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	confirm := req.Data.Confirm
+	if confirm == "" {
+		confirm = req.Confirm
+	}
+	if confirm != "ROTATE" {
+		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "type ROTATE to confirm"})
+		return
+	}
+
+	newToken, err := GenerateToken()
+	if err != nil {
+		s.logger.Error("failed to generate new token", "error", err)
+		writeHubJSON(w, http.StatusInternalServerError, map[string]string{"error": "token generation failed"})
+		return
+	}
+
+	if err := PersistToken(s.cfg.Data.RegistryPath, newToken); err != nil {
+		s.logger.Error("failed to persist new token", "error", err)
+		writeHubJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save token"})
+		return
+	}
+
+	s.cfg.Vigil.Token = newToken
+	s.logger.Info("hub token rotated successfully")
+	writeHubJSON(w, http.StatusOK, map[string]string{
+		"status":    "rotated",
+		"hub_token": newToken,
+	})
+}
 
 func writeHubJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

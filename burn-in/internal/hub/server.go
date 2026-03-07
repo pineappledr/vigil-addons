@@ -1,9 +1,13 @@
 package hub
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -14,18 +18,20 @@ type Server struct {
 	aggregator   *Aggregator
 	psk          string
 	advertiseURL string
+	dataDir      string
 	logger       *slog.Logger
 	mux          *http.ServeMux
 }
 
 // NewServer creates the hub HTTP server with all routes registered.
-func NewServer(registry *AgentRegistry, aggregator *Aggregator, psk, advertiseURL string, logger *slog.Logger) *Server {
+func NewServer(registry *AgentRegistry, aggregator *Aggregator, psk, advertiseURL, dataDir string, logger *slog.Logger) *Server {
 	s := &Server{
 		registry:     registry,
 		router:       NewCommandRouter(registry, logger),
 		aggregator:   aggregator,
 		psk:          psk,
 		advertiseURL: advertiseURL,
+		dataDir:      dataDir,
 		logger:       logger,
 		mux:          http.NewServeMux(),
 	}
@@ -52,6 +58,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/jobs/active", s.handleActiveJobs)
 	s.mux.HandleFunc("GET /api/smart/deltas", s.handleSmartDeltas)
 	s.mux.HandleFunc("GET /api/agents/{id}/telemetry", s.aggregator.HandleAgentTelemetry)
+	s.mux.HandleFunc("POST /api/rotate-psk", s.handleRotatePSK)
 }
 
 // requirePSK returns middleware that validates the Authorization: Bearer <psk> header.
@@ -149,6 +156,55 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "agent_id": agentID})
+}
+
+func (s *Server) handleRotatePSK(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Data struct {
+			Confirm string `json:"confirm"`
+		} `json:"data"`
+		Confirm string `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request"})
+		return
+	}
+
+	confirm := req.Data.Confirm
+	if confirm == "" {
+		confirm = req.Confirm
+	}
+	if confirm != "ROTATE" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "type ROTATE to confirm"})
+		return
+	}
+
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		s.logger.Error("failed to generate new PSK", "error", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "PSK generation failed"})
+		return
+	}
+	newPSK := hex.EncodeToString(buf)
+
+	pskPath := filepath.Join(s.dataDir, "hub.psk")
+	if err := os.MkdirAll(s.dataDir, 0o700); err != nil {
+		s.logger.Error("failed to create data directory", "error", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to save PSK"})
+		return
+	}
+	if err := os.WriteFile(pskPath, []byte(newPSK+"\n"), 0o600); err != nil {
+		s.logger.Error("failed to persist new PSK", "error", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to save PSK"})
+		return
+	}
+
+	s.psk = newPSK
+	s.logger.Info("hub PSK rotated successfully")
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "rotated",
+		"hub_psk": newPSK,
+	})
 }
 
 type errorResponse struct {

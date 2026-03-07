@@ -40,6 +40,12 @@ func main() {
 		}))
 	}
 
+	// Load persisted token if one was previously rotated via the API.
+	if persisted := hub.LoadPersistedToken(cfg.Data.RegistryPath); persisted != "" {
+		cfg.Vigil.Token = persisted
+		logger.Info("loaded rotated hub token from disk")
+	}
+
 	config.LogHubConfig(logger, cfg)
 
 	registry, err := hub.NewRegistry(cfg.Data.RegistryPath)

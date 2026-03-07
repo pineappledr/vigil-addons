@@ -59,6 +59,11 @@ func main() {
 
 	srv := agent.NewServer(cfg, eng, db, collector, logger)
 
+	// Self-register with the Hub (retries in background)
+	if cfg.Hub.URL != "" {
+		go agent.RegisterWithHub(appCtx, cfg.Hub.URL, hostname, hostname, version, cfg.Listen.Port, logger)
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- srv.Start()

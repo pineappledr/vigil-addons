@@ -10,14 +10,14 @@ import (
 
 // JobRecord represents a row in the job_history table.
 type JobRecord struct {
-	ID         int64
-	JobType    string
-	Trigger    string
-	StartedAt  time.Time
-	FinishedAt *time.Time
-	ExitCode   *int
-	Status     string
-	OutputLog  string
+	ID         int64      `json:"id"`
+	JobType    string     `json:"job_type"`
+	Trigger    string     `json:"trigger"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	ExitCode   *int       `json:"exit_code,omitempty"`
+	Status     string     `json:"status"`
+	OutputLog  string     `json:"output_log,omitempty"`
 }
 
 const timeFmt = "2006-01-02 15:04:05"
@@ -56,7 +56,24 @@ func RecentJobs(db *sql.DB, limit int) ([]JobRecord, error) {
 		return nil, fmt.Errorf("query recent jobs: %w", err)
 	}
 	defer rows.Close()
+	return scanJobs(rows)
+}
 
+// RecentJobsSince returns job records started after the given cutoff time.
+func RecentJobsSince(db *sql.DB, since time.Time, limit int) ([]JobRecord, error) {
+	rows, err := db.Query(
+		`SELECT id, job_type, trigger, started_at, finished_at, exit_code, status, COALESCE(output_log, '') FROM job_history WHERE started_at >= ? ORDER BY started_at DESC LIMIT ?`,
+		since.UTC().Format(timeFmt), limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query jobs since: %w", err)
+	}
+	defer rows.Close()
+	return scanJobs(rows)
+}
+
+// scanJobs reads JobRecord rows from a query result.
+func scanJobs(rows *sql.Rows) ([]JobRecord, error) {
 	var jobs []JobRecord
 	for rows.Next() {
 		var j JobRecord

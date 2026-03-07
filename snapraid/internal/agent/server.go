@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
 	agentdb "github.com/pineappledr/vigil-addons/snapraid/internal/db"
@@ -46,6 +48,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	s.mux.HandleFunc("POST /api/config", s.handleConfig)
 	s.mux.HandleFunc("GET /api/jobs", s.handleJobs)
+	s.mux.HandleFunc("GET /api/jobs/history", s.handleJobHistory)
+	s.mux.HandleFunc("GET /api/logs/history", s.handleLogHistory)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -224,6 +228,128 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, jobs)
+}
+
+// handleJobHistory returns job records with optional time_range filtering.
+// Query params: time_range (e.g. "24h", "7d", "30d")
+func (s *Server) handleJobHistory(w http.ResponseWriter, r *http.Request) {
+	var jobs []agentdb.JobRecord
+	var err error
+
+	if tr := r.URL.Query().Get("time_range"); tr != "" {
+		if d, ok := parseTimeRange(tr); ok {
+			since := time.Now().UTC().Add(-d)
+			jobs, err = agentdb.RecentJobsSince(s.db, since, 200)
+		} else {
+			jobs, err = agentdb.RecentJobs(s.db, 200)
+		}
+	} else {
+		jobs, err = agentdb.RecentJobs(s.db, 200)
+	}
+
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if jobs == nil {
+		jobs = []agentdb.JobRecord{}
+	}
+	writeJSON(w, http.StatusOK, jobs)
+}
+
+// LogEntry is a log line for the log-viewer component.
+type LogEntry struct {
+	Timestamp string `json:"timestamp"`
+	Level     string `json:"level"`
+	Source    string `json:"source"`
+	Message   string `json:"message"`
+}
+
+// handleLogHistory returns job output logs formatted for the log-viewer.
+func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
+	var jobs []agentdb.JobRecord
+	var err error
+
+	if tr := r.URL.Query().Get("time_range"); tr != "" {
+		if d, ok := parseTimeRange(tr); ok {
+			since := time.Now().UTC().Add(-d)
+			jobs, err = agentdb.RecentJobsSince(s.db, since, 100)
+		} else {
+			jobs, err = agentdb.RecentJobs(s.db, 100)
+		}
+	} else {
+		jobs, err = agentdb.RecentJobs(s.db, 100)
+	}
+
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var entries []LogEntry
+	for _, j := range jobs {
+		level := "info"
+		if j.Status == "error" || j.Status == "failed" {
+			level = "error"
+		} else if j.Status == "running" {
+			level = "warn"
+		}
+
+		msg := fmt.Sprintf("[%s] %s — %s", j.JobType, j.Trigger, j.Status)
+		if j.ExitCode != nil {
+			msg += fmt.Sprintf(" (exit %d)", *j.ExitCode)
+		}
+
+		entries = append(entries, LogEntry{
+			Timestamp: j.StartedAt.UTC().Format(time.RFC3339),
+			Level:     level,
+			Source:    j.JobType,
+			Message:   msg,
+		})
+
+		// If job has output, add it as a separate log line
+		if j.OutputLog != "" {
+			// Truncate long output for the log viewer
+			output := j.OutputLog
+			if len(output) > 2000 {
+				output = output[:2000] + "... (truncated)"
+			}
+			entries = append(entries, LogEntry{
+				Timestamp: j.StartedAt.UTC().Format(time.RFC3339),
+				Level:     "info",
+				Source:    j.JobType,
+				Message:   output,
+			})
+		}
+	}
+
+	if entries == nil {
+		entries = []LogEntry{}
+	}
+	writeJSON(w, http.StatusOK, entries)
+}
+
+// parseTimeRange converts strings like "24h", "7d", "30d", "5m" to a duration.
+func parseTimeRange(s string) (time.Duration, bool) {
+	if len(s) < 2 {
+		return 0, false
+	}
+	unit := s[len(s)-1]
+	numStr := s[:len(s)-1]
+	n, err := strconv.Atoi(numStr)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	switch unit {
+	case 'm':
+		return time.Duration(n) * time.Minute, true
+	case 'h':
+		return time.Duration(n) * time.Hour, true
+	case 'd':
+		return time.Duration(n) * 24 * time.Hour, true
+	default:
+		return 0, false
+	}
 }
 
 func (s *Server) Start() error {

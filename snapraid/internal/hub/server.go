@@ -50,6 +50,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/config", s.handleConfigFromBody)
 	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	s.mux.HandleFunc("DELETE /api/agents/{id}", s.handleAgentDelete)
+	s.mux.HandleFunc("GET /api/jobs/history", s.handleProxyToAgent)
+	s.mux.HandleFunc("GET /api/logs/history", s.handleProxyToAgent)
 	s.mux.HandleFunc("POST /api/rotate-token", s.handleRotateToken)
 }
 
@@ -317,6 +319,52 @@ func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 		"status":    "rotated",
 		"hub_token": newToken,
 	})
+}
+
+// handleProxyToAgent forwards a GET request to the first online agent,
+// preserving the request path and query string. Used for /api/jobs/history
+// and /api/logs/history.
+func (s *Server) handleProxyToAgent(w http.ResponseWriter, r *http.Request) {
+	agentID := r.URL.Query().Get("agent_id")
+
+	if agentID == "" {
+		views := s.registry.ListViews()
+		for _, v := range views {
+			if v.Status == "online" {
+				agentID = v.ID
+				break
+			}
+		}
+		if agentID == "" {
+			writeHubJSON(w, http.StatusNotFound, map[string]string{"error": "no online agents"})
+			return
+		}
+	}
+
+	agent := s.registry.Get(agentID)
+	if agent == nil {
+		writeHubJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+
+	// Forward the request path and query to the agent.
+	targetURL := agent.Address + r.URL.Path
+	if r.URL.RawQuery != "" {
+		targetURL += "?" + r.URL.RawQuery
+	}
+
+	resp, err := http.Get(targetURL)
+	if err != nil {
+		s.logger.Error("proxy to agent failed", "agent_id", agentID, "url", targetURL, "error", err)
+		writeHubJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	w.Write(body)
 }
 
 func writeHubJSON(w http.ResponseWriter, status int, v any) {

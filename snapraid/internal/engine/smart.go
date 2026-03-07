@@ -29,7 +29,7 @@ func (e *Engine) Smart(ctx context.Context) (*SmartReport, error) {
 	}
 
 	report := parseSmart(result.Stdout)
-	report.Output = result.Stdout
+	report.Output = result.CombinedOutput()
 	return report, nil
 }
 

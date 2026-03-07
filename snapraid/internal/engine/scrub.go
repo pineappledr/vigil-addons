@@ -24,6 +24,6 @@ func (e *Engine) Scrub(ctx context.Context, opts ScrubOptions) (*ScrubReport, er
 
 	return &ScrubReport{
 		ExitCode: result.ExitCode,
-		Output:   result.Stdout,
+		Output:   result.CombinedOutput(),
 	}, nil
 }

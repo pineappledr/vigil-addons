@@ -26,6 +26,6 @@ func (e *Engine) Fix(ctx context.Context, opts FixOptions) (*FixReport, error) {
 
 	return &FixReport{
 		ExitCode: result.ExitCode,
-		Output:   result.Stdout,
+		Output:   result.CombinedOutput(),
 	}, nil
 }

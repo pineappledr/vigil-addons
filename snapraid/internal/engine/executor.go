@@ -80,6 +80,21 @@ type commandResult struct {
 	ExitCode int
 }
 
+// CombinedOutput returns stdout and stderr merged, with stderr appended
+// after a separator when both are non-empty. This ensures no output is
+// lost regardless of which stream snapraid writes to.
+func (r *commandResult) CombinedOutput() string {
+	stdout := strings.TrimSpace(r.Stdout)
+	stderr := strings.TrimSpace(r.Stderr)
+	if stdout == "" {
+		return stderr
+	}
+	if stderr == "" {
+		return stdout
+	}
+	return stdout + "\n" + stderr
+}
+
 // setCancel stores a cancel function for the active command.
 func (e *Engine) setCancel(fn context.CancelFunc) {
 	e.cancelMu.Lock()

@@ -55,6 +55,6 @@ func (e *Engine) Sync(ctx context.Context, opts SyncOptions, progress chan<- int
 
 	return &SyncReport{
 		ExitCode: result.ExitCode,
-		Output:   result.Stdout,
+		Output:   result.CombinedOutput(),
 	}, nil
 }

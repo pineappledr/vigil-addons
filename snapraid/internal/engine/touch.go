@@ -14,6 +14,6 @@ func (e *Engine) Touch(ctx context.Context) (*TouchReport, error) {
 
 	return &TouchReport{
 		ExitCode: result.ExitCode,
-		Output:   result.Stdout,
+		Output:   result.CombinedOutput(),
 	}, nil
 }

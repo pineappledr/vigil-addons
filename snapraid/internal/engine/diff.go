@@ -23,7 +23,7 @@ func (e *Engine) Diff(ctx context.Context) (*DiffReport, error) {
 	}
 
 	report := parseDiff(result.Stdout)
-	report.Output = result.Stdout
+	report.Output = result.CombinedOutput()
 	return report, nil
 }
 

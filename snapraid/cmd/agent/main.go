@@ -69,6 +69,29 @@ func main() {
 
 	srv := agent.NewServer(cfg, eng, db, collector, logger)
 
+	// Populate telemetry cache on startup so data is immediately available.
+	go func() {
+		logger.Info("startup: running initial snapraid status")
+		statusCtx, statusCancel := context.WithTimeout(appCtx, 2*time.Minute)
+		defer statusCancel()
+		if report, err := eng.Status(statusCtx); err == nil {
+			collector.SetArrayStatus(report)
+			logger.Info("startup: array status cached")
+		} else {
+			logger.Warn("startup: snapraid status failed", "error", err)
+		}
+
+		logger.Info("startup: running initial snapraid smart")
+		smartCtx, smartCancel := context.WithTimeout(appCtx, 2*time.Minute)
+		defer smartCancel()
+		if report, err := eng.Smart(smartCtx); err == nil {
+			collector.SetSmartStatus(report)
+			logger.Info("startup: smart status cached")
+		} else {
+			logger.Warn("startup: snapraid smart failed", "error", err)
+		}
+	}()
+
 	// Start the cron scheduler for automated jobs.
 	sched := scheduler.New(eng, cfg, db, collector, logger)
 	if err := sched.Start(appCtx); err != nil {

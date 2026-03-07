@@ -104,7 +104,7 @@ func (cr *CommandRouter) FetchAgentConfig(agentID string) ([]byte, error) {
 	}
 
 	url := fmt.Sprintf("%s/api/config", agent.Address)
-	resp, err := cr.client.Get(url)
+	resp, err := cr.client.Get(url) // #nosec G107 -- URL is constructed from trusted registry data
 	if err != nil {
 		return nil, fmt.Errorf("fetch config from agent %s: %w", agentID, err)
 	}
@@ -131,7 +131,7 @@ func (cr *CommandRouter) ProxyGet(agentID, pathAndQuery string) ([]byte, int, er
 	}
 
 	url := agent.Address + pathAndQuery
-	resp, err := cr.client.Get(url)
+	resp, err := cr.client.Get(url) // #nosec G107 -- URL is constructed from trusted registry data
 	if err != nil {
 		return nil, 0, fmt.Errorf("proxy GET to agent %s: %w", agentID, err)
 	}

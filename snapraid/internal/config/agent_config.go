@@ -104,13 +104,14 @@ func LoadAgentConfig(path string) (*AgentConfig, error) {
 	cfg := DefaultAgentConfig()
 
 	data, err := os.ReadFile(path)
-	if err != nil {
+	if err == nil {
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			return nil, fmt.Errorf("parsing agent config: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("reading agent config %s: %w", path, err)
 	}
-
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing agent config: %w", err)
-	}
+	// If file doesn't exist, continue with defaults + env overrides
 
 	applyAgentEnvOverrides(&cfg)
 

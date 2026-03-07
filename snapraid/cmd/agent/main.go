@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -55,13 +56,24 @@ func main() {
 	eng := engine.NewEngine(cfg.SnapRAID.BinaryPath, cfg.SnapRAID.ConfigPath, logger)
 
 	hostname, _ := os.Hostname()
-	collector := agent.NewCollector(hostname, hostname, version, logger)
+
+	agentID := cfg.Identity.AgentID
+	if agentID == "" {
+		agentID = hostname
+	}
+
+	advertiseAddr := cfg.Identity.AdvertiseAddr
+	if advertiseAddr == "" {
+		advertiseAddr = fmt.Sprintf("http://%s:%d", agentID, cfg.Listen.Port)
+	}
+
+	collector := agent.NewCollector(agentID, hostname, version, logger)
 
 	srv := agent.NewServer(cfg, eng, db, collector, logger)
 
 	// Self-register with the Hub (retries in background)
 	if cfg.Hub.URL != "" {
-		go agent.RegisterWithHub(appCtx, cfg.Hub.URL, hostname, hostname, version, cfg.Listen.Port, logger)
+		go agent.RegisterWithHub(appCtx, cfg.Hub.URL, agentID, hostname, advertiseAddr, version, logger)
 	}
 
 	errCh := make(chan error, 1)

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -20,13 +19,11 @@ type RegisterRequest struct {
 
 // RegisterWithHub announces this agent to the Hub. It retries with exponential
 // backoff until the context is cancelled or registration succeeds.
-func RegisterWithHub(ctx context.Context, hubURL, agentID, hostname, version string, port int, logger *slog.Logger) {
-	addr := fmt.Sprintf("http://%s:%d", hostname, port)
-
+func RegisterWithHub(ctx context.Context, hubURL, agentID, hostname, advertiseAddr, version string, logger *slog.Logger) {
 	req := RegisterRequest{
 		ID:       agentID,
 		Hostname: hostname,
-		Address:  addr,
+		Address:  advertiseAddr,
 		Version:  version,
 	}
 

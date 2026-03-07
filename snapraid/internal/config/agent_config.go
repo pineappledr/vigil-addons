@@ -12,6 +12,7 @@ import (
 type AgentConfig struct {
 	Listen     AgentListen     `yaml:"listen"`
 	Hub        AgentHub        `yaml:"hub"`
+	Identity   AgentIdentity   `yaml:"identity"`
 	SnapRAID   SnapRAIDPaths   `yaml:"snapraid"`
 	Scheduler  SchedulerConfig `yaml:"scheduler"`
 	Thresholds Thresholds      `yaml:"thresholds"`
@@ -39,6 +40,11 @@ type AgentListen struct {
 type AgentHub struct {
 	URL   string `yaml:"url"`
 	Token string `yaml:"token"`
+}
+
+type AgentIdentity struct {
+	AgentID       string `yaml:"agent_id"`
+	AdvertiseAddr string `yaml:"advertise_addr"`
 }
 
 type SnapRAIDPaths struct {
@@ -133,6 +139,12 @@ func applyAgentEnvOverrides(cfg *AgentConfig) {
 	}
 	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_HUB_TOKEN"); v != "" {
 		cfg.Hub.Token = v
+	}
+	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_ID"); v != "" {
+		cfg.Identity.AgentID = v
+	}
+	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR"); v != "" {
+		cfg.Identity.AdvertiseAddr = v
 	}
 	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_SNAPRAID_BINARY_PATH"); v != "" {
 		cfg.SnapRAID.BinaryPath = v

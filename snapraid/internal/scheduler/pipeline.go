@@ -17,12 +17,20 @@ type EventEmitter interface {
 	EmitEvent(eventType, severity, message string)
 }
 
+// JobTracker allows the pipeline to report active job state upstream
+// so the dashboard can display running operations.
+type JobTracker interface {
+	TrackJob(jobType, phase string)
+	ClearJob()
+}
+
 // Pipeline orchestrates SnapRAID operations and records results in the job history.
 type Pipeline struct {
 	engine  *engine.Engine
 	cfg     *config.AgentConfig
 	db      *sql.DB
 	emitter EventEmitter
+	tracker JobTracker
 	logger  *slog.Logger
 }
 
@@ -220,6 +228,11 @@ type stepFunc func(ctx context.Context) (int, string, error)
 // Returns true if the step succeeded (exit code 0 or 2), false otherwise.
 func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn stepFunc) bool {
 	p.logger.Info("pipeline step started", "job", jobType)
+
+	if p.tracker != nil {
+		p.tracker.TrackJob(jobType, "running")
+		defer p.tracker.ClearJob()
+	}
 
 	jobID, dbErr := agentdb.InsertJob(p.db, jobType, trigger)
 	if dbErr != nil {

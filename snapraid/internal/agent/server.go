@@ -57,6 +57,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/array_status", s.handleArrayStatus)
 	s.mux.HandleFunc("GET /api/smart_status", s.handleSmartStatus)
 	s.mux.HandleFunc("GET /api/active_job", s.handleActiveJob)
+	s.mux.HandleFunc("GET /api/disk_storage", s.handleDiskStorage)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +97,10 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 
 	// Record the job in history so it appears in the Logs tab.
 	jobID, _ := agentdb.InsertJob(s.db, req.Command, "manual")
+
+	// Track the active job so the dashboard shows it while running.
+	s.collector.TrackJob(req.Command, "running")
+	defer s.collector.ClearJob()
 
 	var exitCode int
 	var output string
@@ -390,6 +395,28 @@ func (s *Server) handleActiveJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
+// handleDiskStorage returns OS-level filesystem info for snapraid data disks.
+func (s *Server) handleDiskStorage(w http.ResponseWriter, r *http.Request) {
+	storage := s.collector.GetDiskStorage()
+	if storage == nil {
+		// Trigger a collection so data is available on next request.
+		go s.refreshDiskStorage()
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, storage)
+}
+
+// refreshDiskStorage collects disk storage info without requiring the snapraid binary.
+func (s *Server) refreshDiskStorage() {
+	storage, err := s.engine.CollectDiskStorage()
+	if err != nil {
+		s.logger.Error("disk storage collection failed", "error", err)
+		return
+	}
+	s.collector.SetDiskStorage(storage)
+}
+
 // backgroundRefreshStatus runs snapraid status in the background to populate the cache.
 func (s *Server) backgroundRefreshStatus() {
 	if !s.refreshingStatus.CompareAndSwap(false, true) {
@@ -407,6 +434,9 @@ func (s *Server) backgroundRefreshStatus() {
 	}
 	s.collector.SetArrayStatus(report)
 	s.logger.Info("background refresh: status cache populated")
+
+	// Also refresh disk storage (lightweight, no snapraid binary needed).
+	s.refreshDiskStorage()
 }
 
 // backgroundRefreshSmart runs snapraid smart in the background to populate the cache.

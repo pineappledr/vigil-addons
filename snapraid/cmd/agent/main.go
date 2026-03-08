@@ -71,6 +71,14 @@ func main() {
 
 	// Populate telemetry cache on startup so data is immediately available.
 	go func() {
+		// Collect disk storage info (doesn't require snapraid binary).
+		if storage, err := eng.CollectDiskStorage(); err == nil {
+			collector.SetDiskStorage(storage)
+			logger.Info("startup: disk storage cached", "disks", len(storage))
+		} else {
+			logger.Warn("startup: disk storage collection failed", "error", err)
+		}
+
 		logger.Info("startup: running initial snapraid status")
 		statusCtx, statusCancel := context.WithTimeout(appCtx, 2*time.Minute)
 		defer statusCancel()
@@ -93,7 +101,7 @@ func main() {
 	}()
 
 	// Start the cron scheduler for automated jobs.
-	sched := scheduler.New(eng, cfg, db, collector, logger)
+	sched := scheduler.New(eng, cfg, db, collector, collector, logger)
 	if err := sched.Start(appCtx); err != nil {
 		logger.Error("failed to start scheduler", "error", err)
 		os.Exit(1)

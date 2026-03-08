@@ -55,6 +55,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/disk_status", s.handleTelemetryField)
 	s.mux.HandleFunc("GET /api/smart_status", s.handleTelemetryField)
 	s.mux.HandleFunc("GET /api/active_job", s.handleTelemetryField)
+	s.mux.HandleFunc("GET /api/disk_storage", s.handleTelemetryField)
 	s.mux.HandleFunc("GET /api/jobs/active", s.handleActiveJobs)
 	s.mux.HandleFunc("POST /api/rotate-token", s.handleRotateToken)
 }
@@ -379,6 +380,7 @@ func (s *Server) handleTelemetryField(w http.ResponseWriter, r *http.Request) {
 		"/api/disk_status":  {telemetryKey: "array_status", agentPath: "/api/array_status"},
 		"/api/smart_status": {telemetryKey: "smart_status", agentPath: "/api/smart_status"},
 		"/api/active_job":   {telemetryKey: "active_job", agentPath: "/api/active_job"},
+		"/api/disk_storage": {telemetryKey: "disk_storage", agentPath: "/api/disk_storage"},
 	}
 
 	info, ok := fieldMap[r.URL.Path]

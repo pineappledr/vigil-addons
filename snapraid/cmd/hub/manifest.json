@@ -57,6 +57,23 @@
           }
         },
         {
+          "type": "smart-table",
+          "id": "disk-storage",
+          "title": "Disk Storage",
+          "config": {
+            "source": "disk_storage",
+            "columns": [
+              { "key": "name", "label": "Disk" },
+              { "key": "mount_path", "label": "Mount Path" },
+              { "key": "filesystem", "label": "Filesystem" },
+              { "key": "total_bytes", "label": "Total", "format": "bytes" },
+              { "key": "used_bytes", "label": "Used", "format": "bytes" },
+              { "key": "free_bytes", "label": "Free", "format": "bytes" },
+              { "key": "used_pct", "label": "Used %", "format": "percent" }
+            ]
+          }
+        },
+        {
           "type": "progress",
           "id": "active-job",
           "title": "Active Job",

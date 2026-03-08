@@ -68,9 +68,10 @@ type Aggregator struct {
 	logger    *slog.Logger
 
 	// Per-agent tracking for state transition detection.
-	lastJobs     map[string]*trackedJob // agent_id → last known job
-	lastEventIDs map[string]string      // agent_id → last forwarded event ID
-	smartAlerted map[string]bool        // "agent:disk" → already alerted
+	lastJobs          map[string]*trackedJob // agent_id → last known job
+	lastEventIDs      map[string]string      // agent_id → last forwarded event ID
+	lastGateMessages  map[string]string      // agent_id → last gate_failed message (dedup)
+	smartAlerted      map[string]bool        // "agent:disk" → already alerted
 
 	// Cached latest telemetry per agent for API serving.
 	latestPayloads map[string]json.RawMessage // agent_id → raw payload
@@ -80,11 +81,12 @@ type Aggregator struct {
 // to the provided channel for the Vigil Client to transmit.
 func NewAggregator(registry *Registry, upstream chan<- []byte, logger *slog.Logger) *Aggregator {
 	return &Aggregator{
-		registry:       registry,
+		registry:        registry,
 		upstream:        upstream,
 		logger:          logger,
 		lastJobs:        make(map[string]*trackedJob),
 		lastEventIDs:    make(map[string]string),
+		lastGateMessages: make(map[string]string),
 		smartAlerted:    make(map[string]bool),
 		latestPayloads:  make(map[string]json.RawMessage),
 	}
@@ -186,6 +188,8 @@ func (a *Aggregator) evaluateTelemetry(agentID string, raw []byte) {
 
 // evaluateAgentEvent forwards agent-emitted events (gate failures, pipeline
 // lifecycle) as notifications upstream, deduplicating by event ID.
+// Gate failures are further deduplicated by message so that repeated identical
+// failures (e.g. missing content file) only notify once until resolved.
 func (a *Aggregator) evaluateAgentEvent(tc *TelemetryClient, agentID string, evt *agentEvent) {
 	if evt == nil || evt.ID == "" {
 		return
@@ -197,6 +201,23 @@ func (a *Aggregator) evaluateAgentEvent(tc *TelemetryClient, agentID string, evt
 		return
 	}
 	a.lastEventIDs[agentID] = evt.ID
+
+	// Deduplicate repeated gate failures with the same message.
+	if evt.Type == "gate_failed" {
+		if a.lastGateMessages[agentID] == evt.Message {
+			a.mu.Unlock()
+			a.logger.Debug("suppressing duplicate gate_failed notification", "agent_id", agentID)
+			return
+		}
+		a.lastGateMessages[agentID] = evt.Message
+	}
+
+	// Clear gate failure tracking when maintenance starts successfully,
+	// so the next failure (if any) will notify again.
+	if evt.Type == "maintenance_started" || evt.Type == "maintenance_complete" {
+		delete(a.lastGateMessages, agentID)
+	}
+
 	a.mu.Unlock()
 
 	a.emitNotification(tc, agentID, evt.Type, evt.Severity, evt.Message+" on "+agentID)

@@ -13,16 +13,17 @@ import (
 
 // TelemetryPayload is the full telemetry frame transmitted to the Hub.
 type TelemetryPayload struct {
-	AgentID        string                `json:"agent_id"`
-	Hostname       string                `json:"hostname"`
-	Timestamp      time.Time             `json:"timestamp"`
-	ArrayStatus    *engine.StatusReport  `json:"array_status,omitempty"`
-	SmartStatus    *engine.SmartReport   `json:"smart_status,omitempty"`
-	DiffStatus     *engine.DiffReport    `json:"diff_status,omitempty"`
-	SchedulerState *SchedulerState       `json:"scheduler_state,omitempty"`
-	ActiveJob      *ActiveJob            `json:"active_job,omitempty"`
-	LastEvent      *AgentEvent           `json:"last_event,omitempty"`
-	DaemonInfo     DaemonInfo            `json:"daemon_info"`
+	AgentID        string                     `json:"agent_id"`
+	Hostname       string                     `json:"hostname"`
+	Timestamp      time.Time                  `json:"timestamp"`
+	ArrayStatus    *engine.StatusReport       `json:"array_status,omitempty"`
+	SmartStatus    *engine.SmartReport        `json:"smart_status,omitempty"`
+	DiffStatus     *engine.DiffReport         `json:"diff_status,omitempty"`
+	DiskStorage    []engine.DiskStorageInfo   `json:"disk_storage,omitempty"`
+	SchedulerState *SchedulerState            `json:"scheduler_state,omitempty"`
+	ActiveJob      *ActiveJob                 `json:"active_job,omitempty"`
+	LastEvent      *AgentEvent                `json:"last_event,omitempty"`
+	DaemonInfo     DaemonInfo                 `json:"daemon_info"`
 }
 
 // AgentEvent describes a notable event that occurred on the Agent.
@@ -82,6 +83,7 @@ type Collector struct {
 	arrayStatus    *engine.StatusReport
 	smartStatus    *engine.SmartReport
 	diffStatus     *engine.DiffReport
+	diskStorage    []engine.DiskStorageInfo
 	schedulerState *SchedulerState
 	activeJob       *ActiveJob
 	lastEvent       *AgentEvent
@@ -122,9 +124,24 @@ func (c *Collector) SetDiffStatus(r *engine.DiffReport) {
 	c.diffStatus = &clean
 	c.mu.Unlock()
 }
-func (c *Collector) SetSchedulerState(s *SchedulerState)     { c.mu.Lock(); c.schedulerState = s; c.mu.Unlock() }
+func (c *Collector) SetDiskStorage(d []engine.DiskStorageInfo) { c.mu.Lock(); c.diskStorage = d; c.mu.Unlock() }
+func (c *Collector) SetSchedulerState(s *SchedulerState)      { c.mu.Lock(); c.schedulerState = s; c.mu.Unlock() }
 func (c *Collector) SetActiveJob(j *ActiveJob)               { c.mu.Lock(); c.activeJob = j; c.mu.Unlock() }
 func (c *Collector) ClearActiveJob()                         { c.mu.Lock(); c.activeJob = nil; c.mu.Unlock() }
+
+// TrackJob implements scheduler.JobTracker — sets the active job visible on the dashboard.
+func (c *Collector) TrackJob(jobType, phase string) {
+	c.SetActiveJob(&ActiveJob{
+		Type:         jobType,
+		StartedAt:    time.Now().UTC(),
+		CurrentPhase: phase,
+	})
+}
+
+// ClearJob implements scheduler.JobTracker — clears the active job after completion.
+func (c *Collector) ClearJob() {
+	c.ClearActiveJob()
+}
 func (c *Collector) SetHubConnected(v bool)                  { c.mu.Lock(); c.hubConnected = v; c.mu.Unlock() }
 func (c *Collector) SetSnapraidVersion(v string)             { c.mu.Lock(); c.snapraidVersion = v; c.mu.Unlock() }
 
@@ -140,6 +157,13 @@ func (c *Collector) GetSmartStatus() *engine.SmartReport {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.smartStatus
+}
+
+// GetDiskStorage returns the cached disk storage info.
+func (c *Collector) GetDiskStorage() []engine.DiskStorageInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.diskStorage
 }
 
 // GetActiveJob returns the cached active job, or nil if none.
@@ -181,6 +205,7 @@ func (c *Collector) Build() *TelemetryPayload {
 		ArrayStatus:    c.arrayStatus,
 		SmartStatus:    c.smartStatus,
 		DiffStatus:     c.diffStatus,
+		DiskStorage:    c.diskStorage,
 		SchedulerState: c.schedulerState,
 		ActiveJob:      c.activeJob,
 		LastEvent:      evt,

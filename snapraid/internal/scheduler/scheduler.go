@@ -18,6 +18,7 @@ type Scheduler struct {
 	cfg     *config.AgentConfig
 	db      *sql.DB
 	emitter EventEmitter
+	tracker JobTracker
 	logger  *slog.Logger
 
 	// jobMu serializes scheduled job execution so only one pipeline runs at a time,
@@ -28,13 +29,15 @@ type Scheduler struct {
 
 // New creates a Scheduler wired to the given engine, config, and database.
 // The emitter is optional; pass nil to disable event notifications.
-func New(eng *engine.Engine, cfg *config.AgentConfig, database *sql.DB, emitter EventEmitter, logger *slog.Logger) *Scheduler {
+// The tracker is optional; pass nil to disable active job tracking.
+func New(eng *engine.Engine, cfg *config.AgentConfig, database *sql.DB, emitter EventEmitter, tracker JobTracker, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
 		cron:    cron.New(cron.WithSeconds()),
 		engine:  eng,
 		cfg:     cfg,
 		db:      database,
 		emitter: emitter,
+		tracker: tracker,
 		logger:  logger,
 	}
 }
@@ -93,6 +96,7 @@ func (s *Scheduler) runMaintenance(ctx context.Context) {
 		cfg:     s.cfg,
 		db:      s.db,
 		emitter: s.emitter,
+		tracker: s.tracker,
 		logger:  s.logger,
 	}
 	p.RunMaintenance(ctx)
@@ -111,6 +115,7 @@ func (s *Scheduler) runScrubOnly(ctx context.Context) {
 		cfg:     s.cfg,
 		db:      s.db,
 		emitter: s.emitter,
+		tracker: s.tracker,
 		logger:  s.logger,
 	}
 	p.RunScrubOnly(ctx)
@@ -129,6 +134,7 @@ func (s *Scheduler) runSmartCheck(ctx context.Context) {
 		cfg:     s.cfg,
 		db:      s.db,
 		emitter: s.emitter,
+		tracker: s.tracker,
 		logger:  s.logger,
 	}
 	p.RunSmartCheck(ctx)
@@ -147,6 +153,7 @@ func (s *Scheduler) runStatusRefresh(ctx context.Context) {
 		cfg:     s.cfg,
 		db:      s.db,
 		emitter: s.emitter,
+		tracker: s.tracker,
 		logger:  s.logger,
 	}
 	p.RunStatusRefresh(ctx)

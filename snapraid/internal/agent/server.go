@@ -92,8 +92,33 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
 	s.logger.Info("execute requested", "command", req.Command)
+
+	// Validate command before accepting.
+	switch req.Command {
+	case "sync", "scrub", "fix", "status", "smart", "diff", "touch":
+		// valid
+	default:
+		writeJSON(w, http.StatusBadRequest, ExecuteResponse{Status: "error", Error: "unknown command: " + req.Command})
+		return
+	}
+
+	// Check if the engine is already busy (fail fast without blocking).
+	if s.engine.IsBusy() {
+		writeJSON(w, http.StatusConflict, ExecuteResponse{Status: "error", Error: engine.ErrEngineLocked.Error()})
+		return
+	}
+
+	// Return immediately — the command runs in the background.
+	// The Active Job tracker and job history record progress.
+	writeJSON(w, http.StatusOK, ExecuteResponse{Status: "accepted"})
+
+	go s.runCommand(req)
+}
+
+// runCommand executes a snapraid command in the background with job tracking.
+func (s *Server) runCommand(req ExecuteRequest) {
+	ctx := context.Background()
 
 	// Record the job in history so it appears in the Logs tab.
 	jobID, _ := agentdb.InsertJob(s.db, req.Command, "manual")
@@ -171,20 +196,13 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 			exitCode = report.ExitCode
 			output = report.Output
 		}
-	default:
-		writeJSON(w, http.StatusBadRequest, ExecuteResponse{Status: "error", Error: "unknown command: " + req.Command})
-		return
 	}
 
 	if execErr != nil {
 		if jobID > 0 {
 			agentdb.CompleteJob(s.db, jobID, -1, "error", execErr.Error())
 		}
-		status := http.StatusInternalServerError
-		if execErr == engine.ErrEngineLocked {
-			status = http.StatusConflict
-		}
-		writeJSON(w, status, ExecuteResponse{Status: "error", Error: execErr.Error()})
+		s.logger.Error("command failed", "command", req.Command, "error", execErr)
 		return
 	}
 
@@ -196,12 +214,6 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 	if output != "" {
 		s.logger.Info("command output", "command", req.Command, "output", output)
 	}
-
-	writeJSON(w, http.StatusOK, ExecuteResponse{
-		Status:   "ok",
-		ExitCode: exitCode,
-		Output:   output,
-	})
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {

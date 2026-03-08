@@ -58,6 +58,15 @@ func (e *Engine) Version() string {
 	return s
 }
 
+// IsBusy returns true if a snapraid command is currently running.
+func (e *Engine) IsBusy() bool {
+	if e.mu.TryLock() {
+		e.mu.Unlock()
+		return false
+	}
+	return true
+}
+
 // Abort cancels the currently running snapraid command, if any.
 func (e *Engine) Abort() error {
 	e.cancelMu.Lock()

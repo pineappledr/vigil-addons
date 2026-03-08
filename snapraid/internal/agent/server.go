@@ -331,9 +331,10 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 	var entries []LogEntry
 	for _, j := range jobs {
 		level := "info"
-		if j.Status == "error" || j.Status == "failed" {
+		switch j.Status {
+		case "error", "failed":
 			level = "error"
-		} else if j.Status == "running" {
+		case "running":
 			level = "warn"
 		}
 

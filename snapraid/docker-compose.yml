@@ -1,3 +1,19 @@
+# SnapRAID Add-on for Vigil
+#
+# Requirements:
+#   - Vigil Server running and reachable (default: http://<vigil-server>:9080)
+#   - SnapRAID installed on the Agent host (apt install snapraid)
+#   - A valid /etc/snapraid.conf (test with: snapraid status)
+#   - All data and parity disks mounted and accessible
+#   - Docker (optional) for container pause/stop during sync
+#
+# Setup:
+#   1. In Vigil UI, go to Extensions > Add-ons > Add Add-on
+#   2. Fill in the name/URL and generate a registration token
+#   3. Set the token in config.hub.yaml (vigil.token)
+#   4. Start the Hub — it registers and opens a WebSocket to Vigil
+#   5. Deploy the Agent via the deploy wizard or this compose file
+
 services:
   snapraid-hub:
     container_name: Snapraid-Hub
@@ -28,11 +44,21 @@ services:
     volumes:
       - agent-data:/var/lib/vigil-snapraid-agent
       - /etc/snapraid.conf:/etc/snapraid.conf:ro
-      # Mount all data and parity disks used by snapraid:
+
+      # ─── Content files — read-write (updated by sync/scrub) ───
+      # - /var/snapraid.content:/var/snapraid.content
+
+      # ─── Parity disks — read-write (written by sync) ───
+      # - /mnt/parity:/mnt/parity
+
+      # ─── Data disks — read-write (needed for touch/fix) ───
       # - /mnt/data1:/mnt/data1
       # - /mnt/data2:/mnt/data2
-      # - /mnt/parity:/mnt/parity
-      # Mount hook scripts (optional):
+
+      # ─── Docker socket — uncomment if using container pause/stop during sync ───
+      # - /var/run/docker.sock:/var/run/docker.sock
+
+      # ─── Hook scripts (optional) ───
       # - ./scripts/pre-sync.sh:/usr/local/bin/pre-sync.sh:ro
       # - ./scripts/post-sync.sh:/usr/local/bin/post-sync.sh:ro
 

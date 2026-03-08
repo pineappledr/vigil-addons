@@ -123,16 +123,23 @@ services:
     volumes:
       - agent-data:/var/lib/vigil-snapraid-agent
       - /etc/snapraid.conf:/etc/snapraid.conf:ro
-      # Mount all data and parity disks used by snapraid:
+      # Content files — read-write (updated by sync/scrub):
+      # - /var/snapraid.content:/var/snapraid.content
+      # Parity disks — read-write (written by sync):
+      # - /mnt/parity:/mnt/parity
+      # Data disks — read-write (needed for touch/fix):
       # - /mnt/data1:/mnt/data1
       # - /mnt/data2:/mnt/data2
-      # - /mnt/parity:/mnt/parity
+      # Docker socket — uncomment if using container pause/stop:
+      # - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   agent-data:
 ```
 
 The Agent **does not require a YAML config file** — all settings are provided via environment variables. The Hub URL and Token are pre-filled by the deploy wizard from the Hub's `/api/deploy-info` endpoint.
+
+> **Important:** Data, parity, and content file volumes must be mounted **read-write** (no `:ro` flag). SnapRAID needs write access to parity disks for `sync`, content files for `sync`/`scrub`, and data disks for `touch`/`fix`.
 
 Uncomment and adjust the disk mount lines for your array layout, then:
 
@@ -242,7 +249,7 @@ The Vigil UI renders five pages from the Hub manifest:
 
 | Page | Components | Purpose |
 |------|-----------|---------|
-| **Dashboard** | Disk Status table, Active Job progress, SMART Overview | At-a-glance array health and running operations |
+| **Dashboard** | Disk Storage cards, Active Job progress, SMART Overview | At-a-glance array health with visual storage cards, progress bars, and inline alias editing |
 | **Operations** | Execute Command form | Manually trigger sync, scrub, fix, status, smart, diff, or touch against a selected Agent |
 | **Automation** | Schedule Configuration form | Configure maintenance, scrub, and SMART schedules with presets or custom cron; set safety thresholds |
 | **Agents** | Registered Agents table, Deploy Wizard | View connected Agents and deploy new ones via generated docker-compose |
@@ -267,6 +274,7 @@ All schedule and threshold settings are configured per-Agent from the Automation
 | **Post-Sync Hook** | Text | — | Shell command to run after each sync (e.g. restart services, send reports) |
 | **Pause Containers Before Sync** | Text | — | Comma-separated Docker container names to pause during sync and unpause after |
 | **Stop Containers Before Sync** | Text | — | Comma-separated Docker container names to stop during sync and restart after |
+| **Disk Aliases** | Text | — | Comma-separated disk-to-name mappings for the Dashboard storage cards (e.g., `d1=Movies, d2=TV Shows`) |
 
 Schedule fields offer common presets (e.g., "Daily at 3:00 AM", "Sundays at 4:00 AM", "Every 6 hours") plus a **Custom** option that reveals a text input for standard 5-field cron expressions.
 

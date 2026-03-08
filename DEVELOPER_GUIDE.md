@@ -93,6 +93,7 @@ Every add-on must provide a JSON manifest that declares its name, version, and U
 | `progress` | Job progress bars with phase tracking, ETA, and throughput | `multi`, `show_phase`, `show_eta`, `show_speed`, `show_temperature` |
 | `chart` | Chart.js-based data visualization (line, bar, etc.) | `chart_type`, `x_axis`, `y_axis`, `thresholds[]`, `max_points` |
 | `smart-table` | Data tables with sorting, filtering, and expandable rows | `columns[]`, `source`, `sortable`, `filterable`, `expandable` |
+| `disk-storage` | Visual disk storage cards with progress bars, color-coded usage, and inline alias editing | `source`, `aliases`, `thresholds` |
 | `log-viewer` | Real-time streaming log viewer with level filtering | `max_lines`, `levels[]`, `show_timestamp`, `filterable_by_job` |
 | `deploy-wizard` | Docker/binary deployment generator with prefill support | `docker`, `binary`, `target_label`, `prefill_endpoint` |
 

@@ -57,20 +57,13 @@
           }
         },
         {
-          "type": "smart-table",
+          "type": "disk-storage",
           "id": "disk-storage",
           "title": "Disk Storage",
           "config": {
             "source": "disk_storage",
-            "columns": [
-              { "key": "name", "label": "Disk" },
-              { "key": "mount_path", "label": "Mount Path" },
-              { "key": "filesystem", "label": "Filesystem" },
-              { "key": "total_bytes", "label": "Total", "format": "bytes" },
-              { "key": "used_bytes", "label": "Used", "format": "bytes" },
-              { "key": "free_bytes", "label": "Free", "format": "bytes" },
-              { "key": "used_pct", "label": "Used %", "format": "percent" }
-            ]
+            "aliases": {},
+            "thresholds": { "warning": 70, "danger": 90 }
           }
         },
         {
@@ -319,6 +312,13 @@
                 "hint": "Automatically attempt to repair bad blocks detected during scrub",
                 "type": "toggle",
                 "default": false
+              },
+              {
+                "name": "disk_aliases",
+                "label": "Disk Aliases",
+                "hint": "Friendly names for disks, e.g. d1=Movies, d2=TV Shows (one per line or comma-separated)",
+                "type": "text",
+                "placeholder": "d1=Movies, d2=TV Shows, d3=Music"
               },
               {
                 "name": "hooks_pre_sync",

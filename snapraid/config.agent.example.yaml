@@ -1,0 +1,116 @@
+# SnapRAID Agent Configuration
+# ───────────────────────────────────────────────────────────────────────
+# The Agent runs on each physical NAS host alongside its SnapRAID array.
+# It executes all SnapRAID CLI operations, manages scheduling, and
+# streams telemetry to the Hub.
+#
+# All values can be overridden via environment variables prefixed with
+# VIGIL_SNAPRAID_AGENT_ (e.g., VIGIL_SNAPRAID_AGENT_LISTEN_PORT=9400).
+#
+# Precedence (highest to lowest):
+#   1. POST /api/config from Hub (persisted locally in SQLite)
+#   2. Environment variables (VIGIL_SNAPRAID_AGENT_*)
+#   3. This YAML configuration file
+#   4. Built-in defaults
+# ───────────────────────────────────────────────────────────────────────
+
+# ── Listener ─────────────────────────────────────────────────────────
+listen:
+  # TCP port for the Agent REST API.
+  # The Hub sends commands and config updates here.
+  port: 9400
+
+# ── Hub Connection ──────────────────────────────────────────────────
+hub:
+  # URL of the SnapRAID Hub. The Agent registers itself on startup
+  # and maintains a WebSocket connection for telemetry.
+  url: "http://snapraid-hub:9300"
+
+  # One-time registration token generated in the Vigil UI.
+  # Used for the initial Agent-to-Hub registration handshake.
+  token: ""
+
+# ── SnapRAID Paths ──────────────────────────────────────────────────
+snapraid:
+  # Path to the snapraid binary. Leave empty to auto-detect from PATH.
+  # Set this explicitly if snapraid is installed in a non-standard location.
+  binary_path: ""
+
+  # Path to the snapraid configuration file on the host.
+  # This file defines data disks, parity locations, and content files.
+  config_path: "/etc/snapraid.conf"
+
+# ── Scheduler ───────────────────────────────────────────────────────
+# Standard 5-field cron expressions (minute hour day-of-month month day-of-week).
+# Set any expression to "" to disable that schedule.
+scheduler:
+  # Full maintenance pipeline: touch -> diff -> safety gates -> sync -> scrub
+  maintenance_cron: "0 3 * * *"          # Daily at 03:00
+
+  # Standalone scrub for periodic integrity verification.
+  scrub_cron: "0 4 * * 0"               # Weekly on Sunday at 04:00
+
+  # SMART health polling to detect failing disks early.
+  smart_cron: "0 */6 * * *"             # Every 6 hours
+
+  # Status refresh for dashboard telemetry updates.
+  status_cron: "*/30 * * * *"           # Every 30 minutes
+
+# ── Safety Thresholds ───────────────────────────────────────────────
+# These gates protect against accidental mass deletion or sync during
+# disk failures. If a threshold is breached, the automated sync is
+# aborted and an alert is dispatched.
+thresholds:
+  # Maximum number of deleted files before aborting an automated sync.
+  # Set to 0 to disable the deletion gate entirely.
+  max_deleted: 50
+
+  # Maximum number of updated files before aborting an automated sync.
+  # Set to -1 to disable (default).
+  max_updated: -1
+
+  # If set (> 0), allow sync despite a deletion breach when the ratio
+  # of added-to-deleted files exceeds this value.
+  # Set to -1 to disable (default).
+  add_del_ratio: -1.0
+
+  # Maximum per-disk annual failure probability (%) before aborting sync.
+  # Disks reporting FAIL or PREFAIL always trigger a hard abort regardless
+  # of this threshold.
+  smart_fail_probability: 50
+
+# ── Scrub Settings ──────────────────────────────────────────────────
+scrub:
+  # Default scrub plan for automated runs.
+  # Values: "bad" (bad blocks only), "new" (just-synced blocks),
+  #         "full" (entire array), or a number 1-100 (percentage).
+  plan: "8"
+
+  # Only scrub blocks older than this many days.
+  # Combined with the plan percentage, this ensures recent blocks
+  # are not redundantly verified.
+  older_than_days: 10
+
+  # Automatically run `snapraid -e fix` followed by `snapraid -p bad scrub`
+  # whenever a scrub detects bad blocks. Use with caution.
+  auto_fix_bad_blocks: false
+
+# ── Sync Settings ───────────────────────────────────────────────────
+sync:
+  # Enable --pre-hash on automated syncs.
+  # Hashes files before writing parity; slower but detects RAM errors.
+  pre_hash: false
+
+# ── Logging ─────────────────────────────────────────────────────────
+logging:
+  # Log level: debug, info, warn, error
+  level: "info"
+
+  # Path to the Agent log file. Leave empty to log only to stdout.
+  file: "/var/log/vigil-snapraid-agent.log"
+
+  # Maximum log file size in MB before rotation.
+  max_size_mb: 50
+
+  # Number of rotated log files to retain.
+  max_backups: 3

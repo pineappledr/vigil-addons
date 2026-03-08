@@ -1,0 +1,40 @@
+# SnapRAID Hub Configuration
+# ───────────────────────────────────────────────────────────────────────
+# The Hub sits between the Vigil Server and one or more SnapRAID Agents.
+# It aggregates telemetry, proxies commands, and manages Agent registration.
+#
+# All values can be overridden via environment variables prefixed with
+# VIGIL_SNAPRAID_HUB_ (e.g., VIGIL_SNAPRAID_HUB_LISTEN_PORT=9300).
+# ───────────────────────────────────────────────────────────────────────
+
+# ── Listener ─────────────────────────────────────────────────────────
+listen:
+  # TCP port for the Hub HTTP/WebSocket server.
+  # Agents connect here to register and push telemetry.
+  port: 9300
+
+# ── Vigil Server Connection ─────────────────────────────────────────
+vigil:
+  # HTTP(S) URL of the Vigil Server. Used for:
+  #   1. Registration: POST /api/addons/connect (sends manifest + token)
+  #   2. Telemetry: WebSocket at /api/addons/ws (derived automatically)
+  # The Hub converts http:// to ws:// (or https:// to wss://) for WebSocket.
+  server_url: "http://vigil.local:9080"
+
+  # One-time registration token generated in the Vigil UI.
+  # Used only on the first connection to register this add-on.
+  # After successful registration, this value is no longer needed
+  # but is kept for reconnection authentication.
+  token: ""
+
+# ── Data Persistence ────────────────────────────────────────────────
+data:
+  # Path to the JSON file where the Agent Registry is persisted.
+  # The Hub is stateless aside from this file.
+  # Ensure this path is on a persistent volume in Docker deployments.
+  registry_path: "/data/agents.json"
+
+# ── Logging ─────────────────────────────────────────────────────────
+logging:
+  # Log level: debug, info, warn, error
+  level: "info"

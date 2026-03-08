@@ -19,12 +19,22 @@ This guide explains how to build, package, and publish a new add-on for the [Vig
 
 A Vigil add-on is a standalone Go daemon (or any language that can speak WebSocket + JSON) that:
 
-1. **Registers** with the Vigil server by posting its JSON UI manifest to `POST /api/addons`.
+1. **Registers** with the Vigil server by posting its JSON UI manifest to `POST /api/addons/connect` with a Bearer token.
 2. **Connects** via a persistent WebSocket at `ws://<vigil-server>/api/addons/ws?addon_id=<ID>`.
 3. **Streams** telemetry frames (progress, logs, notifications, heartbeats) to the Vigil server.
 4. **Renders** its UI dynamically in the Vigil dashboard via the manifest -- no frontend code required.
 
-Authentication uses a Bearer token provided during add-on registration in the Vigil dashboard.
+### Registration Flow
+
+Registration is a two-phase process:
+
+1. **Admin UI** -- In the Vigil dashboard, an admin clicks "Add Add-on", fills in the name and URL, and generates a one-time registration token (expires in 1 hour). This creates a placeholder add-on record and binds the token to it via `POST /api/addons/register`.
+
+2. **Add-on Self-Registration** -- The add-on daemon starts and calls `POST /api/addons/connect` with the token in the `Authorization: Bearer <token>` header and its manifest in the request body. The server validates the token, stores the manifest, and returns the `addon_id`.
+
+After registration, the add-on opens a WebSocket connection for telemetry. The token is reused for WebSocket authentication on reconnect.
+
+If the token is not yet bound to an add-on (admin hasn't completed step 1), the server returns `412 Precondition Failed` and the add-on should retry with backoff.
 
 ---
 
@@ -83,7 +93,9 @@ Every add-on must provide a JSON manifest that declares its name, version, and U
 | `progress` | Job progress bars with phase tracking, ETA, and throughput | `multi`, `show_phase`, `show_eta`, `show_speed`, `show_temperature` |
 | `chart` | Chart.js-based data visualization (line, bar, etc.) | `chart_type`, `x_axis`, `y_axis`, `thresholds[]`, `max_points` |
 | `smart-table` | Data tables with sorting, filtering, and expandable rows | `columns[]`, `source`, `sortable`, `filterable`, `expandable` |
+| `disk-storage` | Visual disk storage cards with progress bars, color-coded usage, and inline alias editing | `source`, `aliases`, `thresholds` |
 | `log-viewer` | Real-time streaming log viewer with level filtering | `max_lines`, `levels[]`, `show_timestamp`, `filterable_by_job` |
+| `deploy-wizard` | Docker/binary deployment generator with prefill support | `docker`, `binary`, `target_label`, `prefill_endpoint` |
 
 ### Form Field Types
 
@@ -107,6 +119,50 @@ Fields can be shown or hidden based on other field values using `depends_on` (fo
   "visible_when": { "command": ["burnin", "full"] }
 }
 ```
+
+### Deploy Wizard Component
+
+The `deploy-wizard` component generates Docker Compose or binary install instructions for deploying sub-components (e.g., agents). The Vigil UI renders this as a guided setup dialog with a "Copy docker compose" button.
+
+```json
+{
+  "type": "deploy-wizard",
+  "id": "add-agent",
+  "title": "Add Agent",
+  "config": {
+    "target_label": "Agent",
+    "docker": {
+      "image": "ghcr.io/pineappledr/vigil-addons-my-agent",
+      "default_tag": "latest",
+      "container_name": "my-agent",
+      "privileged": false,
+      "ports": ["9200:9200"],
+      "volumes": ["agent-data:/var/lib/agent"],
+      "named_volumes": ["agent-data"],
+      "environment": {
+        "HUB_URL": { "source": "prefill", "key": "hub_url", "label": "Hub URL" },
+        "HUB_PSK": { "source": "prefill", "key": "hub_psk", "label": "Pre-Shared Key" },
+        "AGENT_ID": { "source": "user_input", "label": "Agent ID", "placeholder": "agent-01" },
+        "TZ": { "source": "literal", "value": "${TZ:-UTC}" }
+      },
+      "platforms": {
+        "linux": { "label": "Standard Linux", "hint": "Deploy on any Linux host." }
+      }
+    },
+    "prefill_endpoint": "/api/deploy-info"
+  }
+}
+```
+
+**Environment variable sources:**
+
+| Source | Description |
+|--------|-------------|
+| `prefill` | Auto-filled from the `prefill_endpoint` response. The `key` maps to a JSON field in the response. |
+| `user_input` | User types a value in the UI. Shows `label` and `placeholder`. |
+| `literal` | Hard-coded value, not editable. Supports shell variable expansion syntax. |
+
+The `prefill_endpoint` is a relative path proxied through the Vigil Server to the add-on's own API (e.g., `GET /api/deploy-info`). The add-on should return a JSON object with keys matching the `prefill` environment variable `key` fields.
 
 ### Limits
 
@@ -333,11 +389,21 @@ Each add-on in the monorepo has its own GitHub Actions workflow with path filter
 Workflows only trigger when files within the add-on's directory change:
 
 ```yaml
+# burn-in add-on (uses v* tags)
 on:
   push:
     paths:
       - 'burn-in/**'
       - '.github/workflows/burnin.yml'
+    tags: ['v*']
+
+# snapraid add-on (uses snapraid-v* tags to avoid conflicts)
+on:
+  push:
+    paths:
+      - 'snapraid/**'
+      - '.github/workflows/snapraid.yml'
+    tags: ['snapraid-v*']
 ```
 
 ### Container Registry
@@ -366,18 +432,25 @@ ghcr.io/pineappledr/vigil-addons-<addon>-<component>:<tag>
    ```
 
 3. **Implement** the core components:
-   - `cmd/addon/main.go` -- Entry point, config loading, graceful shutdown
-   - `manifest.json` -- UI manifest (embed with `//go:embed`)
-   - WebSocket client for telemetry streaming
-   - Your domain-specific logic
+   - `cmd/hub/main.go` -- Hub entry point with manifest embedding (`//go:embed manifest.json`)
+   - `cmd/hub/manifest.json` -- UI manifest co-located for embedding
+   - `internal/hub/vigil_client.go` -- Registration client (`POST /api/addons/connect`)
+   - `internal/hub/vigil_telemetry.go` -- WebSocket telemetry client
+   - Your domain-specific logic (agents, schedulers, etc.)
 
-4. **Create** Dockerfiles for each component (if multi-tier).
+   For multi-tier add-ons (Hub/Agent pattern), also implement:
+   - `cmd/agent/main.go` -- Agent entry point
+   - Agent-to-Hub registration and telemetry push
+   - Hub-side agent registry, command routing, and telemetry aggregation
 
-5. **Add** a GitHub Actions workflow at `.github/workflows/my-addon.yml` following the conventions above.
+4. **Create** Dockerfiles for each component (e.g., `Dockerfile.hub`, `Dockerfile.agent`).
+
+5. **Add** a GitHub Actions workflow at `.github/workflows/my-addon.yml` following the conventions above. Use addon-specific tag prefixes (e.g., `myaddon-v*`) to avoid conflicts with other add-ons in the monorepo.
 
 6. **Test** locally against a running Vigil server:
-   - Register the add-on from the Vigil dashboard
-   - Run your daemon with the generated token and add-on ID
+   - In the Vigil dashboard, generate a registration token and fill in the "Add Add-on" form
+   - Configure your Hub with the `server_url` and `token` from the UI
+   - Start the Hub -- it will call `POST /api/addons/connect` to register and open a WebSocket for telemetry
    - Verify the manifest renders correctly and telemetry frames appear in real-time
 
 7. **Open** a pull request with your add-on, tests, and documentation.

@@ -1,0 +1,153 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/pineappledr/vigil-addons/snapraid/internal/agent"
+	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
+	agentdb "github.com/pineappledr/vigil-addons/snapraid/internal/db"
+	"github.com/pineappledr/vigil-addons/snapraid/internal/engine"
+	"github.com/pineappledr/vigil-addons/snapraid/internal/scheduler"
+)
+
+var version = "dev"
+
+func main() {
+	configPath := flag.String("config", "config.agent.yaml", "path to agent configuration file")
+	dbPath := flag.String("db", "/var/lib/vigil-snapraid-agent/agent.db", "path to agent SQLite database")
+	flag.Parse()
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+
+	cfg, err := config.LoadAgentConfig(*configPath)
+	if err != nil {
+		logger.Error("failed to load agent config", "error", err)
+		os.Exit(1)
+	}
+
+	if level, err := parseLogLevel(cfg.Logging.Level); err == nil {
+		logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			Level: level,
+		}))
+	}
+
+	db, err := agentdb.Open(*dbPath)
+	if err != nil {
+		logger.Error("failed to open database", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	config.LogAgentConfig(logger, cfg)
+
+	appCtx, appCancel := context.WithCancel(context.Background())
+	defer appCancel()
+
+	agentdb.StartPruneLoop(appCtx, db, 90*24*time.Hour, logger)
+
+	eng := engine.NewEngine(cfg.SnapRAID.BinaryPath, cfg.SnapRAID.ConfigPath, logger)
+
+	hostname, _ := os.Hostname()
+
+	agentID := cfg.Identity.AgentID
+	if agentID == "" {
+		agentID = hostname
+	}
+
+	advertiseAddr := cfg.Identity.AdvertiseAddr
+
+	collector := agent.NewCollector(agentID, hostname, version, logger)
+	collector.SetSnapraidVersion(eng.Version())
+
+	srv := agent.NewServer(cfg, eng, db, collector, logger)
+
+	// Populate telemetry cache on startup so data is immediately available.
+	go func() {
+		// Collect disk storage info (doesn't require snapraid binary).
+		if storage, err := eng.CollectDiskStorage(); err == nil {
+			collector.SetDiskStorage(storage)
+			logger.Info("startup: disk storage cached", "disks", len(storage))
+		} else {
+			logger.Warn("startup: disk storage collection failed", "error", err)
+		}
+
+		logger.Info("startup: running initial snapraid status")
+		statusCtx, statusCancel := context.WithTimeout(appCtx, 2*time.Minute)
+		defer statusCancel()
+		if report, err := eng.Status(statusCtx); err == nil {
+			collector.SetArrayStatus(report)
+			logger.Info("startup: array status cached")
+		} else {
+			logger.Warn("startup: snapraid status failed", "error", err)
+		}
+
+		logger.Info("startup: running initial snapraid smart")
+		smartCtx, smartCancel := context.WithTimeout(appCtx, 2*time.Minute)
+		defer smartCancel()
+		if report, err := eng.Smart(smartCtx); err == nil {
+			collector.SetSmartStatus(report)
+			logger.Info("startup: smart status cached")
+		} else {
+			logger.Warn("startup: snapraid smart failed", "error", err)
+		}
+	}()
+
+	// Start the cron scheduler for automated jobs.
+	sched := scheduler.New(eng, cfg, db, collector, collector, logger)
+	if err := sched.Start(appCtx); err != nil {
+		logger.Error("failed to start scheduler", "error", err)
+		os.Exit(1)
+	}
+	defer sched.Stop()
+
+	// Self-register with the Hub (retries in background)
+	if cfg.Hub.URL != "" {
+		if advertiseAddr == "" {
+			logger.Error("VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR is required for Hub registration (set to http://<host-LAN-IP>:<port>)")
+		} else {
+			go agent.RegisterWithHub(appCtx, cfg.Hub.URL, agentID, hostname, advertiseAddr, version, logger)
+			go agent.StartHubForwarder(appCtx, collector, cfg.Hub.URL, agentID, 30*time.Second, logger)
+		}
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Start()
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case sig := <-sigCh:
+		logger.Info("received signal, shutting down", "signal", sig)
+	case err := <-errCh:
+		logger.Error("server error", "error", err)
+		os.Exit(1)
+	}
+
+	appCancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Error("shutdown error", "error", err)
+		os.Exit(1)
+	}
+
+	logger.Info("agent stopped")
+}
+
+func parseLogLevel(s string) (slog.Level, error) {
+	var level slog.Level
+	err := level.UnmarshalText([]byte(s))
+	return level, err
+}

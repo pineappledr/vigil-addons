@@ -1,25 +1,25 @@
-name: "Burn-in Add-on: Build and Release"
+name: "SnapRAID Add-on: Build and Release"
 
 on:
   push:
     branches: [ "**" ]
     tags:
-      - 'v*'
+      - 'snapraid-v*'
     paths:
-      - 'burn-in/**'
-      - '.github/workflows/burnin.yml'
+      - 'snapraid/**'
+      - '.github/workflows/snapraid.yml'
   pull_request:
     branches: [ "main", "develop" ]
     paths:
-      - 'burn-in/**'
-      - '.github/workflows/burnin.yml'
+      - 'snapraid/**'
+      - '.github/workflows/snapraid.yml'
 
 env:
   REGISTRY: ghcr.io
-  HUB_IMAGE: ghcr.io/pineappledr/vigil-addons-burnin-hub
-  AGENT_IMAGE: ghcr.io/pineappledr/vigil-addons-burnin-agent
+  HUB_IMAGE: ghcr.io/pineappledr/vigil-addons-snapraid-hub
+  AGENT_IMAGE: ghcr.io/pineappledr/vigil-addons-snapraid-agent
   GO_VERSION: '1.26.1'
-  WORKDIR: burn-in
+  WORKDIR: snapraid
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ jobs:
       contents: read
     defaults:
       run:
-        working-directory: burn-in
+        working-directory: snapraid
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -41,7 +41,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: burn-in/go.sum
+          cache-dependency-path: snapraid/go.sum
 
       - name: Install dependencies
         run: go mod tidy
@@ -59,7 +59,7 @@ jobs:
         if: always()
         with:
           name: coverage-report
-          path: burn-in/coverage.out
+          path: snapraid/coverage.out
           retention-days: 7
 
       - name: Build check
@@ -77,7 +77,7 @@ jobs:
       contents: read
     defaults:
       run:
-        working-directory: burn-in
+        working-directory: snapraid
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -86,7 +86,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: burn-in/go.sum
+          cache-dependency-path: snapraid/go.sum
 
       - name: Run govulncheck
         run: |
@@ -104,21 +104,21 @@ jobs:
       - name: Build hub image for scanning
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
-          file: burn-in/Dockerfile.hub
+          context: ./snapraid
+          file: snapraid/Dockerfile.hub
           push: false
           load: true
-          tags: burnin-hub:scan
+          tags: snapraid-hub:scan
           cache-from: type=gha
 
       - name: Build agent image for scanning
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
-          file: burn-in/Dockerfile.agent
+          context: ./snapraid
+          file: snapraid/Dockerfile.agent
           push: false
           load: true
-          tags: burnin-agent:scan
+          tags: snapraid-agent:scan
           cache-from: type=gha
 
       - name: Install Trivy
@@ -129,10 +129,10 @@ jobs:
           sudo apt-get update && sudo apt-get install -y trivy
 
       - name: Trivy scan - Hub image
-        run: trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed burnin-hub:scan
+        run: trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed snapraid-hub:scan
 
       - name: Trivy scan - Agent image
-        run: trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed burnin-agent:scan
+        run: trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed snapraid-agent:scan
 
   # ─────────────────────────────────────────────────────────────────────────
   # PR PREVIEW - Build preview images for pull requests
@@ -168,8 +168,8 @@ jobs:
       - name: Build Hub
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
-          file: burn-in/Dockerfile.hub
+          context: ./snapraid
+          file: snapraid/Dockerfile.hub
           push: true
           build-args: VERSION=${{ steps.version.outputs.tag }}
           tags: ${{ env.HUB_IMAGE }}:${{ steps.version.outputs.tag }}
@@ -179,8 +179,8 @@ jobs:
       - name: Build Agent
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
-          file: burn-in/Dockerfile.agent
+          context: ./snapraid
+          file: snapraid/Dockerfile.agent
           push: true
           build-args: VERSION=${{ steps.version.outputs.tag }}
           tags: ${{ env.AGENT_IMAGE }}:${{ steps.version.outputs.tag }}
@@ -197,7 +197,7 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `## 🐳 Burn-in Preview Images Built!
+              body: `## 🐳 SnapRAID Preview Images Built!
 
             | Image | Pull Command |
             |-------|--------------|
@@ -223,7 +223,7 @@ jobs:
       packages: write
     defaults:
       run:
-        working-directory: burn-in
+        working-directory: snapraid
 
     steps:
       - name: Checkout repository
@@ -233,7 +233,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: burn-in/go.sum
+          cache-dependency-path: snapraid/go.sum
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -263,43 +263,43 @@ jobs:
           VERSION="${{ steps.meta.outputs.version }}"
           LDFLAGS="-s -w -X main.version=$VERSION"
 
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/burnin-hub-linux-amd64 ./cmd/hub
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/burnin-hub-linux-arm64 ./cmd/hub
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/burnin-agent-linux-amd64 ./cmd/agent
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/burnin-agent-linux-arm64 ./cmd/agent
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/snapraid-hub-linux-amd64 ./cmd/hub
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/snapraid-hub-linux-arm64 ./cmd/hub
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/snapraid-agent-linux-amd64 ./cmd/agent
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/snapraid-agent-linux-arm64 ./cmd/agent
 
           cd dist && sha256sum * > checksums.txt
 
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
-          name: burnin-${{ steps.meta.outputs.version }}
-          path: burn-in/dist/
+          name: snapraid-${{ steps.meta.outputs.version }}
+          path: snapraid/dist/
           retention-days: 14
 
       - name: Publish dev release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: dev-${{ steps.meta.outputs.branch }}
-          name: "Dev: ${{ steps.meta.outputs.branch }}"
+          tag_name: snapraid-dev-${{ steps.meta.outputs.branch }}
+          name: "SnapRAID Dev: ${{ steps.meta.outputs.branch }}"
           body: |
             Dev build from `${{ steps.meta.outputs.branch }}` branch (commit ${{ github.sha }}).
 
             **Version:** `${{ steps.meta.outputs.version }}`
           files: |
-            burn-in/dist/burnin-hub-linux-amd64
-            burn-in/dist/burnin-hub-linux-arm64
-            burn-in/dist/burnin-agent-linux-amd64
-            burn-in/dist/burnin-agent-linux-arm64
-            burn-in/dist/checksums.txt
+            snapraid/dist/snapraid-hub-linux-amd64
+            snapraid/dist/snapraid-hub-linux-arm64
+            snapraid/dist/snapraid-agent-linux-amd64
+            snapraid/dist/snapraid-agent-linux-arm64
+            snapraid/dist/checksums.txt
           prerelease: true
           make_latest: false
 
       - name: Build Hub image
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
-          file: burn-in/Dockerfile.hub
+          context: ./snapraid
+          file: snapraid/Dockerfile.hub
           push: true
           build-args: VERSION=${{ steps.meta.outputs.version }}
           tags: |
@@ -311,8 +311,8 @@ jobs:
       - name: Build Agent image
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
-          file: burn-in/Dockerfile.agent
+          context: ./snapraid
+          file: snapraid/Dockerfile.agent
           push: true
           build-args: VERSION=${{ steps.meta.outputs.version }}
           tags: |
@@ -357,8 +357,8 @@ jobs:
       - name: Build Hub
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
-          file: burn-in/Dockerfile.hub
+          context: ./snapraid
+          file: snapraid/Dockerfile.hub
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: VERSION=latest-${{ steps.meta.outputs.sha }}
@@ -371,8 +371,8 @@ jobs:
       - name: Build Agent
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
-          file: burn-in/Dockerfile.agent
+          context: ./snapraid
+          file: snapraid/Dockerfile.agent
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: VERSION=latest-${{ steps.meta.outputs.sha }}
@@ -383,19 +383,19 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ─────────────────────────────────────────────────────────────────────────
-  # RELEASE - Version tags (v*)
+  # RELEASE - Version tags (snapraid-v*)
   # ─────────────────────────────────────────────────────────────────────────
   release:
     name: Release
     needs: [test, security]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/snapraid-v')
     permissions:
       contents: write
       packages: write
     defaults:
       run:
-        working-directory: burn-in
+        working-directory: snapraid
 
     steps:
       - name: Checkout repository
@@ -406,7 +406,7 @@ jobs:
       - name: Extract version
         id: version
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION=${GITHUB_REF#refs/tags/snapraid-v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "is_prerelease=${{ contains(github.ref, '-') }}" >> $GITHUB_OUTPUT
 
@@ -414,7 +414,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: burn-in/go.sum
+          cache-dependency-path: snapraid/go.sum
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -432,8 +432,8 @@ jobs:
       - name: Build Hub image
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
-          file: burn-in/Dockerfile.hub
+          context: ./snapraid
+          file: snapraid/Dockerfile.hub
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: VERSION=${{ steps.version.outputs.version }}
@@ -446,8 +446,8 @@ jobs:
       - name: Build Agent image
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
-          file: burn-in/Dockerfile.agent
+          context: ./snapraid
+          file: snapraid/Dockerfile.agent
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: VERSION=${{ steps.version.outputs.version }}
@@ -463,21 +463,21 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           LDFLAGS="-s -w -X main.version=$VERSION"
 
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/burnin-hub-linux-amd64 ./cmd/hub
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/burnin-hub-linux-arm64 ./cmd/hub
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/burnin-agent-linux-amd64 ./cmd/agent
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/burnin-agent-linux-arm64 ./cmd/agent
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/snapraid-hub-linux-amd64 ./cmd/hub
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/snapraid-hub-linux-arm64 ./cmd/hub
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/snapraid-agent-linux-amd64 ./cmd/agent
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/snapraid-agent-linux-arm64 ./cmd/agent
 
           cd dist && sha256sum * > checksums.txt
 
       - name: Generate changelog
         id: changelog
         run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          PREV_TAG=$(git tag --sort=-version:refname | grep '^snapraid-v' | sed -n '2p')
           if [ -z "$PREV_TAG" ]; then
             echo "changes=Initial release" >> $GITHUB_OUTPUT
           else
-            CHANGES=$(git log --pretty=format:"- %s" $PREV_TAG..HEAD)
+            CHANGES=$(git log --pretty=format:"- %s" $PREV_TAG..HEAD -- snapraid/)
             echo "changes<<EOF" >> $GITHUB_OUTPUT
             echo "$CHANGES" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
@@ -486,16 +486,16 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Burn-in Add-on v${{ steps.version.outputs.version }}
+          name: SnapRAID Add-on v${{ steps.version.outputs.version }}
           body: |
-            ## Burn-in & Pre-clear Add-on v${{ steps.version.outputs.version }}
+            ## SnapRAID Add-on v${{ steps.version.outputs.version }}
 
             ### Changes
             ${{ steps.changelog.outputs.changes }}
 
             ---
 
-            ### 🐳 Docker Images
+            ### Docker Images
 
             | Image | Command |
             |-------|---------|
@@ -506,39 +506,39 @@ jobs:
 
             ---
 
-            ### 📦 Binaries
+            ### Binaries
 
             ```bash
             VERSION=${{ steps.version.outputs.version }}
 
             # Hub (AMD64)
-            curl -sL https://github.com/${{ github.repository }}/releases/retrieve/v${VERSION}/burnin-hub-linux-amd64 -o burnin-hub
-            chmod +x burnin-hub
+            curl -sL https://github.com/${{ github.repository }}/releases/retrieve/snapraid-v${VERSION}/snapraid-hub-linux-amd64 -o snapraid-hub
+            chmod +x snapraid-hub
 
             # Hub (ARM64)
-            curl -sL https://github.com/${{ github.repository }}/releases/retrieve/v${VERSION}/burnin-hub-linux-arm64 -o burnin-hub
-            chmod +x burnin-hub
+            curl -sL https://github.com/${{ github.repository }}/releases/retrieve/snapraid-v${VERSION}/snapraid-hub-linux-arm64 -o snapraid-hub
+            chmod +x snapraid-hub
 
             # Agent (AMD64)
-            curl -sL https://github.com/${{ github.repository }}/releases/retrieve/v${VERSION}/burnin-agent-linux-amd64 -o burnin-agent
-            chmod +x burnin-agent
+            curl -sL https://github.com/${{ github.repository }}/releases/retrieve/snapraid-v${VERSION}/snapraid-agent-linux-amd64 -o snapraid-agent
+            chmod +x snapraid-agent
 
             # Agent (ARM64)
-            curl -sL https://github.com/${{ github.repository }}/releases/retrieve/v${VERSION}/burnin-agent-linux-arm64 -o burnin-agent
-            chmod +x burnin-agent
+            curl -sL https://github.com/${{ github.repository }}/releases/retrieve/snapraid-v${VERSION}/snapraid-agent-linux-arm64 -o snapraid-agent
+            chmod +x snapraid-agent
             ```
 
-            ### ✅ Verify Checksums
+            ### Verify Checksums
 
             ```bash
-            curl -sL https://github.com/${{ github.repository }}/releases/retrieve/v${VERSION}/checksums.txt | sha256sum -c
+            curl -sL https://github.com/${{ github.repository }}/releases/retrieve/snapraid-v${VERSION}/checksums.txt | sha256sum -c
             ```
           files: |
-            burn-in/dist/burnin-hub-linux-amd64
-            burn-in/dist/burnin-hub-linux-arm64
-            burn-in/dist/burnin-agent-linux-amd64
-            burn-in/dist/burnin-agent-linux-arm64
-            burn-in/dist/checksums.txt
+            snapraid/dist/snapraid-hub-linux-amd64
+            snapraid/dist/snapraid-hub-linux-arm64
+            snapraid/dist/snapraid-agent-linux-amd64
+            snapraid/dist/snapraid-agent-linux-arm64
+            snapraid/dist/checksums.txt
           draft: false
           prerelease: ${{ steps.version.outputs.is_prerelease }}
-          make_latest: true
+          make_latest: false

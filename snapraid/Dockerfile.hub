@@ -5,10 +5,10 @@ WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags="-s -w -X main.version=$VERSION" \
-    -o /burnin-hub ./cmd/hub
+    -o /snapraid-hub ./cmd/hub
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata
-COPY --from=builder /burnin-hub /usr/local/bin/burnin-hub
-EXPOSE 9100
-ENTRYPOINT ["burnin-hub"]
+COPY --from=builder /snapraid-hub /usr/local/bin/snapraid-hub
+EXPOSE 9300
+ENTRYPOINT ["snapraid-hub"]

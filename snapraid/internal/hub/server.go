@@ -53,7 +53,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/jobs/history", s.handleProxyToAgent)
 	s.mux.HandleFunc("GET /api/logs/history", s.handleProxyToAgent)
 	s.mux.HandleFunc("GET /api/disk_status", s.handleTelemetryField)
-	s.mux.HandleFunc("GET /api/smart_status", s.handleTelemetryField)
 	s.mux.HandleFunc("GET /api/active_job", s.handleTelemetryField)
 	s.mux.HandleFunc("GET /api/disk_storage", s.handleTelemetryField)
 	s.mux.HandleFunc("GET /api/jobs/active", s.handleActiveJobs)
@@ -368,7 +367,6 @@ func (s *Server) handleProxyToAgent(w http.ResponseWriter, r *http.Request) {
 // When no cached data exists, falls back to fetching directly from the agent.
 //
 //	/api/disk_status  → array_status (contains .disk_status array)
-//	/api/smart_status → smart_status (contains .disks array)
 //	/api/active_job   → active_job
 func (s *Server) handleTelemetryField(w http.ResponseWriter, r *http.Request) {
 	// Map URL path to telemetry payload field name and agent fallback path.
@@ -378,7 +376,6 @@ func (s *Server) handleTelemetryField(w http.ResponseWriter, r *http.Request) {
 	}
 	fieldMap := map[string]fieldInfo{
 		"/api/disk_status":  {telemetryKey: "array_status", agentPath: "/api/array_status"},
-		"/api/smart_status": {telemetryKey: "smart_status", agentPath: "/api/smart_status"},
 		"/api/active_job":   {telemetryKey: "active_job", agentPath: "/api/active_job"},
 		"/api/disk_storage": {telemetryKey: "disk_storage", agentPath: "/api/disk_storage"},
 	}
@@ -393,12 +390,12 @@ func (s *Server) handleTelemetryField(w http.ResponseWriter, r *http.Request) {
 
 	// Try cached telemetry first.
 	data := s.aggregator.LatestTelemetryField(agentID, info.telemetryKey)
-	if data != nil {
-		// For disk_status and smart_status, extract the disk array from the object.
-		if info.telemetryKey == "array_status" || info.telemetryKey == "smart_status" {
+	if data != nil && string(data) != "null" {
+		// For disk_status, extract the disk_status array from the nested object.
+		if info.telemetryKey == "array_status" {
 			var obj map[string]json.RawMessage
 			if err := json.Unmarshal(data, &obj); err == nil {
-				for _, key := range []string{"disks", "disk_status"} {
+				for _, key := range []string{"disk_status", "disks"} {
 					if arr, exists := obj[key]; exists {
 						w.Header().Set("Content-Type", "application/json")
 						w.Write(arr)
@@ -406,10 +403,12 @@ func (s *Server) handleTelemetryField(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+			// array_status exists but no extractable array — fall through to agent proxy.
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(data)
+			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(data)
-		return
 	}
 
 	// No cached telemetry — fall back to fetching directly from agent.

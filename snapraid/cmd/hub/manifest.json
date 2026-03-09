@@ -82,24 +82,6 @@
               "confirm_message": "Abort the running SnapRAID operation?"
             }
           }
-        },
-        {
-          "type": "smart-table",
-          "id": "smart-overview",
-          "title": "SMART Overview",
-          "config": {
-            "source": "smart_status",
-            "columns": [
-              { "key": "disk_name", "label": "Disk" },
-              { "key": "device", "label": "Device" },
-              { "key": "serial", "label": "Serial" },
-              { "key": "temperature", "label": "Temp" },
-              { "key": "power_on_days", "label": "Power-On Days" },
-              { "key": "error_count", "label": "Errors" },
-              { "key": "failure_probability", "label": "Fail %" },
-              { "key": "status", "label": "Status" }
-            ]
-          }
         }
       ]
     },

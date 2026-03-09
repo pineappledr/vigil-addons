@@ -70,22 +70,6 @@
           ]
         },
         {
-          "id": "smart_overview",
-          "type": "data-table",
-          "label": "SMART Overview",
-          "data_source": "telemetry.smart_status.disks",
-          "columns": [
-            {"key": "disk_name", "label": "Disk"},
-            {"key": "device", "label": "Device"},
-            {"key": "serial", "label": "Serial"},
-            {"key": "temperature", "label": "Temp", "format": "celsius"},
-            {"key": "power_on_days", "label": "Power-On Days", "format": "number"},
-            {"key": "error_count", "label": "Errors", "format": "number"},
-            {"key": "failure_probability", "label": "Fail %", "format": "percent"},
-            {"key": "status", "label": "Status"}
-          ]
-        },
-        {
           "id": "scrub_coverage",
           "type": "progress-bar",
           "label": "Scrub Coverage",

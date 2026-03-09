@@ -276,50 +276,115 @@ func (a *Aggregator) processFrame(frame agentFrame) {
 	upstream := a.upstream
 	a.mu.Unlock()
 
-	if upstream == nil {
-		a.logger.Warn("frame dropped: upstream not configured",
-			"agent_id", frame.AgentID,
-			"type", frame.Type,
-			"job_id", frame.JobID,
-		)
-		return
-	}
-
+	// Always store data locally so dashboard queries work even when
+	// the upstream Vigil connection is not yet established.
 	switch frame.Type {
 	case "progress":
-		a.logger.Info("relaying progress frame upstream",
+		a.logger.Info("processing progress frame",
 			"agent_id", frame.AgentID,
 			"job_id", frame.JobID,
 			"phase", frame.Phase,
 			"percent", frame.Percent,
 		)
-		a.forwardProgress(upstream, frame)
-		a.evaluateProgress(upstream, frame)
+		a.storeProgressLocally(frame)
 		a.storePhaseTransition(frame)
+		a.cleanupIfComplete(frame)
+		if upstream != nil {
+			a.forwardProgress(upstream, frame)
+			a.evaluateProgress(upstream, frame)
+		}
 	case "log":
-		a.logger.Info("relaying log frame upstream",
+		a.logger.Info("processing log frame",
 			"agent_id", frame.AgentID,
 			"job_id", frame.JobID,
 			"level", frame.resolveLevel(),
 		)
-		a.forwardLog(upstream, frame)
-		a.evaluateLog(upstream, frame)
+		a.storeLogLocally(frame)
+		if upstream != nil {
+			a.forwardLog(upstream, frame)
+			a.evaluateLog(upstream, frame)
+		}
 	case "metric":
-		a.logger.Debug("relaying metric frame upstream",
+		a.logger.Debug("processing metric frame",
 			"agent_id", frame.AgentID,
 			"key", frame.Key,
 		)
-		a.forwardMetric(upstream, frame)
+		if upstream != nil {
+			a.forwardMetric(upstream, frame)
+		}
 	case "chart":
-		a.logger.Debug("relaying chart frame upstream",
+		a.logger.Debug("processing chart frame",
 			"agent_id", frame.AgentID,
 			"component_id", frame.ComponentID,
 			"key", frame.Key,
 		)
-		a.forwardChart(upstream, frame)
+		a.storeChartLocally(frame)
+		if upstream != nil {
+			a.forwardChart(upstream, frame)
+		}
 	default:
 		a.logger.Warn("unknown frame type from agent", "agent_id", frame.AgentID, "type", frame.Type)
 	}
+}
+
+// storeProgressLocally persists the latest progress and SMART deltas for a
+// job so that dashboard queries work independently of the upstream connection.
+func (a *Aggregator) storeProgressLocally(frame agentFrame) {
+	if frame.JobID == "" {
+		return
+	}
+	p := ProgressPayload{
+		AgentID:      frame.AgentID,
+		JobID:        frame.JobID,
+		Command:      frame.Command,
+		Phase:        frame.Phase,
+		PhaseDetail:  frame.PhaseDetail,
+		Percent:      frame.Percent,
+		SpeedMbps:    frame.SpeedMbps,
+		TempC:        frame.TempC,
+		ElapsedSec:   frame.ElapsedSec,
+		ETASec:       frame.ETASec,
+		BadblockErrs: frame.BadblockErrs,
+		SmartDeltas:  frame.SmartDeltas,
+	}
+	a.storeProgress(frame.JobID, p)
+	if len(frame.SmartDeltas) > 0 {
+		a.storeSmartDeltas(frame.JobID, frame.SmartDeltas)
+	}
+}
+
+// storeLogLocally persists a log entry to the ring buffer independently of upstream.
+func (a *Aggregator) storeLogLocally(frame agentFrame) {
+	ts := frame.Timestamp
+	if ts == "" {
+		ts = time.Now().UTC().Format(time.RFC3339)
+	}
+	source := frame.Source
+	if source == "" {
+		source = frame.AgentID
+	}
+	a.storeLog(StoredLog{
+		Level:     frame.resolveLevel(),
+		Message:   frame.Message,
+		Source:    source,
+		JobID:     frame.JobID,
+		Timestamp: ts,
+	})
+}
+
+// storeChartLocally persists a chart data point independently of upstream.
+func (a *Aggregator) storeChartLocally(frame agentFrame) {
+	ts := frame.Timestamp
+	if ts == "" {
+		ts = time.Now().UTC().Format(time.RFC3339)
+	}
+	a.storeChartPoint(StoredChartPoint{
+		ComponentID: frame.ComponentID,
+		Key:         frame.Key,
+		Value:       frame.Value,
+		Source:      frame.AgentID,
+		Timestamp:   ts,
+	})
 }
 
 func (a *Aggregator) forwardProgress(upstream *TelemetryClient, frame agentFrame) {
@@ -336,14 +401,6 @@ func (a *Aggregator) forwardProgress(upstream *TelemetryClient, frame agentFrame
 		ETASec:       frame.ETASec,
 		BadblockErrs: frame.BadblockErrs,
 		SmartDeltas:  frame.SmartDeltas,
-	}
-
-	// Persist latest progress and SMART deltas so they survive page navigation.
-	if frame.JobID != "" {
-		a.storeProgress(frame.JobID, p)
-		if len(frame.SmartDeltas) > 0 {
-			a.storeSmartDeltas(frame.JobID, frame.SmartDeltas)
-		}
 	}
 
 	if err := upstream.SendProgress(p); err != nil {
@@ -387,15 +444,6 @@ func (a *Aggregator) forwardChart(upstream *TelemetryClient, frame agentFrame) {
 		Timestamp:   ts,
 	}
 
-	// Persist chart data point for historical queries.
-	a.storeChartPoint(StoredChartPoint{
-		ComponentID: frame.ComponentID,
-		Key:         frame.Key,
-		Value:       frame.Value,
-		Source:      frame.AgentID,
-		Timestamp:   ts,
-	})
-
 	if err := upstream.SendChart(c); err != nil {
 		a.logger.Warn("failed to relay chart upstream",
 			"agent_id", frame.AgentID,
@@ -423,15 +471,6 @@ func (a *Aggregator) forwardLog(upstream *TelemetryClient, frame agentFrame) {
 		JobID:       frame.JobID,
 		Timestamp:   ts,
 	}
-
-	// Persist to the ring buffer for historical queries.
-	a.storeLog(StoredLog{
-		Level:     l.Level,
-		Message:   l.Message,
-		Source:    l.Source,
-		JobID:     l.JobID,
-		Timestamp: l.Timestamp,
-	})
 
 	if err := upstream.SendLog(l); err != nil {
 		a.logger.Warn("failed to relay log upstream",
@@ -505,6 +544,16 @@ func (a *Aggregator) CleanupJobPhase(jobID string) {
 	a.logMu.Lock()
 	delete(a.lastPhase, jobID)
 	a.logMu.Unlock()
+}
+
+// cleanupIfComplete removes tracking state for completed or cancelled jobs
+// so it runs regardless of upstream connectivity.
+func (a *Aggregator) cleanupIfComplete(frame agentFrame) {
+	if frame.Percent >= 100.0 && (frame.Phase == "COMPLETE" || frame.Phase == "CANCELLED") {
+		a.CleanupJobPhase(frame.JobID)
+		a.cleanupSmartDeltas(frame.JobID)
+		a.cleanupProgress(frame.JobID)
+	}
 }
 
 // storeSmartDeltas saves the latest enriched SMART deltas for a job.
@@ -674,12 +723,6 @@ func (a *Aggregator) evaluateProgress(upstream *TelemetryClient, frame agentFram
 				fmt.Sprintf("Burn-in passed on agent %s, pre-clear beginning", frame.AgentID))
 		}
 
-		// Clean up tracking state for completed or cancelled jobs.
-		if frame.Phase == "COMPLETE" || frame.Phase == "CANCELLED" {
-			a.CleanupJobPhase(frame.JobID)
-			a.cleanupSmartDeltas(frame.JobID)
-			a.cleanupProgress(frame.JobID)
-		}
 	}
 }
 

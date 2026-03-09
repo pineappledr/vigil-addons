@@ -64,14 +64,6 @@ type DaemonInfo struct {
 	SnapraidVersion string `json:"snapraid_version"`
 }
 
-// LogStreamFrame is a single log line transmitted in real-time.
-type LogStreamFrame struct {
-	AgentID   string    `json:"agent_id"`
-	Timestamp time.Time `json:"timestamp"`
-	Stream    string    `json:"stream"` // "stdout" or "stderr"
-	Line      string    `json:"line"`
-}
-
 // Collector aggregates engine data into telemetry payloads.
 type Collector struct {
 	mu             sync.RWMutex

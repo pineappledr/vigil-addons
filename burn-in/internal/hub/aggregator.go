@@ -631,6 +631,18 @@ func (a *Aggregator) QueryActiveJobs() []ProgressPayload {
 	return jobs
 }
 
+// BusyAgentIDs returns a set of agent IDs that currently have active jobs.
+func (a *Aggregator) BusyAgentIDs() map[string]bool {
+	a.progressMu.Lock()
+	defer a.progressMu.Unlock()
+
+	busy := make(map[string]bool, len(a.activeProgress))
+	for _, p := range a.activeProgress {
+		busy[p.AgentID] = true
+	}
+	return busy
+}
+
 // QueryLogs returns stored log entries, optionally filtered to those
 // with a timestamp within the given time range. An empty timeRange
 // returns all stored logs.

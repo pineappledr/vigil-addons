@@ -106,8 +106,7 @@ func (s *Server) handleDeployInfo(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleListAgents(w http.ResponseWriter, _ *http.Request) {
-	// TODO: pass actual busy agents from job manager when available
-	agents := s.registry.ListViews(nil)
+	agents := s.registry.ListViews(s.aggregator.BusyAgentIDs())
 	writeJSON(w, http.StatusOK, agents)
 }
 

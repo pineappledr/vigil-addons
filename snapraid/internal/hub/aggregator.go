@@ -223,7 +223,7 @@ func (a *Aggregator) evaluateAgentEvent(tc *TelemetryClient, agentID string, evt
 	a.emitNotification(tc, agentID, evt.Type, evt.Severity, evt.Message+" on "+agentID)
 }
 
-// evaluateJobTransition detects job started/completed transitions.
+// evaluateJobTransition detects job started/completed and phase transitions.
 func (a *Aggregator) evaluateJobTransition(tc *TelemetryClient, agentID string, job *agentActiveJob) {
 	a.mu.Lock()
 	prev := a.lastJobs[agentID]
@@ -249,8 +249,21 @@ func (a *Aggregator) evaluateJobTransition(tc *TelemetryClient, agentID string, 
 	}
 
 	if job != nil {
+		// Detect phase transition within a running job.
+		prevPhase := ""
+		if prev != nil {
+			prevPhase = prev.Phase
+		}
 		a.lastJobs[agentID] = &trackedJob{Type: job.Type, Phase: job.CurrentPhase}
+		a.mu.Unlock()
+
+		if prevPhase != "" && job.CurrentPhase != "" && prevPhase != job.CurrentPhase {
+			a.emitNotification(tc, agentID, "phase_complete", "info",
+				"SnapRAID "+prevPhase+" completed, now running "+job.CurrentPhase+" on "+agentID)
+		}
+		return
 	}
+
 	a.mu.Unlock()
 }
 

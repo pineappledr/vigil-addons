@@ -84,6 +84,10 @@ type Aggregator struct {
 	// phase transitions can be stored as synthetic log entries in the
 	// ring buffer, making them available to historical queries.
 	lastPhase map[string]string // key: jobID, value: "phase|detail"
+
+	// knownJobs tracks which jobs have been seen so we can detect
+	// job_started (first frame) and job_complete (COMPLETE/CANCELLED).
+	knownJobs map[string]bool // key: jobID → true if seen
 }
 
 // NewAggregator creates a telemetry aggregator.
@@ -98,6 +102,7 @@ func NewAggregator(upstream *TelemetryClient, registry *AgentRegistry, psk strin
 		lastPhase:      make(map[string]string),
 		smartDeltas:    make(map[string]json.RawMessage),
 		activeProgress: make(map[string]ProgressPayload),
+		knownJobs:      make(map[string]bool),
 	}
 }
 
@@ -696,6 +701,10 @@ func (a *Aggregator) QueryChartHistory(componentID, timeRange string) []StoredCh
 
 // evaluateProgress inspects progress frames for notification triggers.
 func (a *Aggregator) evaluateProgress(upstream *TelemetryClient, frame agentFrame) {
+	if frame.JobID != "" {
+		a.evaluateJobLifecycle(upstream, frame)
+	}
+
 	// Temperature alerts.
 	if frame.TempC > 0 {
 		a.checkTemperature(upstream, frame)
@@ -708,21 +717,60 @@ func (a *Aggregator) evaluateProgress(upstream *TelemetryClient, frame agentFram
 
 	// Badblock error detection.
 	if frame.BadblockErrs > 0 {
-		a.emitNotification(upstream, frame, "JobFailed", "critical",
+		a.emitNotification(upstream, frame, "job_failed", "critical",
 			fmt.Sprintf("Bad blocks detected on drive (%s): %d errors found", frame.AgentID, frame.BadblockErrs))
 	}
 
 	// Phase completion (100% signals a phase is done).
 	if frame.Percent >= 100.0 && frame.Phase != "" {
-		a.emitNotification(upstream, frame, "PhaseComplete", "info",
+		a.emitNotification(upstream, frame, "phase_complete", "info",
 			fmt.Sprintf("Phase %q completed on agent %s", frame.Phase, frame.AgentID))
 
 		// Special case: burn-in complete in a full pipeline.
 		if frame.Command == "full" && frame.Phase == "complete" {
-			a.emitNotification(upstream, frame, "BurninPassed", "info",
+			a.emitNotification(upstream, frame, "burnin_passed", "info",
 				fmt.Sprintf("Burn-in passed on agent %s, pre-clear beginning", frame.AgentID))
 		}
 
+	}
+}
+
+// evaluateJobLifecycle detects job_started and job_complete transitions.
+func (a *Aggregator) evaluateJobLifecycle(upstream *TelemetryClient, frame agentFrame) {
+	a.progressMu.Lock()
+	seen := a.knownJobs[frame.JobID]
+	a.progressMu.Unlock()
+
+	if !seen {
+		// First progress frame for this job — mark as started.
+		a.progressMu.Lock()
+		a.knownJobs[frame.JobID] = true
+		a.progressMu.Unlock()
+
+		cmd := frame.Command
+		if cmd == "" {
+			cmd = "job"
+		}
+		a.emitNotification(upstream, frame, "job_started", "info",
+			fmt.Sprintf("Burn-in %s started on agent %s (job %s)", cmd, frame.AgentID, frame.JobID))
+	}
+
+	// Detect job completion.
+	if frame.Percent >= 100.0 && (frame.Phase == "COMPLETE" || frame.Phase == "CANCELLED") {
+		a.progressMu.Lock()
+		delete(a.knownJobs, frame.JobID)
+		a.progressMu.Unlock()
+
+		status := "completed"
+		if frame.Phase == "CANCELLED" {
+			status = "cancelled"
+		}
+		cmd := frame.Command
+		if cmd == "" {
+			cmd = "job"
+		}
+		a.emitNotification(upstream, frame, "job_complete", "info",
+			fmt.Sprintf("Burn-in %s %s on agent %s (job %s)", cmd, status, frame.AgentID, frame.JobID))
 	}
 }
 
@@ -730,18 +778,21 @@ func (a *Aggregator) evaluateProgress(upstream *TelemetryClient, frame agentFram
 func (a *Aggregator) evaluateLog(upstream *TelemetryClient, frame agentFrame) {
 	switch frame.resolveLevel() {
 	case "error":
-		a.emitNotification(upstream, frame, "JobFailed", "critical",
+		a.emitNotification(upstream, frame, "job_failed", "critical",
 			fmt.Sprintf("Agent %s reported error: %s", frame.AgentID, frame.Message))
+	case "warning", "warn":
+		a.emitNotification(upstream, frame, "smart_warning", "warning",
+			fmt.Sprintf("Agent %s warning: %s", frame.AgentID, frame.Message))
 	}
 }
 
 func (a *Aggregator) checkTemperature(upstream *TelemetryClient, frame agentFrame) {
 	if frame.TempC >= a.thresholds.TempCriticalC {
-		a.emitNotification(upstream, frame, "TempAlert", "critical",
+		a.emitNotification(upstream, frame, "temp_alert", "critical",
 			fmt.Sprintf("Drive temperature critical on agent %s: %d°C (threshold: %d°C)",
 				frame.AgentID, frame.TempC, a.thresholds.TempCriticalC))
 	} else if frame.TempC >= a.thresholds.TempWarningC {
-		a.emitNotification(upstream, frame, "TempAlert", "warning",
+		a.emitNotification(upstream, frame, "temp_alert", "warning",
 			fmt.Sprintf("Drive temperature warning on agent %s: %d°C (threshold: %d°C)",
 				frame.AgentID, frame.TempC, a.thresholds.TempWarningC))
 	}
@@ -763,7 +814,7 @@ func (a *Aggregator) checkSmartDeltas(upstream *TelemetryClient, frame agentFram
 	for id, d := range deltas {
 		delta := d.Current - d.Baseline
 		if delta > 0 {
-			a.emitNotification(upstream, frame, "SmartWarning", "warning",
+			a.emitNotification(upstream, frame, "smart_warning", "warning",
 				fmt.Sprintf("SMART attribute %s (%s) increased by %d on agent %s (baseline: %d, current: %d)",
 					id, d.Name, delta, frame.AgentID, d.Baseline, d.Current))
 		}

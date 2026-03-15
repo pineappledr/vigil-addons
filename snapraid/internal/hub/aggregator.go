@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/pineappledr/vigil-addons/shared/vigilclient"
 )
 
 // AggregatedFrame wraps an Agent's telemetry with its identity for upstream transmission.
@@ -64,7 +66,7 @@ type Aggregator struct {
 	mu        sync.RWMutex
 	registry  *Registry
 	upstream  chan<- []byte
-	telemetry *TelemetryClient // optional, for typed notification frames
+	telemetry *vigilclient.TelemetryClient // optional, for typed notification frames
 	logger    *slog.Logger
 
 	// Per-agent tracking for state transition detection.
@@ -94,7 +96,7 @@ func NewAggregator(registry *Registry, upstream chan<- []byte, logger *slog.Logg
 
 // SetTelemetryClient attaches a TelemetryClient for sending typed notification
 // frames directly upstream. Must be called before IngestAgentFrame.
-func (a *Aggregator) SetTelemetryClient(tc *TelemetryClient) {
+func (a *Aggregator) SetTelemetryClient(tc *vigilclient.TelemetryClient) {
 	a.mu.Lock()
 	a.telemetry = tc
 	a.mu.Unlock()
@@ -190,7 +192,7 @@ func (a *Aggregator) evaluateTelemetry(agentID string, raw []byte) {
 // lifecycle) as notifications upstream, deduplicating by event ID.
 // Gate failures are further deduplicated by message so that repeated identical
 // failures (e.g. missing content file) only notify once until resolved.
-func (a *Aggregator) evaluateAgentEvent(tc *TelemetryClient, agentID string, evt *agentEvent) {
+func (a *Aggregator) evaluateAgentEvent(tc *vigilclient.TelemetryClient, agentID string, evt *agentEvent) {
 	if evt == nil || evt.ID == "" {
 		return
 	}
@@ -224,7 +226,7 @@ func (a *Aggregator) evaluateAgentEvent(tc *TelemetryClient, agentID string, evt
 }
 
 // evaluateJobTransition detects job started/completed and phase transitions.
-func (a *Aggregator) evaluateJobTransition(tc *TelemetryClient, agentID string, job *agentActiveJob) {
+func (a *Aggregator) evaluateJobTransition(tc *vigilclient.TelemetryClient, agentID string, job *agentActiveJob) {
 	a.mu.Lock()
 	prev := a.lastJobs[agentID]
 
@@ -268,7 +270,7 @@ func (a *Aggregator) evaluateJobTransition(tc *TelemetryClient, agentID string, 
 }
 
 // evaluateSmartStatus checks for SMART failures and emits warnings.
-func (a *Aggregator) evaluateSmartStatus(tc *TelemetryClient, agentID string, smart *agentSmartState) {
+func (a *Aggregator) evaluateSmartStatus(tc *vigilclient.TelemetryClient, agentID string, smart *agentSmartState) {
 	if smart == nil {
 		return
 	}
@@ -335,8 +337,8 @@ func (a *Aggregator) LatestTelemetryField(agentID, field string) json.RawMessage
 	return m[field]
 }
 
-func (a *Aggregator) emitNotification(tc *TelemetryClient, agentID, eventType, severity, message string) {
-	n := NotificationPayload{
+func (a *Aggregator) emitNotification(tc *vigilclient.TelemetryClient, agentID, eventType, severity, message string) {
+	n := vigilclient.NotificationPayload{
 		EventType: eventType,
 		Severity:  severity,
 		Source:    "snapraid-hub",
@@ -344,7 +346,7 @@ func (a *Aggregator) emitNotification(tc *TelemetryClient, agentID, eventType, s
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	if err := tc.SendNotification(n); err != nil {
+	if err := tc.Send("notification", n); err != nil {
 		a.logger.Warn("failed to transmit notification upstream",
 			"event_type", eventType,
 			"agent_id", agentID,

@@ -1,4 +1,4 @@
-package hub
+package vigilclient
 
 import (
 	"bytes"
@@ -13,44 +13,38 @@ import (
 )
 
 const (
+	registerPath  = "/api/addons/connect"
 	backoffBase   = 2 * time.Second
 	backoffMax    = 60 * time.Second
 	backoffFactor = 2.0
-	registerPath  = "/api/addons/connect"
 )
 
 // VigilClient handles registration and communication with the Vigil server.
 type VigilClient struct {
 	serverURL  string
-	agentToken string
+	token      string
 	manifest   json.RawMessage
 	httpClient *http.Client
 	logger     *slog.Logger
 }
 
-// RegistrationResponse is the response from a successful addon registration.
-type RegistrationResponse struct {
-	AddonID   int64  `json:"addon_id"`
-	SessionID string `json:"session_id"`
-}
-
 // NewVigilClient creates a client for communicating with the Vigil server.
 // manifestData should be the raw bytes of the embedded manifest.json.
-func NewVigilClient(serverURL, agentToken string, manifestData []byte, logger *slog.Logger) (*VigilClient, error) {
+func NewVigilClient(serverURL, token string, manifestData []byte, logger *slog.Logger) (*VigilClient, error) {
 	if !json.Valid(manifestData) {
 		return nil, fmt.Errorf("embedded manifest is not valid JSON")
 	}
 
 	return &VigilClient{
 		serverURL:  serverURL,
-		agentToken: agentToken,
+		token:      token,
 		manifest:   json.RawMessage(manifestData),
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		logger:     logger,
 	}, nil
 }
 
-// registrationPayload is the body sent to POST /api/addons.
+// registrationPayload is the body sent to POST /api/addons/connect.
 type registrationPayload struct {
 	Manifest json.RawMessage `json:"manifest"`
 }
@@ -75,7 +69,7 @@ func (c *VigilClient) Register(ctx context.Context) (*RegistrationResponse, erro
 		}
 
 		attempt++
-		delay := backoffDelay(attempt)
+		delay := BackoffDelay(attempt)
 		c.logger.Warn("vigil registration failed, retrying",
 			"error", err,
 			"attempt", attempt,
@@ -98,7 +92,7 @@ func (c *VigilClient) doRegister(ctx context.Context, body []byte) (*Registratio
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.agentToken)
+	req.Header.Set("Authorization", "Bearer "+c.token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -122,7 +116,8 @@ func (c *VigilClient) doRegister(ctx context.Context, body []byte) (*Registratio
 	return &result, nil
 }
 
-func backoffDelay(attempt int) time.Duration {
+// BackoffDelay computes an exponential backoff duration for the given attempt.
+func BackoffDelay(attempt int) time.Duration {
 	delay := float64(backoffBase) * math.Pow(backoffFactor, float64(attempt-1))
 	if delay > float64(backoffMax) {
 		delay = float64(backoffMax)

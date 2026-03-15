@@ -10,7 +10,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/pineappledr/vigil-addons/shared/vigilclient"
 )
+
+const maxMessageSize = 64 * 1024 // 64 KB per Vigil spec
 
 var wsUpgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
@@ -57,7 +60,7 @@ const maxStoredChartPoints = 2000
 // evaluates frames for notification triggers, and multiplexes
 // everything into the single upstream TelemetryClient.
 type Aggregator struct {
-	upstream   *TelemetryClient
+	upstream   *vigilclient.TelemetryClient
 	registry   *AgentRegistry
 	psk        string
 	thresholds AlertThresholds
@@ -91,7 +94,7 @@ type Aggregator struct {
 }
 
 // NewAggregator creates a telemetry aggregator.
-func NewAggregator(upstream *TelemetryClient, registry *AgentRegistry, psk string, thresholds AlertThresholds, logger *slog.Logger) *Aggregator {
+func NewAggregator(upstream *vigilclient.TelemetryClient, registry *AgentRegistry, psk string, thresholds AlertThresholds, logger *slog.Logger) *Aggregator {
 	return &Aggregator{
 		upstream:   upstream,
 		registry:   registry,
@@ -108,7 +111,7 @@ func NewAggregator(upstream *TelemetryClient, registry *AgentRegistry, psk strin
 
 // SetUpstream replaces the upstream telemetry client. This is called once
 // the Vigil registration completes and the TelemetryClient is available.
-func (a *Aggregator) SetUpstream(t *TelemetryClient) {
+func (a *Aggregator) SetUpstream(t *vigilclient.TelemetryClient) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.upstream = t
@@ -392,7 +395,7 @@ func (a *Aggregator) storeChartLocally(frame agentFrame) {
 	})
 }
 
-func (a *Aggregator) forwardProgress(upstream *TelemetryClient, frame agentFrame) {
+func (a *Aggregator) forwardProgress(upstream *vigilclient.TelemetryClient, frame agentFrame) {
 	p := ProgressPayload{
 		AgentID:      frame.AgentID,
 		JobID:        frame.JobID,
@@ -408,7 +411,7 @@ func (a *Aggregator) forwardProgress(upstream *TelemetryClient, frame agentFrame
 		SmartDeltas:  frame.SmartDeltas,
 	}
 
-	if err := upstream.SendProgress(p); err != nil {
+	if err := upstream.Send("progress", p); err != nil {
 		a.logger.Warn("failed to relay progress upstream",
 			"agent_id", frame.AgentID,
 			"job_id", frame.JobID,
@@ -418,7 +421,7 @@ func (a *Aggregator) forwardProgress(upstream *TelemetryClient, frame agentFrame
 	}
 }
 
-func (a *Aggregator) forwardMetric(upstream *TelemetryClient, frame agentFrame) {
+func (a *Aggregator) forwardMetric(upstream *vigilclient.TelemetryClient, frame agentFrame) {
 	ts := frame.Timestamp
 	if ts == "" {
 		ts = time.Now().UTC().Format(time.RFC3339)
@@ -428,7 +431,7 @@ func (a *Aggregator) forwardMetric(upstream *TelemetryClient, frame agentFrame) 
 		Value:     frame.Value,
 		Timestamp: ts,
 	}
-	if err := upstream.SendMetric(m); err != nil {
+	if err := upstream.Send("metric", m); err != nil {
 		a.logger.Warn("failed to relay metric upstream",
 			"agent_id", frame.AgentID,
 			"key", frame.Key,
@@ -437,7 +440,7 @@ func (a *Aggregator) forwardMetric(upstream *TelemetryClient, frame agentFrame) 
 	}
 }
 
-func (a *Aggregator) forwardChart(upstream *TelemetryClient, frame agentFrame) {
+func (a *Aggregator) forwardChart(upstream *vigilclient.TelemetryClient, frame agentFrame) {
 	ts := frame.Timestamp
 	if ts == "" {
 		ts = time.Now().UTC().Format(time.RFC3339)
@@ -449,7 +452,7 @@ func (a *Aggregator) forwardChart(upstream *TelemetryClient, frame agentFrame) {
 		Timestamp:   ts,
 	}
 
-	if err := upstream.SendChart(c); err != nil {
+	if err := upstream.Send("chart", c); err != nil {
 		a.logger.Warn("failed to relay chart upstream",
 			"agent_id", frame.AgentID,
 			"component_id", frame.ComponentID,
@@ -459,7 +462,7 @@ func (a *Aggregator) forwardChart(upstream *TelemetryClient, frame agentFrame) {
 	}
 }
 
-func (a *Aggregator) forwardLog(upstream *TelemetryClient, frame agentFrame) {
+func (a *Aggregator) forwardLog(upstream *vigilclient.TelemetryClient, frame agentFrame) {
 	ts := frame.Timestamp
 	if ts == "" {
 		ts = time.Now().UTC().Format(time.RFC3339)
@@ -468,7 +471,7 @@ func (a *Aggregator) forwardLog(upstream *TelemetryClient, frame agentFrame) {
 	if source == "" {
 		source = frame.AgentID
 	}
-	l := LogPayload{
+	l := vigilclient.LogPayload{
 		ComponentID: frame.ComponentID,
 		Level:       frame.resolveLevel(),
 		Message:     frame.Message,
@@ -477,7 +480,7 @@ func (a *Aggregator) forwardLog(upstream *TelemetryClient, frame agentFrame) {
 		Timestamp:   ts,
 	}
 
-	if err := upstream.SendLog(l); err != nil {
+	if err := upstream.Send("log", l); err != nil {
 		a.logger.Warn("failed to relay log upstream",
 			"agent_id", frame.AgentID,
 			"job_id", frame.JobID,
@@ -712,7 +715,7 @@ func (a *Aggregator) QueryChartHistory(componentID, timeRange string) []StoredCh
 }
 
 // evaluateProgress inspects progress frames for notification triggers.
-func (a *Aggregator) evaluateProgress(upstream *TelemetryClient, frame agentFrame) {
+func (a *Aggregator) evaluateProgress(upstream *vigilclient.TelemetryClient, frame agentFrame) {
 	if frame.JobID != "" {
 		a.evaluateJobLifecycle(upstream, frame)
 	}
@@ -748,7 +751,7 @@ func (a *Aggregator) evaluateProgress(upstream *TelemetryClient, frame agentFram
 }
 
 // evaluateJobLifecycle detects job_started and job_complete transitions.
-func (a *Aggregator) evaluateJobLifecycle(upstream *TelemetryClient, frame agentFrame) {
+func (a *Aggregator) evaluateJobLifecycle(upstream *vigilclient.TelemetryClient, frame agentFrame) {
 	a.progressMu.Lock()
 	seen := a.knownJobs[frame.JobID]
 	a.progressMu.Unlock()
@@ -787,7 +790,7 @@ func (a *Aggregator) evaluateJobLifecycle(upstream *TelemetryClient, frame agent
 }
 
 // evaluateLog inspects log frames for notification triggers.
-func (a *Aggregator) evaluateLog(upstream *TelemetryClient, frame agentFrame) {
+func (a *Aggregator) evaluateLog(upstream *vigilclient.TelemetryClient, frame agentFrame) {
 	switch frame.resolveLevel() {
 	case "error":
 		a.emitNotification(upstream, frame, "job_failed", "critical",
@@ -798,7 +801,7 @@ func (a *Aggregator) evaluateLog(upstream *TelemetryClient, frame agentFrame) {
 	}
 }
 
-func (a *Aggregator) checkTemperature(upstream *TelemetryClient, frame agentFrame) {
+func (a *Aggregator) checkTemperature(upstream *vigilclient.TelemetryClient, frame agentFrame) {
 	if frame.TempC >= a.thresholds.TempCriticalC {
 		a.emitNotification(upstream, frame, "temp_alert", "critical",
 			fmt.Sprintf("Drive temperature critical on agent %s: %d°C (threshold: %d°C)",
@@ -817,7 +820,7 @@ type smartDelta struct {
 	Current  int    `json:"current"`
 }
 
-func (a *Aggregator) checkSmartDeltas(upstream *TelemetryClient, frame agentFrame) {
+func (a *Aggregator) checkSmartDeltas(upstream *vigilclient.TelemetryClient, frame agentFrame) {
 	var deltas map[string]smartDelta
 	if err := json.Unmarshal(frame.SmartDeltas, &deltas); err != nil {
 		return
@@ -833,13 +836,13 @@ func (a *Aggregator) checkSmartDeltas(upstream *TelemetryClient, frame agentFram
 	}
 }
 
-func (a *Aggregator) emitNotification(upstream *TelemetryClient, frame agentFrame, eventType, severity, message string) {
+func (a *Aggregator) emitNotification(upstream *vigilclient.TelemetryClient, frame agentFrame, eventType, severity, message string) {
 	source := fmt.Sprintf("addon:burnin-preclear-v1:agent:%s", frame.AgentID)
 	if frame.JobID != "" {
 		source += ":job:" + frame.JobID
 	}
 
-	n := NotificationPayload{
+	n := vigilclient.NotificationPayload{
 		EventType: eventType,
 		Severity:  severity,
 		Source:    source,
@@ -847,7 +850,7 @@ func (a *Aggregator) emitNotification(upstream *TelemetryClient, frame agentFram
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	if err := upstream.SendNotification(n); err != nil {
+	if err := upstream.Send("notification", n); err != nil {
 		a.logger.Warn("failed to transmit notification upstream",
 			"event_type", eventType,
 			"agent_id", frame.AgentID,

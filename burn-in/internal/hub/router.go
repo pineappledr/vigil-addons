@@ -49,6 +49,54 @@ var topLevelFields = map[string]bool{
 	"signature": true,
 }
 
+// restructurePayload converts a flat JSON payload from Vigil into the nested
+// format the agent expects: {agent_id, command, target, params: {...}}.
+// Non-top-level fields are moved into the "params" sub-object.
+func restructurePayload(flat map[string]interface{}) ([]byte, error) {
+	if _, hasParams := flat["params"]; !hasParams {
+		params := make(map[string]interface{})
+		for k, v := range flat {
+			if !topLevelFields[k] {
+				params[k] = v
+				delete(flat, k)
+			}
+		}
+		if len(params) > 0 {
+			flat["params"] = params
+		}
+	}
+	return json.Marshal(flat)
+}
+
+// resolveAgent looks up the agent by ID and returns it, or writes an HTTP
+// error and returns nil if the agent is missing or unreachable.
+func (cr *CommandRouter) resolveAgent(w http.ResponseWriter, agentID string) *AgentRecord {
+	if agentID == "" {
+		cr.logger.Warn("execute rejected: missing agent_id in payload")
+		addonutil.WriteJSON(w, http.StatusBadRequest, addonutil.ErrorResponse{Error: "agent_id is required in payload"})
+		return nil
+	}
+
+	agent := cr.registry.Get(agentID)
+	if agent == nil {
+		cr.logger.Warn("command routed to unknown agent", "agent_id", agentID)
+		addonutil.WriteJSON(w, http.StatusNotFound, addonutil.ErrorResponse{
+			Error: fmt.Sprintf("agent %q is not registered", agentID),
+		})
+		return nil
+	}
+
+	if agent.AdvertiseAddr == "" {
+		cr.logger.Error("agent has no advertise address", "agent_id", agentID)
+		addonutil.WriteJSON(w, http.StatusBadGateway, addonutil.ErrorResponse{
+			Error: fmt.Sprintf("agent %q has no reachable address", agentID),
+		})
+		return nil
+	}
+
+	return agent
+}
+
 // HandleExecute is the HTTP handler for POST /api/execute.
 // Vigil forwards flat form data from the UI (all fields at the top level).
 // The agent expects {agent_id, command, target, params: {...}}, so this
@@ -87,44 +135,12 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		"field_count", len(flat),
 	)
 
-	if agentID == "" {
-		cr.logger.Warn("execute rejected: missing agent_id in payload")
-		addonutil.WriteJSON(w, http.StatusBadRequest, addonutil.ErrorResponse{Error: "agent_id is required in payload"})
-		return
-	}
-
-	agent := cr.registry.Get(agentID)
+	agent := cr.resolveAgent(w, agentID)
 	if agent == nil {
-		cr.logger.Warn("command routed to unknown agent", "agent_id", agentID)
-		addonutil.WriteJSON(w, http.StatusNotFound, addonutil.ErrorResponse{
-			Error: fmt.Sprintf("agent %q is not registered", agentID),
-		})
 		return
 	}
 
-	if agent.AdvertiseAddr == "" {
-		cr.logger.Error("agent has no advertise address", "agent_id", agentID)
-		addonutil.WriteJSON(w, http.StatusBadGateway, addonutil.ErrorResponse{
-			Error: fmt.Sprintf("agent %q has no reachable address", agentID),
-		})
-		return
-	}
-
-	// Restructure: move non-top-level fields into "params" if not already present.
-	if _, hasParams := flat["params"]; !hasParams {
-		params := make(map[string]interface{})
-		for k, v := range flat {
-			if !topLevelFields[k] {
-				params[k] = v
-				delete(flat, k)
-			}
-		}
-		if len(params) > 0 {
-			flat["params"] = params
-		}
-	}
-
-	forwarded, err := json.Marshal(flat)
+	forwarded, err := restructurePayload(flat)
 	if err != nil {
 		addonutil.WriteJSON(w, http.StatusInternalServerError, addonutil.ErrorResponse{Error: "failed to encode payload"})
 		return
@@ -151,7 +167,6 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	}
 	defer agentResp.Body.Close()
 
-	// Relay the agent's response back to the caller.
 	cr.logger.Info("agent responded", "agent_id", agentID, "status_code", agentResp.StatusCode)
 
 	respBody, err := io.ReadAll(io.LimitReader(agentResp.Body, maxPayloadSize))

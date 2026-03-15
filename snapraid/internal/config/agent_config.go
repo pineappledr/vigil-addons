@@ -128,102 +128,62 @@ func LoadAgentConfig(path string) (*AgentConfig, error) {
 	return &cfg, nil
 }
 
+// envOverride maps an environment variable to a setter that applies it to the config.
+type envOverride struct {
+	key   string
+	apply func(cfg *AgentConfig, v string)
+}
+
+var agentEnvOverrides = []envOverride{
+	{"VIGIL_SNAPRAID_AGENT_LISTEN_PORT", func(c *AgentConfig, v string) { setInt(v, &c.Listen.Port) }},
+	{"VIGIL_SNAPRAID_AGENT_HUB_URL", func(c *AgentConfig, v string) { c.Hub.URL = v }},
+	{"VIGIL_SNAPRAID_AGENT_HUB_TOKEN", func(c *AgentConfig, v string) { c.Hub.Token = v }},
+	{"VIGIL_SNAPRAID_AGENT_ID", func(c *AgentConfig, v string) { c.Identity.AgentID = v }},
+	{"VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR", func(c *AgentConfig, v string) { c.Identity.AdvertiseAddr = v }},
+	{"VIGIL_SNAPRAID_AGENT_SNAPRAID_BINARY_PATH", func(c *AgentConfig, v string) { c.SnapRAID.BinaryPath = v }},
+	{"VIGIL_SNAPRAID_AGENT_SNAPRAID_CONFIG_PATH", func(c *AgentConfig, v string) { c.SnapRAID.ConfigPath = v }},
+	{"VIGIL_SNAPRAID_AGENT_SCHEDULER_MAINTENANCE_CRON", func(c *AgentConfig, v string) { c.Scheduler.MaintenanceCron = v }},
+	{"VIGIL_SNAPRAID_AGENT_SCHEDULER_SCRUB_CRON", func(c *AgentConfig, v string) { c.Scheduler.ScrubCron = v }},
+	{"VIGIL_SNAPRAID_AGENT_SCHEDULER_SMART_CRON", func(c *AgentConfig, v string) { c.Scheduler.SmartCron = v }},
+	{"VIGIL_SNAPRAID_AGENT_SCHEDULER_STATUS_CRON", func(c *AgentConfig, v string) { c.Scheduler.StatusCron = v }},
+	{"VIGIL_SNAPRAID_AGENT_THRESHOLDS_MAX_DELETED", func(c *AgentConfig, v string) { setInt(v, &c.Thresholds.MaxDeleted) }},
+	{"VIGIL_SNAPRAID_AGENT_THRESHOLDS_MAX_UPDATED", func(c *AgentConfig, v string) { setInt(v, &c.Thresholds.MaxUpdated) }},
+	{"VIGIL_SNAPRAID_AGENT_THRESHOLDS_ADD_DEL_RATIO", func(c *AgentConfig, v string) { setFloat(v, &c.Thresholds.AddDelRatio) }},
+	{"VIGIL_SNAPRAID_AGENT_THRESHOLDS_SMART_FAIL_PROBABILITY", func(c *AgentConfig, v string) { setInt(v, &c.Thresholds.SmartFailProbability) }},
+	{"VIGIL_SNAPRAID_AGENT_SCRUB_PLAN", func(c *AgentConfig, v string) { c.Scrub.Plan = v }},
+	{"VIGIL_SNAPRAID_AGENT_SCRUB_OLDER_THAN_DAYS", func(c *AgentConfig, v string) { setInt(v, &c.Scrub.OlderThanDays) }},
+	{"VIGIL_SNAPRAID_AGENT_SCRUB_AUTO_FIX_BAD_BLOCKS", func(c *AgentConfig, v string) { c.Scrub.AutoFixBadBlocks = parseBool(v) }},
+	{"VIGIL_SNAPRAID_AGENT_SYNC_PRE_HASH", func(c *AgentConfig, v string) { c.Sync.PreHash = parseBool(v) }},
+	{"VIGIL_SNAPRAID_AGENT_HOOKS_PRE_SYNC", func(c *AgentConfig, v string) { c.Hooks.PreSync = v }},
+	{"VIGIL_SNAPRAID_AGENT_HOOKS_POST_SYNC", func(c *AgentConfig, v string) { c.Hooks.PostSync = v }},
+	{"VIGIL_SNAPRAID_AGENT_DOCKER_PAUSE_CONTAINERS", func(c *AgentConfig, v string) { c.Docker.PauseContainers = strings.Split(v, ",") }},
+	{"VIGIL_SNAPRAID_AGENT_DOCKER_STOP_CONTAINERS", func(c *AgentConfig, v string) { c.Docker.StopContainers = strings.Split(v, ",") }},
+	{"VIGIL_SNAPRAID_AGENT_LOGGING_LEVEL", func(c *AgentConfig, v string) { c.Logging.Level = v }},
+	{"VIGIL_SNAPRAID_AGENT_LOGGING_FILE", func(c *AgentConfig, v string) { c.Logging.File = v }},
+	{"VIGIL_SNAPRAID_AGENT_LOGGING_MAX_SIZE_MB", func(c *AgentConfig, v string) { setInt(v, &c.Logging.MaxSizeMB) }},
+	{"VIGIL_SNAPRAID_AGENT_LOGGING_MAX_BACKUPS", func(c *AgentConfig, v string) { setInt(v, &c.Logging.MaxBackups) }},
+}
+
 func applyAgentEnvOverrides(cfg *AgentConfig) {
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_LISTEN_PORT"); v != "" {
-		if port, err := strconv.Atoi(v); err == nil {
-			cfg.Listen.Port = port
+	for _, o := range agentEnvOverrides {
+		if v := os.Getenv(o.key); v != "" {
+			o.apply(cfg, v)
 		}
 	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_HUB_URL"); v != "" {
-		cfg.Hub.URL = v
+}
+
+func setInt(s string, dst *int) {
+	if n, err := strconv.Atoi(s); err == nil {
+		*dst = n
 	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_HUB_TOKEN"); v != "" {
-		cfg.Hub.Token = v
+}
+
+func setFloat(s string, dst *float64) {
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		*dst = f
 	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_ID"); v != "" {
-		cfg.Identity.AgentID = v
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR"); v != "" {
-		cfg.Identity.AdvertiseAddr = v
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_SNAPRAID_BINARY_PATH"); v != "" {
-		cfg.SnapRAID.BinaryPath = v
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_SNAPRAID_CONFIG_PATH"); v != "" {
-		cfg.SnapRAID.ConfigPath = v
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_SCHEDULER_MAINTENANCE_CRON"); v != "" {
-		cfg.Scheduler.MaintenanceCron = v
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_SCHEDULER_SCRUB_CRON"); v != "" {
-		cfg.Scheduler.ScrubCron = v
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_SCHEDULER_SMART_CRON"); v != "" {
-		cfg.Scheduler.SmartCron = v
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_SCHEDULER_STATUS_CRON"); v != "" {
-		cfg.Scheduler.StatusCron = v
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_THRESHOLDS_MAX_DELETED"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Thresholds.MaxDeleted = n
-		}
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_THRESHOLDS_MAX_UPDATED"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Thresholds.MaxUpdated = n
-		}
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_THRESHOLDS_ADD_DEL_RATIO"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.Thresholds.AddDelRatio = f
-		}
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_THRESHOLDS_SMART_FAIL_PROBABILITY"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Thresholds.SmartFailProbability = n
-		}
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_SCRUB_PLAN"); v != "" {
-		cfg.Scrub.Plan = v
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_SCRUB_OLDER_THAN_DAYS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Scrub.OlderThanDays = n
-		}
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_SCRUB_AUTO_FIX_BAD_BLOCKS"); v != "" {
-		cfg.Scrub.AutoFixBadBlocks = v == "true" || v == "1"
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_SYNC_PRE_HASH"); v != "" {
-		cfg.Sync.PreHash = v == "true" || v == "1"
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_HOOKS_PRE_SYNC"); v != "" {
-		cfg.Hooks.PreSync = v
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_HOOKS_POST_SYNC"); v != "" {
-		cfg.Hooks.PostSync = v
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_DOCKER_PAUSE_CONTAINERS"); v != "" {
-		cfg.Docker.PauseContainers = strings.Split(v, ",")
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_DOCKER_STOP_CONTAINERS"); v != "" {
-		cfg.Docker.StopContainers = strings.Split(v, ",")
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_LOGGING_LEVEL"); v != "" {
-		cfg.Logging.Level = v
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_LOGGING_FILE"); v != "" {
-		cfg.Logging.File = v
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_LOGGING_MAX_SIZE_MB"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Logging.MaxSizeMB = n
-		}
-	}
-	if v := os.Getenv("VIGIL_SNAPRAID_AGENT_LOGGING_MAX_BACKUPS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Logging.MaxBackups = n
-		}
-	}
+}
+
+func parseBool(s string) bool {
+	return s == "true" || s == "1"
 }

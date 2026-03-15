@@ -89,9 +89,10 @@ type Aggregator struct {
 	// ring buffer, making them available to historical queries.
 	lastPhase map[string]string // key: jobID, value: "phase|detail"
 
-	// knownJobs tracks which jobs have been seen so we can detect
-	// job_started (first frame) and job_complete (COMPLETE/CANCELLED).
-	knownJobs map[string]bool // key: jobID → true if seen
+	// knownJobsMu guards knownJobs independently of progressMu — job
+	// lifecycle detection and progress storage are separate concerns.
+	knownJobsMu sync.Mutex
+	knownJobs   map[string]bool // key: jobID → true if seen
 }
 
 // NewAggregator creates a telemetry aggregator.
@@ -753,15 +754,15 @@ func (a *Aggregator) evaluateProgress(upstream *vigilclient.TelemetryClient, fra
 
 // evaluateJobLifecycle detects job_started and job_complete transitions.
 func (a *Aggregator) evaluateJobLifecycle(upstream *vigilclient.TelemetryClient, frame agentFrame) {
-	a.progressMu.Lock()
+	a.knownJobsMu.Lock()
 	seen := a.knownJobs[frame.JobID]
-	a.progressMu.Unlock()
+	a.knownJobsMu.Unlock()
 
 	if !seen {
 		// First progress frame for this job — mark as started.
-		a.progressMu.Lock()
+		a.knownJobsMu.Lock()
 		a.knownJobs[frame.JobID] = true
-		a.progressMu.Unlock()
+		a.knownJobsMu.Unlock()
 
 		cmd := frame.Command
 		if cmd == "" {
@@ -773,9 +774,9 @@ func (a *Aggregator) evaluateJobLifecycle(upstream *vigilclient.TelemetryClient,
 
 	// Detect job completion.
 	if frame.Percent >= 100.0 && (frame.Phase == "COMPLETE" || frame.Phase == "CANCELLED") {
-		a.progressMu.Lock()
+		a.knownJobsMu.Lock()
 		delete(a.knownJobs, frame.JobID)
-		a.progressMu.Unlock()
+		a.knownJobsMu.Unlock()
 
 		status := "completed"
 		if frame.Phase == "CANCELLED" {

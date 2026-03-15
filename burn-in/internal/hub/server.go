@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/pineappledr/vigil-addons/shared/addonutil"
 )
@@ -18,6 +19,7 @@ type Server struct {
 	registry     *AgentRegistry
 	router       *CommandRouter
 	aggregator   *Aggregator
+	pskMu        sync.RWMutex
 	psk          string
 	advertiseURL string
 	dataDir      string
@@ -63,6 +65,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/rotate-psk", s.handleRotatePSK)
 }
 
+// getPSK returns the current PSK under the read lock.
+func (s *Server) getPSK() string {
+	s.pskMu.RLock()
+	defer s.pskMu.RUnlock()
+	return s.psk
+}
+
 // requirePSK returns middleware that validates the Authorization: Bearer <psk> header.
 func (s *Server) requirePSK(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +81,7 @@ func (s *Server) requirePSK(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		token := strings.TrimPrefix(auth, "Bearer ")
-		if token != s.psk {
+		if token != s.getPSK() {
 			addonutil.WriteJSON(w, http.StatusForbidden, addonutil.ErrorResponse{Error: "invalid pre-shared key"})
 			return
 		}
@@ -103,7 +112,7 @@ func (s *Server) handleRegisterAgent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeployInfo(w http.ResponseWriter, _ *http.Request) {
 	addonutil.WriteJSON(w, http.StatusOK, map[string]string{
 		"hub_url": s.advertiseURL,
-		"hub_psk": s.psk,
+		"hub_psk": s.getPSK(),
 	})
 }
 
@@ -188,6 +197,12 @@ func (s *Server) handleRotatePSK(w http.ResponseWriter, r *http.Request) {
 	}
 	newPSK := hex.EncodeToString(buf)
 
+	// Update memory and disk atomically under the write lock so there is
+	// no window where the two are inconsistent.
+	s.pskMu.Lock()
+	s.psk = newPSK
+	s.pskMu.Unlock()
+
 	pskPath := filepath.Join(s.dataDir, "hub.psk")
 	if err := os.MkdirAll(s.dataDir, 0o700); err != nil {
 		s.logger.Error("failed to create data directory", "error", err)
@@ -195,12 +210,12 @@ func (s *Server) handleRotatePSK(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := os.WriteFile(pskPath, []byte(newPSK+"\n"), 0o600); err != nil {
-		s.logger.Error("failed to persist new PSK", "error", err)
-		addonutil.WriteJSON(w, http.StatusInternalServerError, addonutil.ErrorResponse{Error: "failed to save PSK"})
+		// Memory already updated — log the disk persistence failure but
+		// don't roll back, since the new PSK is already in use.
+		s.logger.Error("failed to persist new PSK to disk (memory updated)", "error", err)
+		addonutil.WriteJSON(w, http.StatusInternalServerError, addonutil.ErrorResponse{Error: "PSK rotated in memory but failed to persist to disk"})
 		return
 	}
-
-	s.psk = newPSK
 	s.logger.Info("hub PSK rotated successfully")
 	addonutil.WriteJSON(w, http.StatusOK, map[string]string{
 		"status":  "rotated",

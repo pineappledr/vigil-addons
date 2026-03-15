@@ -7,19 +7,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net/http"
 	"os"
 	"runtime"
 	"time"
+
+	"github.com/pineappledr/vigil-addons/shared/vigilclient"
 )
 
-const (
-	registerPath  = "/api/agents/register"
-	backoffBase   = 2 * time.Second
-	backoffMax    = 60 * time.Second
-	backoffFactor = 2.0
-)
+const registerPath = "/api/agents/register"
 
 // RegistrationPayload is the body sent to POST /api/agents/register.
 type RegistrationPayload struct {
@@ -90,7 +86,7 @@ func (c *HubClient) Register(ctx context.Context) error {
 		}
 
 		attempt++
-		delay := backoffDelay(attempt)
+		delay := vigilclient.BackoffDelay(attempt)
 		c.logger.Warn("hub registration failed, retrying",
 			"error", err,
 			"attempt", attempt,
@@ -131,12 +127,4 @@ func (c *HubClient) doRegister(ctx context.Context, body []byte) error {
 	}
 
 	return nil
-}
-
-func backoffDelay(attempt int) time.Duration {
-	delay := float64(backoffBase) * math.Pow(backoffFactor, float64(attempt-1))
-	if delay > float64(backoffMax) {
-		delay = float64(backoffMax)
-	}
-	return time.Duration(delay)
 }

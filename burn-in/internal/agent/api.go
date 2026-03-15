@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"sync"
+
+	"github.com/pineappledr/vigil-addons/shared/addonutil"
 )
 
 const maxPayloadSize = 1 << 20 // 1 MB
@@ -115,19 +117,19 @@ func (a *AgentAPI) UnregisterJob(jobID string) {
 }
 
 func (a *AgentAPI) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (a *AgentAPI) handleJobHistory(w http.ResponseWriter, _ *http.Request) {
 	if a.historyFn == nil {
 		a.logger.Error("job history provider not configured")
-		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "job history not available"})
+		addonutil.WriteJSON(w, http.StatusInternalServerError, addonutil.ErrorResponse{Error: "job history not available"})
 		return
 	}
 
 	records := a.historyFn()
 	a.logger.Info("job history requested")
-	writeJSON(w, http.StatusOK, records)
+	addonutil.WriteJSON(w, http.StatusOK, records)
 }
 
 func (a *AgentAPI) handleExecute(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +142,7 @@ func (a *AgentAPI) handleExecute(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxPayloadSize))
 	if err != nil {
 		a.logger.Error("failed to read execute payload", "error", err)
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "failed to read request body"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, addonutil.ErrorResponse{Error: "failed to read request body"})
 		return
 	}
 
@@ -154,7 +156,7 @@ func (a *AgentAPI) handleExecute(w http.ResponseWriter, r *http.Request) {
 				"error", err,
 				"pubkey_len", len(a.serverPubkey),
 			)
-			writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "invalid signature"})
+			addonutil.WriteJSON(w, http.StatusUnauthorized, addonutil.ErrorResponse{Error: "invalid signature"})
 			return
 		}
 		a.logger.Info("signature verification passed")
@@ -165,18 +167,18 @@ func (a *AgentAPI) handleExecute(w http.ResponseWriter, r *http.Request) {
 	var payload ExecutePayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		a.logger.Error("execute payload JSON parse failed", "error", err)
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON payload"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, addonutil.ErrorResponse{Error: "invalid JSON payload"})
 		return
 	}
 
 	if payload.Command == "" {
 		a.logger.Warn("execute rejected: missing command field")
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "command is required"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, addonutil.ErrorResponse{Error: "command is required"})
 		return
 	}
 	if payload.Target == "" {
 		a.logger.Warn("execute rejected: missing target field")
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "target is required"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, addonutil.ErrorResponse{Error: "target is required"})
 		return
 	}
 
@@ -190,7 +192,7 @@ func (a *AgentAPI) handleExecute(w http.ResponseWriter, r *http.Request) {
 
 	if a.dispatcher == nil {
 		a.logger.Error("job dispatcher not configured — cannot process command")
-		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "job dispatcher not configured"})
+		addonutil.WriteJSON(w, http.StatusInternalServerError, addonutil.ErrorResponse{Error: "job dispatcher not configured"})
 		return
 	}
 
@@ -211,7 +213,7 @@ func (a *AgentAPI) handleExecute(w http.ResponseWriter, r *http.Request) {
 			"target", payload.Target,
 			"error", err,
 		)
-		writeJSON(w, http.StatusConflict, errorResponse{Error: err.Error()})
+		addonutil.WriteJSON(w, http.StatusConflict, addonutil.ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -220,7 +222,7 @@ func (a *AgentAPI) handleExecute(w http.ResponseWriter, r *http.Request) {
 		"command", payload.Command,
 		"target", payload.Target,
 	)
-	writeJSON(w, http.StatusAccepted, map[string]string{
+	addonutil.WriteJSON(w, http.StatusAccepted, map[string]string{
 		"status": "accepted",
 		"job_id": jobID,
 	})
@@ -229,7 +231,7 @@ func (a *AgentAPI) handleExecute(w http.ResponseWriter, r *http.Request) {
 func (a *AgentAPI) handleAbortJob(w http.ResponseWriter, r *http.Request) {
 	jobID := r.PathValue("id")
 	if jobID == "" {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "job id required"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, addonutil.ErrorResponse{Error: "job id required"})
 		return
 	}
 
@@ -238,7 +240,7 @@ func (a *AgentAPI) handleAbortJob(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 
 	if !ok {
-		writeJSON(w, http.StatusNotFound, errorResponse{
+		addonutil.WriteJSON(w, http.StatusNotFound, addonutil.ErrorResponse{
 			Error: fmt.Sprintf("job %q not found or already completed", jobID),
 		})
 		return
@@ -247,7 +249,7 @@ func (a *AgentAPI) handleAbortJob(w http.ResponseWriter, r *http.Request) {
 	a.logger.Info("aborting job", "job_id", jobID)
 	cancel()
 
-	writeJSON(w, http.StatusOK, map[string]string{
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{
 		"status": "cancelled",
 		"job_id": jobID,
 	})
@@ -324,12 +326,3 @@ func trimBytes(b []byte) []byte {
 	return b
 }
 
-type errorResponse struct {
-	Error string `json:"error"`
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
-}

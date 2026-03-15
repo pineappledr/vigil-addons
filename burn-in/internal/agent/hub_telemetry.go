@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/pineappledr/vigil-addons/shared/vigilclient"
 )
 
 const (
@@ -106,7 +107,7 @@ func (t *HubTelemetry) Run(ctx context.Context) {
 		}
 
 		attempt++
-		delay := backoffDelay(attempt)
+		delay := vigilclient.BackoffDelay(attempt)
 		t.logger.Warn("hub websocket disconnected, reconnecting",
 			"error", err,
 			"attempt", attempt,

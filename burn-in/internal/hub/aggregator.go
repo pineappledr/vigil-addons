@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/pineappledr/vigil-addons/shared/addonutil"
 	"github.com/pineappledr/vigil-addons/shared/vigilclient"
 )
 
@@ -655,7 +656,7 @@ func (a *Aggregator) QueryLogs(timeRange string) []StoredLog {
 	copy(snapshot, a.logRing)
 	a.logMu.Unlock()
 
-	dur, ok := parseTimeRange(timeRange)
+	dur, ok := addonutil.ParseTimeRange(timeRange)
 	if !ok || timeRange == "" {
 		return snapshot
 	}
@@ -696,7 +697,7 @@ func (a *Aggregator) QueryChartHistory(componentID, timeRange string) []StoredCh
 	copy(snapshot, a.chartRing)
 	a.chartMu.Unlock()
 
-	dur, ok := parseTimeRange(timeRange)
+	dur, ok := addonutil.ParseTimeRange(timeRange)
 
 	filtered := make([]StoredChartPoint, 0, len(snapshot))
 	for _, pt := range snapshot {

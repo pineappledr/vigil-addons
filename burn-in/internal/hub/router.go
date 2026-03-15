@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/pineappledr/vigil-addons/shared/addonutil"
 )
 
 const (
@@ -61,7 +63,7 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxPayloadSize))
 	if err != nil {
 		cr.logger.Error("failed to read execute payload", "error", err)
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "failed to read request body"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, addonutil.ErrorResponse{Error: "failed to read request body"})
 		return
 	}
 
@@ -70,7 +72,7 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	var flat map[string]interface{}
 	if err := json.Unmarshal(body, &flat); err != nil {
 		cr.logger.Error("execute payload is not valid JSON", "error", err, "body_preview", truncate(string(body), 256))
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON payload"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, addonutil.ErrorResponse{Error: "invalid JSON payload"})
 		return
 	}
 
@@ -87,14 +89,14 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 
 	if agentID == "" {
 		cr.logger.Warn("execute rejected: missing agent_id in payload")
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "agent_id is required in payload"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, addonutil.ErrorResponse{Error: "agent_id is required in payload"})
 		return
 	}
 
 	agent := cr.registry.Get(agentID)
 	if agent == nil {
 		cr.logger.Warn("command routed to unknown agent", "agent_id", agentID)
-		writeJSON(w, http.StatusNotFound, errorResponse{
+		addonutil.WriteJSON(w, http.StatusNotFound, addonutil.ErrorResponse{
 			Error: fmt.Sprintf("agent %q is not registered", agentID),
 		})
 		return
@@ -102,7 +104,7 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 
 	if agent.AdvertiseAddr == "" {
 		cr.logger.Error("agent has no advertise address", "agent_id", agentID)
-		writeJSON(w, http.StatusBadGateway, errorResponse{
+		addonutil.WriteJSON(w, http.StatusBadGateway, addonutil.ErrorResponse{
 			Error: fmt.Sprintf("agent %q has no reachable address", agentID),
 		})
 		return
@@ -124,7 +126,7 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 
 	forwarded, err := json.Marshal(flat)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to encode payload"})
+		addonutil.WriteJSON(w, http.StatusInternalServerError, addonutil.ErrorResponse{Error: "failed to encode payload"})
 		return
 	}
 
@@ -142,7 +144,7 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 			"agent_id", agentID,
 			"error", err,
 		)
-		writeJSON(w, http.StatusBadGateway, errorResponse{
+		addonutil.WriteJSON(w, http.StatusBadGateway, addonutil.ErrorResponse{
 			Error: fmt.Sprintf("failed to reach agent %q: %s", agentID, err),
 		})
 		return
@@ -155,7 +157,7 @@ func (cr *CommandRouter) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	respBody, err := io.ReadAll(io.LimitReader(agentResp.Body, maxPayloadSize))
 	if err != nil {
 		cr.logger.Error("failed to retrieve agent response", "agent_id", agentID, "error", err)
-		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "failed to read agent response"})
+		addonutil.WriteJSON(w, http.StatusBadGateway, addonutil.ErrorResponse{Error: "failed to read agent response"})
 		return
 	}
 
@@ -225,41 +227,14 @@ func (cr *CommandRouter) HandleJobHistory(w http.ResponseWriter, r *http.Request
 		allRecords = filterByTimeRange(allRecords, tr)
 	}
 
-	writeJSON(w, http.StatusOK, allRecords)
-}
-
-// parseTimeRange converts a shorthand time range string into a duration.
-// Supported formats: "5m", "15m", "1h", "6h", "24h", "7d", "14d", "30d", "90d".
-func parseTimeRange(tr string) (time.Duration, bool) {
-	switch tr {
-	case "5m":
-		return 5 * time.Minute, true
-	case "15m":
-		return 15 * time.Minute, true
-	case "1h":
-		return 1 * time.Hour, true
-	case "6h":
-		return 6 * time.Hour, true
-	case "24h":
-		return 24 * time.Hour, true
-	case "7d":
-		return 7 * 24 * time.Hour, true
-	case "14d":
-		return 14 * 24 * time.Hour, true
-	case "30d":
-		return 30 * 24 * time.Hour, true
-	case "90d":
-		return 90 * 24 * time.Hour, true
-	default:
-		return 0, false
-	}
+	addonutil.WriteJSON(w, http.StatusOK, allRecords)
 }
 
 // filterByTimeRange keeps only records whose "started_at" timestamp is
 // within the given window. Records with unparseable or missing timestamps
 // are retained (fail-open).
 func filterByTimeRange(records []json.RawMessage, tr string) []json.RawMessage {
-	dur, ok := parseTimeRange(tr)
+	dur, ok := addonutil.ParseTimeRange(tr)
 	if !ok {
 		return records // Unknown range (e.g., "" for All Time) — return unfiltered.
 	}
@@ -303,13 +278,13 @@ func filterByTimeRange(records []json.RawMessage, tr string) []json.RawMessage {
 func (cr *CommandRouter) HandleCancelJob(w http.ResponseWriter, r *http.Request) {
 	jobID := r.PathValue("id")
 	if jobID == "" {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "job id is required"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, addonutil.ErrorResponse{Error: "job id is required"})
 		return
 	}
 
 	agents := cr.registry.List()
 	if len(agents) == 0 {
-		writeJSON(w, http.StatusNotFound, errorResponse{Error: "no agents registered"})
+		addonutil.WriteJSON(w, http.StatusNotFound, addonutil.ErrorResponse{Error: "no agents registered"})
 		return
 	}
 
@@ -350,7 +325,7 @@ func (cr *CommandRouter) HandleCancelJob(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	writeJSON(w, http.StatusNotFound, errorResponse{
+	addonutil.WriteJSON(w, http.StatusNotFound, addonutil.ErrorResponse{
 		Error: fmt.Sprintf("job %q not found on any agent", jobID),
 	})
 }

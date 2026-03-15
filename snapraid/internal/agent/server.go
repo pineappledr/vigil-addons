@@ -8,10 +8,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strconv"
 	"sync/atomic"
 	"time"
 
+	"github.com/pineappledr/vigil-addons/shared/addonutil"
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
 	agentdb "github.com/pineappledr/vigil-addons/snapraid/internal/db"
 	"github.com/pineappledr/vigil-addons/snapraid/internal/engine"
@@ -88,7 +88,7 @@ type ExecuteResponse struct {
 func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 	var req ExecuteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ExecuteResponse{Status: "error", Error: "invalid request body"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, ExecuteResponse{Status: "error", Error: "invalid request body"})
 		return
 	}
 
@@ -99,19 +99,19 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 	case "sync", "scrub", "fix", "status", "smart", "diff", "touch":
 		// valid
 	default:
-		writeJSON(w, http.StatusBadRequest, ExecuteResponse{Status: "error", Error: "unknown command: " + req.Command})
+		addonutil.WriteJSON(w, http.StatusBadRequest, ExecuteResponse{Status: "error", Error: "unknown command: " + req.Command})
 		return
 	}
 
 	// Check if the engine is already busy (fail fast without blocking).
 	if s.engine.IsBusy() {
-		writeJSON(w, http.StatusConflict, ExecuteResponse{Status: "error", Error: engine.ErrEngineLocked.Error()})
+		addonutil.WriteJSON(w, http.StatusConflict, ExecuteResponse{Status: "error", Error: engine.ErrEngineLocked.Error()})
 		return
 	}
 
 	// Return immediately — the command runs in the background.
 	// The Active Job tracker and job history record progress.
-	writeJSON(w, http.StatusOK, ExecuteResponse{Status: "accepted"})
+	addonutil.WriteJSON(w, http.StatusOK, ExecuteResponse{Status: "accepted"})
 
 	go s.runCommand(req)
 }
@@ -219,10 +219,10 @@ func (s *Server) runCommand(req ExecuteRequest) {
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	values, err := agentdb.GetAllCacheValues(s.db)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, values)
+	addonutil.WriteJSON(w, http.StatusOK, values)
 }
 
 // ConfigUpdateRequest is the payload for POST /api/config.
@@ -233,7 +233,7 @@ type ConfigUpdateRequest struct {
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	var req ConfigUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
 
@@ -241,13 +241,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		s.logger.Info("config value received", "key", key, "value", value)
 		if err := agentdb.SetCacheValue(s.db, key, value); err != nil {
 			s.logger.Error("failed to persist config value", "key", key, "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist config"})
+			addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist config"})
 			return
 		}
 	}
 
 	s.logger.Info("config updated", "keys_count", len(req.Values))
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
@@ -256,20 +256,20 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 		if err == engine.ErrNoActiveJob {
 			status = http.StatusNotFound
 		}
-		writeJSON(w, status, map[string]string{"error": err.Error()})
+		addonutil.WriteJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
 	s.logger.Info("active operation aborted via API")
-	writeJSON(w, http.StatusOK, map[string]string{"status": "aborted"})
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "aborted"})
 }
 
 func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	jobs, err := agentdb.RecentJobs(s.db, 50)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, jobs)
+	addonutil.WriteJSON(w, http.StatusOK, jobs)
 }
 
 // handleJobHistory returns job records with optional time_range filtering.
@@ -279,7 +279,7 @@ func (s *Server) handleJobHistory(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if tr := r.URL.Query().Get("time_range"); tr != "" {
-		if d, ok := parseTimeRange(tr); ok {
+		if d, ok := addonutil.ParseTimeRange(tr); ok {
 			since := time.Now().UTC().Add(-d)
 			jobs, err = agentdb.RecentJobsSince(s.db, since, 200)
 		} else {
@@ -290,13 +290,13 @@ func (s *Server) handleJobHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	if jobs == nil {
 		jobs = []agentdb.JobRecord{}
 	}
-	writeJSON(w, http.StatusOK, jobs)
+	addonutil.WriteJSON(w, http.StatusOK, jobs)
 }
 
 // LogEntry is a log line for the log-viewer component.
@@ -313,7 +313,7 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if tr := r.URL.Query().Get("time_range"); tr != "" {
-		if d, ok := parseTimeRange(tr); ok {
+		if d, ok := addonutil.ParseTimeRange(tr); ok {
 			since := time.Now().UTC().Add(-d)
 			jobs, err = agentdb.RecentJobsSince(s.db, since, 100)
 		} else {
@@ -324,7 +324,7 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -369,7 +369,7 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		entries = []LogEntry{}
 	}
-	writeJSON(w, http.StatusOK, entries)
+	addonutil.WriteJSON(w, http.StatusOK, entries)
 }
 
 // handleArrayStatus returns the cached disk status from the collector.
@@ -379,10 +379,10 @@ func (s *Server) handleArrayStatus(w http.ResponseWriter, r *http.Request) {
 	if report == nil {
 		// Trigger background refresh so data is available on next request.
 		go s.backgroundRefreshStatus()
-		writeJSON(w, http.StatusOK, []any{})
+		addonutil.WriteJSON(w, http.StatusOK, []any{})
 		return
 	}
-	writeJSON(w, http.StatusOK, report.DiskStatus)
+	addonutil.WriteJSON(w, http.StatusOK, report.DiskStatus)
 }
 
 // handleSmartStatus returns the cached SMART disk data from the collector.
@@ -391,10 +391,10 @@ func (s *Server) handleSmartStatus(w http.ResponseWriter, r *http.Request) {
 	report := s.collector.GetSmartStatus()
 	if report == nil {
 		go s.backgroundRefreshSmart()
-		writeJSON(w, http.StatusOK, []any{})
+		addonutil.WriteJSON(w, http.StatusOK, []any{})
 		return
 	}
-	writeJSON(w, http.StatusOK, report.Disks)
+	addonutil.WriteJSON(w, http.StatusOK, report.Disks)
 }
 
 // handleActiveJob returns the current active job, or null if none.
@@ -405,7 +405,7 @@ func (s *Server) handleActiveJob(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("null"))
 		return
 	}
-	writeJSON(w, http.StatusOK, job)
+	addonutil.WriteJSON(w, http.StatusOK, job)
 }
 
 // handleDiskStorage returns OS-level filesystem info for snapraid data disks.
@@ -414,10 +414,10 @@ func (s *Server) handleDiskStorage(w http.ResponseWriter, r *http.Request) {
 	if storage == nil {
 		// Trigger a collection so data is available on next request.
 		go s.refreshDiskStorage()
-		writeJSON(w, http.StatusOK, []any{})
+		addonutil.WriteJSON(w, http.StatusOK, []any{})
 		return
 	}
-	writeJSON(w, http.StatusOK, storage)
+	addonutil.WriteJSON(w, http.StatusOK, storage)
 }
 
 // refreshDiskStorage collects disk storage info without requiring the snapraid binary.
@@ -471,28 +471,7 @@ func (s *Server) backgroundRefreshSmart() {
 	s.logger.Info("background refresh: smart cache populated")
 }
 
-// parseTimeRange converts strings like "24h", "7d", "30d", "5m" to a duration.
-func parseTimeRange(s string) (time.Duration, bool) {
-	if len(s) < 2 {
-		return 0, false
-	}
-	unit := s[len(s)-1]
-	numStr := s[:len(s)-1]
-	n, err := strconv.Atoi(numStr)
-	if err != nil || n <= 0 {
-		return 0, false
-	}
-	switch unit {
-	case 'm':
-		return time.Duration(n) * time.Minute, true
-	case 'h':
-		return time.Duration(n) * time.Hour, true
-	case 'd':
-		return time.Duration(n) * 24 * time.Hour, true
-	default:
-		return 0, false
-	}
-}
+
 
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.cfg.Listen.Port)
@@ -513,10 +492,4 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("agent server shutting down")
 	return s.server.Shutdown(ctx)
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
 }

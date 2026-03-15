@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/pineappledr/vigil-addons/shared/addonutil"
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
 )
 
@@ -67,7 +68,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // handleDeployInfo returns connection details that the deploy-wizard
 // prefills into the agent docker-compose template.
 func (s *Server) handleDeployInfo(w http.ResponseWriter, r *http.Request) {
-	writeHubJSON(w, http.StatusOK, map[string]string{
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{
 		"hub_url":   fmt.Sprintf("http://%s:%d", r.Host, s.cfg.Listen.Port),
 		"hub_token": s.cfg.Vigil.Token,
 	})
@@ -84,7 +85,7 @@ type AgentRegisterRequest struct {
 func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	var req AgentRegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
 
@@ -97,32 +98,32 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.registry.Register(entry); err != nil {
 		s.logger.Error("failed to register agent", "agent_id", req.ID, "error", err)
-		writeHubJSON(w, http.StatusInternalServerError, map[string]string{"error": "registration failed"})
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "registration failed"})
 		return
 	}
 
 	s.logger.Info("agent registered", "agent_id", req.ID, "hostname", req.Hostname, "address", req.Address)
-	writeHubJSON(w, http.StatusOK, map[string]string{"status": "registered"})
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "registered"})
 }
 
 func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
-	writeHubJSON(w, http.StatusOK, s.registry.ListViews())
+	addonutil.WriteJSON(w, http.StatusOK, s.registry.ListViews())
 }
 
 func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("id")
 	if agentID == "" {
-		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "missing agent id"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "missing agent id"})
 		return
 	}
 
 	if !s.registry.Delete(agentID) {
-		writeHubJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
 		return
 	}
 
 	s.logger.Info("agent deleted", "agent_id", agentID)
-	writeHubJSON(w, http.StatusOK, map[string]string{"status": "deleted", "agent_id": agentID})
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted", "agent_id": agentID})
 }
 
 func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +136,7 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		Params  json.RawMessage `json:"params"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
-		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid command"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid command"})
 		return
 	}
 
@@ -155,7 +156,7 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		// Emit a job_failed notification upstream.
 		s.aggregator.emitCommandFailure(cmd.AgentID, cmd.Action, err)
 
-		writeHubJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		addonutil.WriteJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -172,12 +173,12 @@ type TelemetryIngestRequest struct {
 func (s *Server) handleTelemetryIngest(w http.ResponseWriter, r *http.Request) {
 	var req TelemetryIngestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid telemetry"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid telemetry"})
 		return
 	}
 
 	s.aggregator.IngestAgentFrame(req.AgentID, req.Payload)
-	writeHubJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 }
 
 // handleConfigFromBody handles POST /api/config where agent_id is in the JSON body.
@@ -187,19 +188,19 @@ func (s *Server) handleTelemetryIngest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfigFromBody(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read body"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read body"})
 		return
 	}
 
 	var flat map[string]interface{}
 	if err := json.Unmarshal(body, &flat); err != nil {
-		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
 
 	agentID, _ := flat["agent_id"].(string)
 	if agentID == "" {
-		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "missing agent_id in body"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "missing agent_id in body"})
 		return
 	}
 
@@ -220,33 +221,33 @@ func (s *Server) handleConfigFromBody(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.router.RouteConfigUpdate(agentID, payload); err != nil {
 		s.logger.Error("config forward failed", "agent_id", agentID, "error", err)
-		writeHubJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		addonutil.WriteJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 
-	writeHubJSON(w, http.StatusOK, map[string]string{"status": "forwarded"})
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "forwarded"})
 }
 
 func (s *Server) handleConfigForward(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("agentID")
 	if agentID == "" {
-		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "missing agent_id"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "missing agent_id"})
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read body"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read body"})
 		return
 	}
 
 	if err := s.router.RouteConfigUpdate(agentID, body); err != nil {
 		s.logger.Error("config forward failed", "agent_id", agentID, "error", err)
-		writeHubJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		addonutil.WriteJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 
-	writeHubJSON(w, http.StatusOK, map[string]string{"status": "forwarded"})
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "forwarded"})
 }
 
 
@@ -265,7 +266,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if agentID == "" {
-			writeHubJSON(w, http.StatusNotFound, map[string]string{"error": "no online agents"})
+			addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "no online agents"})
 			return
 		}
 	}
@@ -273,7 +274,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	body, err := s.router.FetchAgentConfig(agentID)
 	if err != nil {
 		s.logger.Error("failed to fetch agent config", "agent_id", agentID, "error", err)
-		writeHubJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		addonutil.WriteJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -291,7 +292,7 @@ func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 		Confirm string `json:"confirm"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
 
@@ -300,26 +301,26 @@ func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 		confirm = req.Confirm
 	}
 	if confirm != "ROTATE" {
-		writeHubJSON(w, http.StatusBadRequest, map[string]string{"error": "type ROTATE to confirm"})
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "type ROTATE to confirm"})
 		return
 	}
 
 	newToken, err := GenerateToken()
 	if err != nil {
 		s.logger.Error("failed to generate new token", "error", err)
-		writeHubJSON(w, http.StatusInternalServerError, map[string]string{"error": "token generation failed"})
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "token generation failed"})
 		return
 	}
 
 	if err := PersistToken(s.cfg.Data.RegistryPath, newToken); err != nil {
 		s.logger.Error("failed to persist new token", "error", err)
-		writeHubJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save token"})
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save token"})
 		return
 	}
 
 	s.cfg.Vigil.Token = newToken
 	s.logger.Info("hub token rotated successfully")
-	writeHubJSON(w, http.StatusOK, map[string]string{
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{
 		"status":    "rotated",
 		"hub_token": newToken,
 	})
@@ -340,7 +341,7 @@ func (s *Server) handleProxyToAgent(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if agentID == "" {
-			writeHubJSON(w, http.StatusNotFound, map[string]string{"error": "no online agents"})
+			addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "no online agents"})
 			return
 		}
 	}
@@ -354,7 +355,7 @@ func (s *Server) handleProxyToAgent(w http.ResponseWriter, r *http.Request) {
 	body, statusCode, err := s.router.ProxyGet(agentID, pathAndQuery)
 	if err != nil {
 		s.logger.Error("proxy to agent failed", "agent_id", agentID, "error", err)
-		writeHubJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		addonutil.WriteJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -382,7 +383,7 @@ func (s *Server) handleTelemetryField(w http.ResponseWriter, r *http.Request) {
 
 	info, ok := fieldMap[r.URL.Path]
 	if !ok {
-		writeHubJSON(w, http.StatusNotFound, map[string]string{"error": "unknown telemetry field"})
+		addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "unknown telemetry field"})
 		return
 	}
 
@@ -448,7 +449,7 @@ func (s *Server) handleActiveJobs(w http.ResponseWriter, r *http.Request) {
 	agentID := r.URL.Query().Get("agent_id")
 	data := s.aggregator.LatestTelemetryField(agentID, "active_job")
 	if data == nil || string(data) == "null" {
-		writeHubJSON(w, http.StatusOK, []any{})
+		addonutil.WriteJSON(w, http.StatusOK, []any{})
 		return
 	}
 	// Wrap single job in array for the progress component.
@@ -458,8 +459,3 @@ func (s *Server) handleActiveJobs(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("]"))
 }
 
-func writeHubJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
-}

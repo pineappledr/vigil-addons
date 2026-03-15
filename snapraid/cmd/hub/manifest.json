@@ -42,31 +42,6 @@
           }
         },
         {
-          "type": "smart-table",
-          "id": "disk-status",
-          "title": "Disk Status",
-          "config": {
-            "source": "disk_status",
-            "columns": [
-              { "key": "name", "label": "Disk" },
-              { "key": "device", "label": "Device" },
-              { "key": "used", "label": "Used", "format": "bytes" },
-              { "key": "free", "label": "Free", "format": "bytes" },
-              { "key": "wasted", "label": "Wasted", "format": "bytes" }
-            ]
-          }
-        },
-        {
-          "type": "disk-storage",
-          "id": "disk-storage",
-          "title": "Disk Storage",
-          "config": {
-            "source": "disk_storage",
-            "aliases": {},
-            "thresholds": { "warning": 70, "danger": 90 }
-          }
-        },
-        {
           "type": "progress",
           "id": "active-job",
           "title": "Active Job",
@@ -81,6 +56,16 @@
               "method": "POST",
               "confirm_message": "Abort the running SnapRAID operation?"
             }
+          }
+        },
+        {
+          "type": "disk-storage",
+          "id": "disk-storage",
+          "title": "Disk Storage",
+          "config": {
+            "source": "disk_storage",
+            "aliases": {},
+            "thresholds": { "warning": 70, "danger": 90 }
           }
         }
       ]

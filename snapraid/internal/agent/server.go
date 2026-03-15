@@ -116,6 +116,21 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 	go s.runCommand(req)
 }
 
+// progressChan creates a buffered progress channel and starts a goroutine
+// that drains it into the collector's active job. Returns the channel and a
+// stop function that must be called when the command finishes.
+func (s *Server) progressChan() (chan<- int, func()) {
+	ch := make(chan int, 4)
+	done := make(chan struct{})
+	go func() {
+		for pct := range ch {
+			s.collector.UpdateProgress(pct)
+		}
+		close(done)
+	}()
+	return ch, func() { close(ch); <-done }
+}
+
 // runCommand executes a snapraid command in the background with job tracking.
 func (s *Server) runCommand(req ExecuteRequest) {
 	ctx := context.Background()
@@ -127,6 +142,9 @@ func (s *Server) runCommand(req ExecuteRequest) {
 	s.collector.TrackJob(req.Command, "running")
 	defer s.collector.ClearJob()
 
+	progress, stopProgress := s.progressChan()
+	defer stopProgress()
+
 	var exitCode int
 	var output string
 	var execErr error
@@ -137,7 +155,7 @@ func (s *Server) runCommand(req ExecuteRequest) {
 		report, execErr = s.engine.Sync(ctx, engine.SyncOptions{
 			PreHash:   req.PreHash,
 			ForceZero: req.ForceZero,
-		}, nil)
+		}, progress)
 		if report != nil {
 			exitCode = report.ExitCode
 			output = report.Output
@@ -152,7 +170,7 @@ func (s *Server) runCommand(req ExecuteRequest) {
 			days = s.cfg.Scrub.OlderThanDays
 		}
 		var report *engine.ScrubReport
-		report, execErr = s.engine.Scrub(ctx, engine.ScrubOptions{Plan: plan, OlderThanDays: days})
+		report, execErr = s.engine.Scrub(ctx, engine.ScrubOptions{Plan: plan, OlderThanDays: days}, progress)
 		if report != nil {
 			exitCode = report.ExitCode
 			output = report.Output
@@ -163,7 +181,7 @@ func (s *Server) runCommand(req ExecuteRequest) {
 			BadBlocksOnly: req.BadBlocksOnly,
 			Disk:          req.Disk,
 			Filter:        req.Filter,
-		})
+		}, progress)
 		if report != nil {
 			exitCode = report.ExitCode
 			output = report.Output

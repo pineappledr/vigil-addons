@@ -148,7 +148,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 		report, err := p.engine.Scrub(ctx, engine.ScrubOptions{
 			Plan:          p.cfg.Scrub.Plan,
 			OlderThanDays: p.cfg.Scrub.OlderThanDays,
-		})
+		}, nil)
 		if err != nil {
 			return 0, "", err
 		}
@@ -160,7 +160,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	if p.cfg.Scrub.AutoFixBadBlocks && scrubExitCode == 2 {
 		p.logger.Info("scrub reported bad blocks, running auto-fix")
 		p.runStep(ctx, "fix", "auto-fix", func(ctx context.Context) (int, string, error) {
-			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true})
+			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true}, nil)
 			if err != nil {
 				return 0, "", err
 			}
@@ -179,7 +179,7 @@ func (p *Pipeline) RunScrubOnly(ctx context.Context) {
 		report, err := p.engine.Scrub(ctx, engine.ScrubOptions{
 			Plan:          p.cfg.Scrub.Plan,
 			OlderThanDays: p.cfg.Scrub.OlderThanDays,
-		})
+		}, nil)
 		if err != nil {
 			return 0, "", err
 		}
@@ -190,7 +190,7 @@ func (p *Pipeline) RunScrubOnly(ctx context.Context) {
 	if p.cfg.Scrub.AutoFixBadBlocks && scrubExitCode == 2 {
 		p.logger.Info("scrub reported bad blocks, running auto-fix")
 		p.runStep(ctx, "fix", "auto-fix", func(ctx context.Context) (int, string, error) {
-			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true})
+			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true}, nil)
 			if err != nil {
 				return 0, "", err
 			}

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -17,6 +18,10 @@ var (
 	ErrEngineLocked = errors.New("another snapraid operation is already running")
 	ErrNoActiveJob  = errors.New("no active snapraid operation to abort")
 )
+
+// reProgress matches snapraid's progress output lines (e.g. "0%, 100511 MB, 933 MB/s, ...").
+// Used by sync, scrub, fix, and check to extract the leading percentage.
+var reProgress = regexp.MustCompile(`(\d+)%`)
 
 // Engine wraps the snapraid binary and enforces single-command concurrency.
 type Engine struct {

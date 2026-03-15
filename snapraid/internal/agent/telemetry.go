@@ -130,6 +130,15 @@ func (c *Collector) TrackJob(jobType, phase string) {
 	})
 }
 
+// UpdateProgress sets the progress percentage on the active job.
+func (c *Collector) UpdateProgress(pct int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.activeJob != nil {
+		c.activeJob.ProgressPercent = pct
+	}
+}
+
 // ClearJob implements scheduler.JobTracker — clears the active job after completion.
 func (c *Collector) ClearJob() {
 	c.ClearActiveJob()

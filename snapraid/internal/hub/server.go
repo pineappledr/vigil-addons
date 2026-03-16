@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/pineappledr/vigil-addons/shared/addonutil"
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
@@ -57,6 +58,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/active_job", s.handleTelemetryField)
 	s.mux.HandleFunc("GET /api/disk_storage", s.handleTelemetryField)
 	s.mux.HandleFunc("GET /api/jobs/active", s.handleActiveJobs)
+	s.mux.HandleFunc("DELETE /api/jobs/{id}", s.handleCancelJob)
 	s.mux.HandleFunc("POST /api/rotate-token", s.handleRotateToken)
 }
 
@@ -444,7 +446,7 @@ func (s *Server) handleTelemetryField(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleActiveJobs returns the current active job (if any) as a JSON array
-// for the progress component's initial fetch.
+// formatted as ProgressPayload objects for the progress component.
 func (s *Server) handleActiveJobs(w http.ResponseWriter, r *http.Request) {
 	agentID := r.URL.Query().Get("agent_id")
 	data := s.aggregator.LatestTelemetryField(agentID, "active_job")
@@ -452,10 +454,68 @@ func (s *Server) handleActiveJobs(w http.ResponseWriter, r *http.Request) {
 		addonutil.WriteJSON(w, http.StatusOK, []any{})
 		return
 	}
-	// Wrap single job in array for the progress component.
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte("["))
-	w.Write(data)
-	w.Write([]byte("]"))
+
+	// Parse the ActiveJob telemetry and transform it to the ProgressPayload
+	// format expected by the frontend progress component.
+	var activeJob struct {
+		Type            string `json:"type"`
+		StartedAt       string `json:"started_at"`
+		ProgressPercent int    `json:"progress_percent"`
+		CurrentPhase    string `json:"current_phase"`
+	}
+	if err := json.Unmarshal(data, &activeJob); err != nil {
+		addonutil.WriteJSON(w, http.StatusOK, []any{})
+		return
+	}
+
+	// Compute elapsed seconds from started_at.
+	var elapsedSec int64
+	if t, err := time.Parse(time.RFC3339Nano, activeJob.StartedAt); err == nil {
+		elapsedSec = int64(time.Since(t).Seconds())
+	}
+
+	progressPayload := map[string]any{
+		"job_id":      activeJob.Type + "_" + activeJob.StartedAt,
+		"command":     activeJob.Type,
+		"phase":       activeJob.CurrentPhase,
+		"percent":     activeJob.ProgressPercent,
+		"elapsed_sec": elapsedSec,
+	}
+
+	addonutil.WriteJSON(w, http.StatusOK, []any{progressPayload})
+}
+
+// handleCancelJob aborts the active job on the agent. The job ID path param
+// is accepted for API compatibility with the progress component's cancel
+// button, but SnapRaid only has one active job at a time so it simply sends
+// an abort command to the appropriate agent.
+func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
+	agentID := r.URL.Query().Get("agent_id")
+	if agentID == "" {
+		// Fall back to the first online agent if not specified.
+		agents := s.registry.ListViews()
+		for _, a := range agents {
+			if a.Status == "online" {
+				agentID = a.ID
+				break
+			}
+		}
+	}
+	if agentID == "" {
+		addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "no online agent found"})
+		return
+	}
+
+	_, err := s.router.RouteCommand(CommandMessage{
+		AgentID: agentID,
+		Action:  "abort",
+	})
+	if err != nil {
+		s.logger.Error("cancel job failed", "agent_id", agentID, "error", err)
+		addonutil.WriteJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 

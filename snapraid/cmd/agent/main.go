@@ -108,6 +108,23 @@ func main() {
 	}
 	defer sched.Stop()
 
+	// Periodically refresh disk storage (lightweight: just syscall.Statfs).
+	// This ensures telemetry frames always carry current disk usage.
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-appCtx.Done():
+				return
+			case <-ticker.C:
+				if storage, err := eng.CollectDiskStorage(); err == nil {
+					collector.SetDiskStorage(storage)
+				}
+			}
+		}
+	}()
+
 	// Self-register with the Hub (retries in background)
 	if cfg.Hub.URL != "" {
 		if advertiseAddr == "" {

@@ -110,7 +110,8 @@ var osMountPoints = map[string]bool{
 	"/home": true,
 }
 
-// loadMountTable reads /proc/mounts and returns all mount entries.
+// loadMountTable reads /proc/mounts, resolves symlinks on device paths
+// (e.g. /dev/disk/by-uuid/... → /dev/sda1), and returns all mount entries.
 func loadMountTable() []mountEntry {
 	data, err := os.ReadFile("/proc/mounts")
 	if err != nil {
@@ -128,6 +129,10 @@ func loadMountTable() []mountEntry {
 		if !strings.HasPrefix(dev, "/dev/") {
 			continue
 		}
+		// Resolve symlinks so /dev/disk/by-uuid/... becomes /dev/sda1 etc.
+		if resolved, err := filepath.EvalSymlinks(dev); err == nil {
+			dev = resolved
+		}
 		entries = append(entries, mountEntry{device: dev, mountPoint: fields[1]})
 	}
 	return entries
@@ -139,7 +144,7 @@ func checkMounts(resolvedDev string, mounts []mountEntry) (mountPoints []string,
 	baseDev := filepath.Base(resolvedDev) // e.g. "sda"
 
 	for _, m := range mounts {
-		mountBase := filepath.Base(m.device)
+		mountBase := filepath.Base(m.device) // already resolved by loadMountTable
 
 		// Match the device itself or any of its partitions (sda, sda1, sda2, ...).
 		if mountBase == baseDev || strings.HasPrefix(mountBase, baseDev) {

@@ -7,11 +7,13 @@ on:
       - 'v*'
     paths:
       - 'burn-in/**'
+      - 'shared/**'
       - '.github/workflows/burnin.yml'
   pull_request:
     branches: [ "main", "develop" ]
     paths:
       - 'burn-in/**'
+      - 'shared/**'
       - '.github/workflows/burnin.yml'
 
 env:
@@ -104,7 +106,7 @@ jobs:
       - name: Build hub image for scanning
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.hub
           push: false
           load: true
@@ -114,7 +116,7 @@ jobs:
       - name: Build agent image for scanning
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.agent
           push: false
           load: true
@@ -168,7 +170,7 @@ jobs:
       - name: Build Hub
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.hub
           push: true
           build-args: VERSION=${{ steps.version.outputs.tag }}
@@ -179,7 +181,7 @@ jobs:
       - name: Build Agent
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.agent
           push: true
           build-args: VERSION=${{ steps.version.outputs.tag }}
@@ -298,7 +300,7 @@ jobs:
       - name: Build Hub image
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.hub
           push: true
           build-args: VERSION=${{ steps.meta.outputs.version }}
@@ -311,7 +313,7 @@ jobs:
       - name: Build Agent image
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.agent
           push: true
           build-args: VERSION=${{ steps.meta.outputs.version }}
@@ -357,7 +359,7 @@ jobs:
       - name: Build Hub
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.hub
           push: true
           platforms: linux/amd64,linux/arm64
@@ -371,7 +373,7 @@ jobs:
       - name: Build Agent
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.agent
           push: true
           platforms: linux/amd64,linux/arm64
@@ -432,7 +434,7 @@ jobs:
       - name: Build Hub image
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.hub
           push: true
           platforms: linux/amd64,linux/arm64
@@ -446,7 +448,7 @@ jobs:
       - name: Build Agent image
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.agent
           push: true
           platforms: linux/amd64,linux/arm64

@@ -2,7 +2,9 @@ FROM --platform=$BUILDPLATFORM golang:1.26.1-alpine AS builder
 ARG TARGETOS TARGETARCH
 ARG VERSION=dev
 WORKDIR /src
-COPY . .
+COPY shared/ shared/
+COPY burn-in/ burn-in/
+WORKDIR /src/burn-in
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags="-s -w -X main.version=$VERSION" \
     -o /burnin-hub ./cmd/hub

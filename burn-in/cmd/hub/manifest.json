@@ -236,6 +236,9 @@
               { "key": "model", "label": "Model" },
               { "key": "serial", "label": "Serial" },
               { "key": "capacity", "label": "Capacity", "format": "bytes" },
+              { "key": "transport", "label": "Type" },
+              { "key": "is_os_drive", "label": "OS", "format": "warning_badge" },
+              { "key": "mount_points", "label": "Mounts" },
               { "key": "path", "label": "Path" }
             ]
           }

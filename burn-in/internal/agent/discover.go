@@ -16,19 +16,24 @@ const diskByIDPath = "/dev/disk/by-id/"
 
 // DriveInfo describes a discovered drive.
 type DriveInfo struct {
-	Path          string `json:"path"`
-	Model         string `json:"model"`
-	Serial        string `json:"serial"`
-	CapacityBytes int64  `json:"capacity_bytes"`
+	Path          string   `json:"path"`
+	Model         string   `json:"model"`
+	Serial        string   `json:"serial"`
+	CapacityBytes int64    `json:"capacity_bytes"`
+	Transport     string   `json:"transport"`                // "SATA", "NVMe", "USB", "SAS", or "unknown"
+	IsOSDrive     bool     `json:"is_os_drive"`              // true if any partition hosts /, /boot, or swap
+	MountPoints   []string `json:"mount_points,omitempty"`   // active mount points (e.g. ["/", "/boot/efi"])
 }
 
-// DiscoverDrives scans /dev/disk/by-id/ for ATA and NVMe base drives,
+// DiscoverDrives scans /dev/disk/by-id/ for ATA, NVMe, and USB base drives,
 // then retrieves SMART metadata for each via smartctl.
 func DiscoverDrives(logger *slog.Logger) ([]DriveInfo, error) {
 	entries, err := os.ReadDir(diskByIDPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", diskByIDPath, err)
 	}
+
+	mounts := loadMountTable()
 
 	var drives []DriveInfo
 	for _, entry := range entries {
@@ -55,6 +60,9 @@ func DiscoverDrives(logger *slog.Logger) ([]DriveInfo, error) {
 
 		// Use the by-id path for stable identification.
 		info.Path = fullPath
+		info.Transport = transportFromName(name)
+		info.MountPoints, info.IsOSDrive = checkMounts(resolved, mounts)
+
 		drives = append(drives, *info)
 
 		logger.Info("discovered drive",
@@ -62,13 +70,93 @@ func DiscoverDrives(logger *slog.Logger) ([]DriveInfo, error) {
 			"model", info.Model,
 			"serial", info.Serial,
 			"capacity_bytes", info.CapacityBytes,
+			"transport", info.Transport,
+			"is_os_drive", info.IsOSDrive,
+			"mount_points", info.MountPoints,
 		)
 	}
 
 	return drives, nil
 }
 
-// isBaseDrive returns true for ata- and nvme- symlinks that are not
+// transportFromName derives the bus/transport type from the /dev/disk/by-id/ name prefix.
+func transportFromName(name string) string {
+	switch {
+	case strings.HasPrefix(name, "ata-"):
+		return "SATA"
+	case strings.HasPrefix(name, "nvme-"):
+		return "NVMe"
+	case strings.HasPrefix(name, "usb-"):
+		return "USB"
+	case strings.HasPrefix(name, "scsi-"):
+		return "SAS"
+	default:
+		return "unknown"
+	}
+}
+
+// mountEntry holds a parsed line from /proc/mounts.
+type mountEntry struct {
+	device     string // e.g. /dev/sda1
+	mountPoint string // e.g. /
+}
+
+// osMountPoints are mount points that indicate the drive hosts the OS.
+var osMountPoints = map[string]bool{
+	"/":     true,
+	"/boot": true,
+	"/var":  true,
+	"/usr":  true,
+	"/home": true,
+}
+
+// loadMountTable reads /proc/mounts and returns all mount entries.
+func loadMountTable() []mountEntry {
+	data, err := os.ReadFile("/proc/mounts")
+	if err != nil {
+		return nil
+	}
+
+	var entries []mountEntry
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 2 {
+			continue
+		}
+		dev := fields[0]
+		if !strings.HasPrefix(dev, "/dev/") {
+			continue
+		}
+		entries = append(entries, mountEntry{device: dev, mountPoint: fields[1]})
+	}
+	return entries
+}
+
+// checkMounts returns the mount points for any partition belonging to the
+// given block device and whether any of them indicates an OS drive.
+func checkMounts(resolvedDev string, mounts []mountEntry) (mountPoints []string, isOS bool) {
+	baseDev := filepath.Base(resolvedDev) // e.g. "sda"
+
+	for _, m := range mounts {
+		mountBase := filepath.Base(m.device)
+
+		// Match the device itself or any of its partitions (sda, sda1, sda2, ...).
+		if mountBase == baseDev || strings.HasPrefix(mountBase, baseDev) {
+			mountPoints = append(mountPoints, m.mountPoint)
+			if osMountPoints[m.mountPoint] {
+				isOS = true
+			}
+			// Also flag swap
+			if m.mountPoint == "swap" || strings.Contains(m.mountPoint, "[SWAP]") {
+				isOS = true
+			}
+		}
+	}
+	return mountPoints, isOS
+}
+
+// isBaseDrive returns true for ata-, nvme-, and usb- symlinks that are not
 // partitions (contain -partN) or WWN entries.
 func isBaseDrive(name string) bool {
 	if strings.HasPrefix(name, "wwn-") {

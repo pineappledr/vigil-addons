@@ -181,6 +181,8 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 
 // RunScrubOnly executes a standalone scrub job.
 func (p *Pipeline) RunScrubOnly(ctx context.Context) {
+	p.emit("scrub_started", "info", "Standalone scrub started")
+
 	var scrubExitCode int
 	p.runStep(ctx, "scrub", "scheduled", func(ctx context.Context) (int, string, error) {
 		progress, stopProgress := p.progressChan()
@@ -208,10 +210,14 @@ func (p *Pipeline) RunScrubOnly(ctx context.Context) {
 			return report.ExitCode, report.Output, nil
 		})
 	}
+
+	p.emit("scrub_complete", "info", "Standalone scrub completed")
 }
 
 // RunSmartCheck executes a standalone SMART check.
 func (p *Pipeline) RunSmartCheck(ctx context.Context) {
+	p.emit("smart_check_started", "info", "SMART check started")
+
 	p.runStep(ctx, "smart", "scheduled", func(ctx context.Context) (int, string, error) {
 		report, err := p.engine.Smart(ctx)
 		if err != nil {
@@ -219,6 +225,8 @@ func (p *Pipeline) RunSmartCheck(ctx context.Context) {
 		}
 		return 0, report.Output, nil
 	})
+
+	p.emit("smart_check_complete", "info", "SMART check completed")
 }
 
 // RunStatusRefresh executes a standalone status refresh.
@@ -230,6 +238,8 @@ func (p *Pipeline) RunStatusRefresh(ctx context.Context) {
 		}
 		return 0, report.Output, nil
 	})
+
+	p.emit("status_refresh_complete", "info", "Status refresh completed")
 }
 
 // progressChan creates a buffered progress channel that drains into the

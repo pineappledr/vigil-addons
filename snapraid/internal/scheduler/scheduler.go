@@ -59,6 +59,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	// Our config uses standard 5-field cron, so we prepend "0 " for the seconds field.
 	for _, sched := range schedules {
 		if sched.expr == "" {
+			s.logger.Warn("cron schedule not configured, job will not run", "job", sched.name)
 			continue
 		}
 		expr := "0 " + sched.expr

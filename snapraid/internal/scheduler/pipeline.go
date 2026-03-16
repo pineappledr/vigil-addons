@@ -21,6 +21,7 @@ type EventEmitter interface {
 // so the dashboard can display running operations.
 type JobTracker interface {
 	TrackJob(jobType, phase string)
+	UpdateProgress(pct int)
 	ClearJob()
 }
 
@@ -119,9 +120,11 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 
 	// Step 4: sync
 	syncOk := p.runStep(ctx, "sync", "scheduled", func(ctx context.Context) (int, string, error) {
+		progress, stopProgress := p.progressChan()
+		defer stopProgress()
 		report, err := p.engine.Sync(ctx, engine.SyncOptions{
 			PreHash: p.cfg.Sync.PreHash,
-		}, nil)
+		}, progress)
 		if err != nil {
 			return 0, "", err
 		}
@@ -145,10 +148,12 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	// Step 5: scrub
 	var scrubExitCode int
 	p.runStep(ctx, "scrub", "scheduled", func(ctx context.Context) (int, string, error) {
+		progress, stopProgress := p.progressChan()
+		defer stopProgress()
 		report, err := p.engine.Scrub(ctx, engine.ScrubOptions{
 			Plan:          p.cfg.Scrub.Plan,
 			OlderThanDays: p.cfg.Scrub.OlderThanDays,
-		}, nil)
+		}, progress)
 		if err != nil {
 			return 0, "", err
 		}
@@ -160,7 +165,9 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	if p.cfg.Scrub.AutoFixBadBlocks && scrubExitCode == 2 {
 		p.logger.Info("scrub reported bad blocks, running auto-fix")
 		p.runStep(ctx, "fix", "auto-fix", func(ctx context.Context) (int, string, error) {
-			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true}, nil)
+			progress, stopProgress := p.progressChan()
+			defer stopProgress()
+			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true}, progress)
 			if err != nil {
 				return 0, "", err
 			}
@@ -176,10 +183,12 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 func (p *Pipeline) RunScrubOnly(ctx context.Context) {
 	var scrubExitCode int
 	p.runStep(ctx, "scrub", "scheduled", func(ctx context.Context) (int, string, error) {
+		progress, stopProgress := p.progressChan()
+		defer stopProgress()
 		report, err := p.engine.Scrub(ctx, engine.ScrubOptions{
 			Plan:          p.cfg.Scrub.Plan,
 			OlderThanDays: p.cfg.Scrub.OlderThanDays,
-		}, nil)
+		}, progress)
 		if err != nil {
 			return 0, "", err
 		}
@@ -190,7 +199,9 @@ func (p *Pipeline) RunScrubOnly(ctx context.Context) {
 	if p.cfg.Scrub.AutoFixBadBlocks && scrubExitCode == 2 {
 		p.logger.Info("scrub reported bad blocks, running auto-fix")
 		p.runStep(ctx, "fix", "auto-fix", func(ctx context.Context) (int, string, error) {
-			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true}, nil)
+			progress, stopProgress := p.progressChan()
+			defer stopProgress()
+			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true}, progress)
 			if err != nil {
 				return 0, "", err
 			}
@@ -219,6 +230,24 @@ func (p *Pipeline) RunStatusRefresh(ctx context.Context) {
 		}
 		return 0, report.Output, nil
 	})
+}
+
+// progressChan creates a buffered progress channel that drains into the
+// tracker's UpdateProgress. Returns the channel and a stop function.
+// Returns (nil, noop) if no tracker is configured.
+func (p *Pipeline) progressChan() (chan<- int, func()) {
+	if p.tracker == nil {
+		return nil, func() {}
+	}
+	ch := make(chan int, 4)
+	done := make(chan struct{})
+	go func() {
+		for pct := range ch {
+			p.tracker.UpdateProgress(pct)
+		}
+		close(done)
+	}()
+	return ch, func() { close(ch); <-done }
 }
 
 // stepFunc executes a SnapRAID operation and returns (exitCode, output, error).

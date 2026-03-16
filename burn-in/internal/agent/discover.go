@@ -74,7 +74,7 @@ func isBaseDrive(name string) bool {
 	if strings.HasPrefix(name, "wwn-") {
 		return false
 	}
-	if !strings.HasPrefix(name, "ata-") && !strings.HasPrefix(name, "nvme-") {
+	if !strings.HasPrefix(name, "ata-") && !strings.HasPrefix(name, "nvme-") && !strings.HasPrefix(name, "usb-") {
 		return false
 	}
 	if strings.Contains(name, "-part") {

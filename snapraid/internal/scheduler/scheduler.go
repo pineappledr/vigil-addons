@@ -83,6 +83,14 @@ func (s *Scheduler) Stop() context.Context {
 	return s.cron.Stop()
 }
 
+// Reschedule stops the current cron runner, creates a fresh one, and re-registers
+// all jobs using the current values in s.cfg. Call this after updating s.cfg fields.
+func (s *Scheduler) Reschedule(ctx context.Context) error {
+	<-s.cron.Stop().Done()
+	s.cron = cron.New(cron.WithSeconds())
+	return s.Start(ctx)
+}
+
 // runMaintenance executes the full maintenance pipeline under the job mutex.
 func (s *Scheduler) runMaintenance(ctx context.Context) {
 	if !s.jobMu.TryLock() {

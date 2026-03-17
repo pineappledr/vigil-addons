@@ -67,7 +67,15 @@ func main() {
 	collector := agent.NewCollector(agentID, hostname, version, logger)
 	collector.SetSnapraidVersion(eng.Version())
 
-	srv := agent.NewServer(cfg, eng, db, collector, logger)
+	// Start the cron scheduler for automated jobs.
+	sched := scheduler.New(eng, cfg, db, collector, collector, logger)
+	if err := sched.Start(appCtx); err != nil {
+		logger.Error("failed to start scheduler", "error", err)
+		os.Exit(1)
+	}
+	defer sched.Stop()
+
+	srv := agent.NewServer(cfg, eng, db, collector, sched, appCtx, logger)
 
 	// Populate telemetry cache on startup so data is immediately available.
 	go func() {
@@ -99,14 +107,6 @@ func main() {
 			logger.Warn("startup: snapraid smart failed", "error", err)
 		}
 	}()
-
-	// Start the cron scheduler for automated jobs.
-	sched := scheduler.New(eng, cfg, db, collector, collector, logger)
-	if err := sched.Start(appCtx); err != nil {
-		logger.Error("failed to start scheduler", "error", err)
-		os.Exit(1)
-	}
-	defer sched.Stop()
 
 	// Periodically refresh disk storage (lightweight: just syscall.Statfs).
 	// This ensures telemetry frames always carry current disk usage.

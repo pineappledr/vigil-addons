@@ -15,6 +15,7 @@ import (
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
 	agentdb "github.com/pineappledr/vigil-addons/snapraid/internal/db"
 	"github.com/pineappledr/vigil-addons/snapraid/internal/engine"
+	"github.com/pineappledr/vigil-addons/snapraid/internal/scheduler"
 )
 
 // Server is the Agent HTTP server exposing health, execute, and config endpoints.
@@ -23,6 +24,8 @@ type Server struct {
 	engine    *engine.Engine
 	db        *sql.DB
 	collector *Collector
+	sched     *scheduler.Scheduler
+	schedCtx  context.Context
 	mux       *http.ServeMux
 	server    *http.Server
 	logger    *slog.Logger
@@ -32,14 +35,16 @@ type Server struct {
 }
 
 // NewServer creates the Agent server with all dependencies.
-func NewServer(cfg *config.AgentConfig, eng *engine.Engine, database *sql.DB, collector *Collector, logger *slog.Logger) *Server {
+func NewServer(cfg *config.AgentConfig, eng *engine.Engine, database *sql.DB, collector *Collector, sched *scheduler.Scheduler, schedCtx context.Context, logger *slog.Logger) *Server {
 	s := &Server{
-		cfg:       cfg,
-		engine:    eng,
-		db:        database,
+		cfg:      cfg,
+		engine:   eng,
+		db:       database,
 		collector: collector,
-		mux:       http.NewServeMux(),
-		logger:    logger,
+		sched:    sched,
+		schedCtx: schedCtx,
+		mux:      http.NewServeMux(),
+		logger:   logger,
 	}
 	s.routes()
 	return s
@@ -255,12 +260,30 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	schedulerKeys := map[string]*string{
+		"maintenance_cron": &s.cfg.Scheduler.MaintenanceCron,
+		"scrub_cron":       &s.cfg.Scheduler.ScrubCron,
+		"status_cron":      &s.cfg.Scheduler.StatusCron,
+	}
+	needReschedule := false
+
 	for key, value := range req.Values {
 		s.logger.Info("config value received", "key", key, "value", value)
 		if err := agentdb.SetCacheValue(s.db, key, value); err != nil {
 			s.logger.Error("failed to persist config value", "key", key, "error", err)
 			addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist config"})
 			return
+		}
+		if ptr, ok := schedulerKeys[key]; ok {
+			*ptr = value
+			needReschedule = true
+		}
+	}
+
+	if needReschedule && s.sched != nil {
+		s.logger.Info("rescheduling cron jobs after config update")
+		if err := s.sched.Reschedule(s.schedCtx); err != nil {
+			s.logger.Error("reschedule failed", "error", err)
 		}
 	}
 

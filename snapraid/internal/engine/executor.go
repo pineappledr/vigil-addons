@@ -159,6 +159,24 @@ func (e *Engine) runCommand(ctx context.Context, args ...string) (*commandResult
 	return result, nil
 }
 
+// scanCR is a bufio.SplitFunc that treats both \r and \n as line terminators.
+// SnapRAID emits progress updates separated by \r rather than \n, so the
+// default ScanLines would accumulate the entire progress run into one token
+// and only yield it at the trailing newline — causing the first regex match
+// (0%) to be the only value ever seen. This splitter yields each \r- or
+// \n-terminated chunk immediately as it arrives.
+func scanCR(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	for i, b := range data {
+		if b == '\r' || b == '\n' {
+			return i + 1, data[:i], nil
+		}
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
 // lineFunc is called for each line of stdout during a streaming command.
 type lineFunc func(line string)
 
@@ -196,6 +214,7 @@ func (e *Engine) runCommandStreaming(ctx context.Context, onLine lineFunc, args 
 
 	var stdoutBuf bytes.Buffer
 	scanner := bufio.NewScanner(io.TeeReader(stdoutPipe, &stdoutBuf))
+	scanner.Split(scanCR)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if onLine != nil {

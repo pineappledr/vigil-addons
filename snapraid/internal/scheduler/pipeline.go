@@ -265,6 +265,14 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 
 	exitCode, output, err := fn(ctx)
 
+	// Signal completion so non-streaming jobs (diff, smart, status, touch)
+	// don't leave the progress bar stuck at 0% for their entire duration.
+	// For streaming jobs (sync, scrub, fix) this is redundant but harmless —
+	// the progress channel has already been fully drained before fn returns.
+	if err == nil && p.tracker != nil {
+		p.tracker.UpdateProgress(100)
+	}
+
 	status := "success"
 	if err != nil {
 		// Check Gate 3: concurrency lock

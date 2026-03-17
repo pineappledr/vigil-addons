@@ -32,6 +32,7 @@
               "maintenance_cron": "Maintenance Schedule",
               "scrub_cron": "Scrub Schedule",
               "smart_cron": "SMART Check Schedule",
+              "status_cron": "Status Refresh Schedule",
               "max_deleted": "Deletion Threshold",
               "max_updated": "Update Threshold",
               "pre_hash": "Pre-Hash",
@@ -230,6 +231,22 @@
                 "custom_placeholder": "0 */6 * * * (min hour day month weekday)"
               },
               {
+                "name": "status_cron",
+                "label": "Status Refresh Schedule",
+                "hint": "Periodic status check that updates the dashboard telemetry (disk usage, array health)",
+                "type": "select",
+                "default": "*/30 * * * *",
+                "options": [
+                  { "value": "", "label": "Disabled" },
+                  { "value": "*/30 * * * *", "label": "Every 30 minutes" },
+                  { "value": "0 * * * *", "label": "Every hour" },
+                  { "value": "0 */2 * * *", "label": "Every 2 hours" },
+                  { "value": "0 */6 * * *", "label": "Every 6 hours" },
+                  { "value": "__custom__", "label": "Custom..." }
+                ],
+                "custom_placeholder": "*/30 * * * * (min hour day month weekday)"
+              },
+              {
                 "name": "max_deleted",
                 "label": "Deletion Threshold",
                 "hint": "Abort sync if more files deleted than this limit. Set 0 for no limit.",
@@ -419,6 +436,7 @@
           "title": "Job History",
           "config": {
             "source": "job_history",
+            "page_size": 10,
             "columns": [
               { "key": "job_type", "label": "Type" },
               { "key": "trigger", "label": "Trigger" },

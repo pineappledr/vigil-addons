@@ -31,7 +31,6 @@
             "labels": {
               "maintenance_cron": "Maintenance Schedule",
               "scrub_cron": "Scrub Schedule",
-              "smart_cron": "SMART Check Schedule",
               "status_cron": "Status Refresh Schedule",
               "max_deleted": "Deletion Threshold",
               "max_updated": "Update Threshold",
@@ -213,22 +212,6 @@
                   { "value": "__custom__", "label": "Custom..." }
                 ],
                 "custom_placeholder": "0 4 * * 0 (min hour day month weekday)"
-              },
-              {
-                "name": "smart_cron",
-                "label": "SMART Check Schedule",
-                "hint": "Polls drive health and reports disk failures",
-                "type": "select",
-                "default": "0 */6 * * *",
-                "options": [
-                  { "value": "", "label": "Disabled" },
-                  { "value": "0 */6 * * *", "label": "Every 6 hours" },
-                  { "value": "0 */4 * * *", "label": "Every 4 hours" },
-                  { "value": "0 */12 * * *", "label": "Every 12 hours" },
-                  { "value": "0 0 * * *", "label": "Daily at midnight" },
-                  { "value": "__custom__", "label": "Custom..." }
-                ],
-                "custom_placeholder": "0 */6 * * * (min hour day month weekday)"
               },
               {
                 "name": "status_cron",

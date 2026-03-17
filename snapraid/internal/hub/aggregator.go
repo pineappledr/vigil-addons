@@ -40,6 +40,7 @@ type agentEvent struct {
 
 type agentActiveJob struct {
 	Type         string `json:"type"`
+	Trigger      string `json:"trigger"`
 	CurrentPhase string `json:"current_phase"`
 }
 
@@ -56,8 +57,9 @@ type agentSmartDisk struct {
 
 // trackedJob records the last-known job state for an agent.
 type trackedJob struct {
-	Type  string
-	Phase string
+	Type    string
+	Phase   string
+	Trigger string
 }
 
 // Aggregator multiplexes inbound WebSocket telemetry from multiple Agents
@@ -226,17 +228,24 @@ func (a *Aggregator) evaluateAgentEvent(tc *vigilclient.TelemetryClient, agentID
 }
 
 // evaluateJobTransition detects job started/completed and phase transitions.
+// Uses trigger-aware event types so users can toggle manual vs scheduled notifications.
 func (a *Aggregator) evaluateJobTransition(tc *vigilclient.TelemetryClient, agentID string, job *agentActiveJob) {
 	a.mu.Lock()
 	prev := a.lastJobs[agentID]
 
 	if job != nil && prev == nil {
 		// Job started.
-		a.lastJobs[agentID] = &trackedJob{Type: job.Type, Phase: job.CurrentPhase}
+		a.lastJobs[agentID] = &trackedJob{Type: job.Type, Phase: job.CurrentPhase, Trigger: job.Trigger}
 		a.mu.Unlock()
 
-		a.emitNotification(tc, agentID, "job_started", "info",
-			"SnapRAID "+job.Type+" started on "+agentID)
+		evtType := "job_started"
+		if job.Trigger == "manual" {
+			evtType = "manual_job_started"
+		} else if job.Trigger == "scheduled" {
+			evtType = "scheduled_job_started"
+		}
+		a.emitNotification(tc, agentID, evtType, "info",
+			"SnapRAID "+job.Type+" started ("+job.Trigger+") on "+agentID)
 		return
 	}
 
@@ -245,8 +254,14 @@ func (a *Aggregator) evaluateJobTransition(tc *vigilclient.TelemetryClient, agen
 		delete(a.lastJobs, agentID)
 		a.mu.Unlock()
 
-		a.emitNotification(tc, agentID, "job_complete", "info",
-			"SnapRAID "+prev.Type+" completed on "+agentID)
+		evtType := "job_complete"
+		if prev.Trigger == "manual" {
+			evtType = "manual_job_complete"
+		} else if prev.Trigger == "scheduled" {
+			evtType = "scheduled_job_complete"
+		}
+		a.emitNotification(tc, agentID, evtType, "info",
+			"SnapRAID "+prev.Type+" completed ("+prev.Trigger+") on "+agentID)
 		return
 	}
 

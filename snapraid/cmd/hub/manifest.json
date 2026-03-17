@@ -98,7 +98,6 @@
                   { "value": "sync", "label": "Sync" },
                   { "value": "scrub", "label": "Scrub" },
                   { "value": "status", "label": "Status" },
-                  { "value": "smart", "label": "SMART" },
                   { "value": "diff", "label": "Diff" },
                   { "value": "touch", "label": "Touch" },
                   { "value": "fix", "label": "Fix" }
@@ -362,6 +361,7 @@
               "ports": ["9400:9400"],
               "volumes": [
                 "agent-data:/var/lib/vigil-snapraid-agent",
+                "/dev:/dev:ro",
                 "/etc/snapraid.conf:/etc/snapraid.conf:ro",
                 "/usr/bin/snapraid:/usr/bin/snapraid:ro"
               ],

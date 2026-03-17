@@ -43,6 +43,7 @@ services:
       TZ: ${TZ:-UTC}
     volumes:
       - agent-data:/var/lib/vigil-snapraid-agent
+      - /dev:/dev:ro
       - /etc/snapraid.conf:/etc/snapraid.conf:ro
 
       # ─── Content files — read-write (updated by sync/scrub) ───

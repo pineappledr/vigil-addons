@@ -51,6 +51,7 @@ type SchedulerState struct {
 // ActiveJob describes a currently running operation.
 type ActiveJob struct {
 	Type            string    `json:"type"`
+	Trigger         string    `json:"trigger"` // "manual" or "scheduled"
 	StartedAt       time.Time `json:"started_at"`
 	ProgressPercent int       `json:"progress_percent"`
 	CurrentPhase    string    `json:"current_phase"`
@@ -122,9 +123,10 @@ func (c *Collector) SetActiveJob(j *ActiveJob)               { c.mu.Lock(); c.ac
 func (c *Collector) ClearActiveJob()                         { c.mu.Lock(); c.activeJob = nil; c.mu.Unlock() }
 
 // TrackJob implements scheduler.JobTracker — sets the active job visible on the dashboard.
-func (c *Collector) TrackJob(jobType, phase string) {
+func (c *Collector) TrackJob(jobType, trigger, phase string) {
 	c.SetActiveJob(&ActiveJob{
 		Type:         jobType,
+		Trigger:      trigger,
 		StartedAt:    time.Now().UTC(),
 		CurrentPhase: phase,
 	})

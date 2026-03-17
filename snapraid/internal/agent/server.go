@@ -139,7 +139,7 @@ func (s *Server) runCommand(req ExecuteRequest) {
 	jobID, _ := agentdb.InsertJob(s.db, req.Command, "manual")
 
 	// Track the active job so the dashboard shows it while running.
-	s.collector.TrackJob(req.Command, "running")
+	s.collector.TrackJob(req.Command, "manual", "running")
 	defer s.collector.ClearJob()
 
 	progress, stopProgress := s.progressChan()
@@ -313,6 +313,10 @@ func (s *Server) handleJobHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	if jobs == nil {
 		jobs = []agentdb.JobRecord{}
+	}
+	// Strip output_log — it can be huge and the table doesn't display it.
+	for i := range jobs {
+		jobs[i].OutputLog = ""
 	}
 	addonutil.WriteJSON(w, http.StatusOK, jobs)
 }

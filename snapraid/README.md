@@ -122,6 +122,7 @@ services:
       TZ: ${TZ:-UTC}
     volumes:
       - agent-data:/var/lib/vigil-snapraid-agent
+      - /dev:/dev:ro
       - /etc/snapraid.conf:/etc/snapraid.conf:ro
       # Content files — read-write (updated by sync/scrub):
       # - /var/snapraid.content:/var/snapraid.content
@@ -250,7 +251,7 @@ The Vigil UI renders five pages from the Hub manifest:
 | Page | Components | Purpose |
 |------|-----------|---------|
 | **Dashboard** | Disk Storage cards, Active Job progress, SMART Overview | At-a-glance array health with visual storage cards, progress bars, and inline alias editing |
-| **Operations** | Execute Command form | Manually trigger sync, scrub, fix, status, smart, diff, or touch against a selected Agent |
+| **Operations** | Execute Command form | Manually trigger sync, scrub, fix, status, diff, or touch against a selected Agent |
 | **Automation** | Schedule Configuration form | Configure maintenance, scrub, and SMART schedules with presets or custom cron; set safety thresholds |
 | **Agents** | Registered Agents table, Deploy Wizard | View connected Agents and deploy new ones via generated docker-compose |
 | **Logs** | Live Output viewer, Job History table | Real-time log streaming and historical job records |
@@ -500,7 +501,7 @@ Notifications are dispatched through the Vigil Server's notification system. Con
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
-| `POST` | `/api/execute` | Trigger a SnapRAID command (sync, scrub, fix, status, smart, diff, touch) |
+| `POST` | `/api/execute` | Trigger a SnapRAID command (sync, scrub, fix, status, diff, touch) |
 | `POST` | `/api/abort` | Cancel the currently running SnapRAID operation |
 | `POST` | `/api/config` | Push configuration updates (persisted to SQLite) |
 | `GET` | `/api/jobs` | Retrieve recent job history |

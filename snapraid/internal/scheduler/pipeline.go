@@ -20,7 +20,7 @@ type EventEmitter interface {
 // JobTracker allows the pipeline to report active job state upstream
 // so the dashboard can display running operations.
 type JobTracker interface {
-	TrackJob(jobType, phase string)
+	TrackJob(jobType, trigger, phase string)
 	UpdateProgress(pct int)
 	ClearJob()
 }
@@ -269,7 +269,7 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 	p.logger.Info("pipeline step started", "job", jobType)
 
 	if p.tracker != nil {
-		p.tracker.TrackJob(jobType, "running")
+		p.tracker.TrackJob(jobType, trigger, "running")
 		defer p.tracker.ClearJob()
 	}
 

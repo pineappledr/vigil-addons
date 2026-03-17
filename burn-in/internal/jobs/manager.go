@@ -426,11 +426,24 @@ func (m *JobManager) finishJob(mj *managedJob) {
 	rec.CompletedAt = &now
 	rec.Phase = PhaseComplete
 
-	// Emit a cancellation frame so the hub/UI know the job ended.
-	if rec.Status == StatusCancelled && m.sink != nil {
+	// Emit a final frame so the hub/UI know the job ended.
+	if m.sink != nil {
 		elapsedSec := int64(now.Sub(rec.StartedAt).Seconds())
-		_ = m.sink.SendProgress(rec.JobID, rec.Command, "CANCELLED", "job cancelled by user", 100, 0, 0, elapsedSec, 0, 0, nil)
-		_ = m.sink.SendLog(rec.JobID, SeverityWarning, "job cancelled by user")
+		switch rec.Status {
+		case StatusCompleted:
+			_ = m.sink.SendProgress(rec.JobID, rec.Command, PhaseComplete, "job completed successfully", 100, 0, 0, elapsedSec, 0, 0, nil)
+			_ = m.sink.SendLog(rec.JobID, SeverityInfo, fmt.Sprintf("%s completed successfully", rec.Command))
+		case StatusFailed:
+			reason := rec.FailReason
+			if reason == "" {
+				reason = "unknown error"
+			}
+			_ = m.sink.SendProgress(rec.JobID, rec.Command, PhaseComplete, reason, 100, 0, 0, elapsedSec, 0, 0, nil)
+			_ = m.sink.SendLog(rec.JobID, SeverityError, fmt.Sprintf("%s failed: %s", rec.Command, reason))
+		case StatusCancelled:
+			_ = m.sink.SendProgress(rec.JobID, rec.Command, "CANCELLED", "job cancelled by user", 100, 0, 0, elapsedSec, 0, 0, nil)
+			_ = m.sink.SendLog(rec.JobID, SeverityWarning, "job cancelled by user")
+		}
 	}
 
 	elapsed := now.Sub(rec.StartedAt)

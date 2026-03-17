@@ -735,18 +735,18 @@ func (a *Aggregator) evaluateProgress(upstream *vigilclient.TelemetryClient, fra
 	// Badblock error detection.
 	if frame.BadblockErrs > 0 {
 		a.emitNotification(upstream, frame, "job_failed", "critical",
-			fmt.Sprintf("Bad blocks detected on drive (%s): %d errors found", frame.AgentID, frame.BadblockErrs))
+			fmt.Sprintf("🔴 Bad blocks detected on drive (%s): %d errors found", frame.AgentID, frame.BadblockErrs))
 	}
 
 	// Phase completion (100% signals a phase is done).
 	if frame.Percent >= 100.0 && frame.Phase != "" {
 		a.emitNotification(upstream, frame, "phase_complete", "info",
-			fmt.Sprintf("Phase %q completed on agent %s", frame.Phase, frame.AgentID))
+			fmt.Sprintf("🔄 Phase %q completed on agent %s", frame.Phase, frame.AgentID))
 
 		// Special case: burn-in complete in a full pipeline.
 		if frame.Command == "full" && frame.Phase == "complete" {
 			a.emitNotification(upstream, frame, "burnin_passed", "info",
-				fmt.Sprintf("Burn-in passed on agent %s, pre-clear beginning", frame.AgentID))
+				fmt.Sprintf("✅ Burn-in passed on agent %s, pre-clear beginning", frame.AgentID))
 		}
 
 	}
@@ -769,7 +769,7 @@ func (a *Aggregator) evaluateJobLifecycle(upstream *vigilclient.TelemetryClient,
 			cmd = "job"
 		}
 		a.emitNotification(upstream, frame, "job_started", "info",
-			fmt.Sprintf("Burn-in %s started on agent %s (job %s)", cmd, frame.AgentID, frame.JobID))
+			fmt.Sprintf("▶️ Burn-in %s started on agent %s (job %s)", cmd, frame.AgentID, frame.JobID))
 	}
 
 	// Detect job completion.
@@ -786,8 +786,12 @@ func (a *Aggregator) evaluateJobLifecycle(upstream *vigilclient.TelemetryClient,
 		if cmd == "" {
 			cmd = "job"
 		}
+		icon := "✅"
+		if status == "cancelled" {
+			icon = "🛑"
+		}
 		a.emitNotification(upstream, frame, "job_complete", "info",
-			fmt.Sprintf("Burn-in %s %s on agent %s (job %s)", cmd, status, frame.AgentID, frame.JobID))
+			fmt.Sprintf("%s Burn-in %s %s on agent %s (job %s)", icon, cmd, status, frame.AgentID, frame.JobID))
 	}
 }
 
@@ -796,21 +800,21 @@ func (a *Aggregator) evaluateLog(upstream *vigilclient.TelemetryClient, frame ag
 	switch frame.resolveLevel() {
 	case "error":
 		a.emitNotification(upstream, frame, "job_failed", "critical",
-			fmt.Sprintf("Agent %s reported error: %s", frame.AgentID, frame.Message))
+			fmt.Sprintf("🔴 Agent %s reported error: %s", frame.AgentID, frame.Message))
 	case "warning", "warn":
 		a.emitNotification(upstream, frame, "smart_warning", "warning",
-			fmt.Sprintf("Agent %s warning: %s", frame.AgentID, frame.Message))
+			fmt.Sprintf("⚠️ Agent %s warning: %s", frame.AgentID, frame.Message))
 	}
 }
 
 func (a *Aggregator) checkTemperature(upstream *vigilclient.TelemetryClient, frame agentFrame) {
 	if frame.TempC >= a.thresholds.TempCriticalC {
 		a.emitNotification(upstream, frame, "temp_alert", "critical",
-			fmt.Sprintf("Drive temperature critical on agent %s: %d°C (threshold: %d°C)",
+			fmt.Sprintf("🔴 Drive temperature critical on agent %s: %d°C (threshold: %d°C)",
 				frame.AgentID, frame.TempC, a.thresholds.TempCriticalC))
 	} else if frame.TempC >= a.thresholds.TempWarningC {
 		a.emitNotification(upstream, frame, "temp_alert", "warning",
-			fmt.Sprintf("Drive temperature warning on agent %s: %d°C (threshold: %d°C)",
+			fmt.Sprintf("⚠️ Drive temperature warning on agent %s: %d°C (threshold: %d°C)",
 				frame.AgentID, frame.TempC, a.thresholds.TempWarningC))
 	}
 }
@@ -832,7 +836,7 @@ func (a *Aggregator) checkSmartDeltas(upstream *vigilclient.TelemetryClient, fra
 		delta := d.Current - d.Baseline
 		if delta > 0 {
 			a.emitNotification(upstream, frame, "smart_warning", "warning",
-				fmt.Sprintf("SMART attribute %s (%s) increased by %d on agent %s (baseline: %d, current: %d)",
+				fmt.Sprintf("⚠️ SMART attribute %s (%s) +%d on agent %s (baseline: %d → current: %d)",
 					id, d.Name, delta, frame.AgentID, d.Baseline, d.Current))
 		}
 	}

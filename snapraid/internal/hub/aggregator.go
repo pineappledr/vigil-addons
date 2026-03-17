@@ -245,7 +245,7 @@ func (a *Aggregator) evaluateJobTransition(tc *vigilclient.TelemetryClient, agen
 			evtType = "scheduled_job_started"
 		}
 		a.emitNotification(tc, agentID, evtType, "info",
-			"SnapRAID "+job.Type+" started ("+job.Trigger+") on "+agentID)
+			"▶️ SnapRAID "+job.Type+" started ("+job.Trigger+") on "+agentID)
 		return
 	}
 
@@ -261,7 +261,7 @@ func (a *Aggregator) evaluateJobTransition(tc *vigilclient.TelemetryClient, agen
 			evtType = "scheduled_job_complete"
 		}
 		a.emitNotification(tc, agentID, evtType, "info",
-			"SnapRAID "+prev.Type+" completed ("+prev.Trigger+") on "+agentID)
+			"✅ SnapRAID "+prev.Type+" completed ("+prev.Trigger+") on "+agentID)
 		return
 	}
 
@@ -276,7 +276,7 @@ func (a *Aggregator) evaluateJobTransition(tc *vigilclient.TelemetryClient, agen
 
 		if prevPhase != "" && job.CurrentPhase != "" && prevPhase != job.CurrentPhase {
 			a.emitNotification(tc, agentID, "phase_complete", "info",
-				"SnapRAID "+prevPhase+" completed, now running "+job.CurrentPhase+" on "+agentID)
+				"🔄 SnapRAID "+prevPhase+" → "+job.CurrentPhase+" on "+agentID)
 		}
 		return
 	}
@@ -305,8 +305,14 @@ func (a *Aggregator) evaluateSmartStatus(tc *vigilclient.TelemetryClient, agentI
 		a.smartAlerted[key] = true
 
 		a.mu.Unlock()
-		a.emitNotification(tc, agentID, "smart_warning", "warning",
-			"SMART "+disk.Status+" detected on "+disk.DiskName+" ("+disk.Device+") on "+agentID)
+		icon := "⚠️"
+		severity := "warning"
+		if disk.Status == "FAIL" {
+			icon = "🔴"
+			severity = "critical"
+		}
+		a.emitNotification(tc, agentID, "smart_warning", severity,
+			icon+" SMART "+disk.Status+": "+disk.DiskName+" ("+disk.Device+") on "+agentID)
 		a.mu.Lock()
 	}
 }
@@ -322,7 +328,7 @@ func (a *Aggregator) emitCommandFailure(agentID, action string, err error) {
 	}
 
 	a.emitNotification(tc, agentID, "job_failed", "critical",
-		"SnapRAID "+action+" failed on "+agentID+": "+err.Error())
+		"🔴 SnapRAID "+action+" failed on "+agentID+": "+err.Error())
 }
 
 // LatestTelemetryField extracts a top-level field from the cached telemetry of

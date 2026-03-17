@@ -51,7 +51,7 @@ func main() {
 	appCtx, appCancel := context.WithCancel(context.Background())
 	defer appCancel()
 
-	agentdb.StartPruneLoop(appCtx, db, 90*24*time.Hour, logger)
+	agentdb.StartPruneLoop(appCtx, db, 30*24*time.Hour, logger)
 
 	eng := engine.NewEngine(cfg.SnapRAID.BinaryPath, cfg.SnapRAID.ConfigPath, logger)
 

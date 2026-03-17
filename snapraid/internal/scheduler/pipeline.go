@@ -39,14 +39,14 @@ type Pipeline struct {
 // touch -> diff -> safety gates (SMART + diff thresholds) -> sync -> scrub.
 func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	p.logger.Info("maintenance pipeline started")
-	p.emit("maintenance_started", "info", "Maintenance pipeline started")
+	p.emit("maintenance_started", "info", "▶️ Maintenance pipeline started")
 
 	// Gate 0: Validate content and parity files exist and are non-empty.
 	gate := CheckConfigFiles(p.engine)
 	if !gate.Passed {
 		p.logger.Error("maintenance aborted: config files gate failed", "reason", gate.Reason)
 		p.recordGateFailure("config_files_gate", gate.Reason)
-		p.emit("gate_failed", "warning", "Maintenance aborted: "+gate.Reason)
+		p.emit("gate_failed", "warning", "⚠️ Maintenance aborted: "+gate.Reason)
 		return
 	}
 
@@ -92,7 +92,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	if !gate.Passed {
 		p.logger.Error("maintenance aborted: SMART gate failed", "reason", gate.Reason)
 		p.recordGateFailure("smart_gate", gate.Reason)
-		p.emit("gate_failed", "warning", "Maintenance aborted: "+gate.Reason)
+		p.emit("gate_failed", "warning", "⚠️ Maintenance aborted: "+gate.Reason)
 		return
 	}
 
@@ -101,7 +101,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	if !gate.Passed {
 		p.logger.Error("maintenance aborted: diff threshold gate failed", "reason", gate.Reason)
 		p.recordGateFailure("diff_gate", gate.Reason)
-		p.emit("gate_failed", "warning", "Maintenance aborted: "+gate.Reason)
+		p.emit("gate_failed", "warning", "⚠️ Maintenance aborted: "+gate.Reason)
 		return
 	}
 
@@ -111,7 +111,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	if err := runHook(ctx, "pre_sync", p.cfg.Hooks.PreSync, p.logger); err != nil {
 		p.logger.Error("maintenance aborted: pre-sync hook failed", "error", err)
 		p.recordGateFailure("pre_sync_hook", err.Error())
-		p.emit("gate_failed", "warning", "Pre-sync hook failed: "+err.Error())
+		p.emit("gate_failed", "warning", "⚠️ Pre-sync hook failed: "+err.Error())
 		return
 	}
 
@@ -176,12 +176,12 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	}
 
 	p.logger.Info("maintenance pipeline completed")
-	p.emit("maintenance_complete", "info", "Maintenance pipeline completed successfully")
+	p.emit("maintenance_complete", "warning", "✅ Maintenance pipeline completed successfully")
 }
 
 // RunScrubOnly executes a standalone scrub job.
 func (p *Pipeline) RunScrubOnly(ctx context.Context) {
-	p.emit("scrub_started", "info", "Standalone scrub started")
+	p.emit("scrub_started", "info", "▶️ Standalone scrub started")
 
 	var scrubExitCode int
 	p.runStep(ctx, "scrub", "scheduled", func(ctx context.Context) (int, string, error) {
@@ -211,7 +211,7 @@ func (p *Pipeline) RunScrubOnly(ctx context.Context) {
 		})
 	}
 
-	p.emit("scrub_complete", "info", "Standalone scrub completed")
+	p.emit("scrub_complete", "warning", "✅ Standalone scrub completed")
 }
 
 // RunStatusRefresh executes a standalone status refresh.
@@ -224,7 +224,7 @@ func (p *Pipeline) RunStatusRefresh(ctx context.Context) {
 		return 0, report.Output, nil
 	})
 
-	p.emit("status_refresh_complete", "info", "Status refresh completed")
+	p.emit("status_refresh_complete", "info", "🔄 Status refresh completed")
 }
 
 // progressChan creates a buffered progress channel that drains into the
@@ -287,6 +287,9 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 		if jobID > 0 {
 			agentdb.CompleteJob(p.db, jobID, -1, status, err.Error())
 		}
+		if trigger != "pre-flight" {
+			p.emit("job_failed", "critical", "🔴 SnapRAID "+jobType+" ("+trigger+") failed: "+err.Error())
+		}
 		return false
 	}
 
@@ -308,6 +311,10 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 	// Log the full command output so it appears in container logs.
 	if output != "" {
 		p.logger.Info("snapraid output", "job", jobType, "output", output)
+	}
+
+	if status == "error" && trigger != "pre-flight" {
+		p.emit("job_failed", "critical", "🔴 SnapRAID "+jobType+" ("+trigger+") failed: exit code "+itoa(exitCode))
 	}
 
 	return status == "success" || status == "warning"

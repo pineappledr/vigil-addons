@@ -51,7 +51,6 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	}{
 		{s.cfg.Scheduler.MaintenanceCron, "maintenance", s.runMaintenance},
 		{s.cfg.Scheduler.ScrubCron, "scrub_only", s.runScrubOnly},
-		{s.cfg.Scheduler.SmartCron, "smart_check", s.runSmartCheck},
 		{s.cfg.Scheduler.StatusCron, "status_refresh", s.runStatusRefresh},
 	}
 
@@ -120,25 +119,6 @@ func (s *Scheduler) runScrubOnly(ctx context.Context) {
 		logger:  s.logger,
 	}
 	p.RunScrubOnly(ctx)
-}
-
-// runSmartCheck executes a standalone SMART check.
-func (s *Scheduler) runSmartCheck(ctx context.Context) {
-	if !s.jobMu.TryLock() {
-		s.logger.Warn("smart_check skipped: previous scheduled job still running")
-		return
-	}
-	defer s.jobMu.Unlock()
-
-	p := &Pipeline{
-		engine:  s.engine,
-		cfg:     s.cfg,
-		db:      s.db,
-		emitter: s.emitter,
-		tracker: s.tracker,
-		logger:  s.logger,
-	}
-	p.RunSmartCheck(ctx)
 }
 
 // runStatusRefresh executes a standalone status refresh.

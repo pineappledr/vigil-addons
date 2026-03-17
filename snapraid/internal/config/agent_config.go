@@ -55,7 +55,6 @@ type SnapRAIDPaths struct {
 type SchedulerConfig struct {
 	MaintenanceCron string `yaml:"maintenance_cron"`
 	ScrubCron       string `yaml:"scrub_cron"`
-	SmartCron       string `yaml:"smart_cron"`
 	StatusCron      string `yaml:"status_cron"`
 }
 
@@ -84,7 +83,6 @@ func DefaultAgentConfig() AgentConfig {
 		Scheduler: SchedulerConfig{
 			MaintenanceCron: "0 3 * * *",
 			ScrubCron:       "0 4 * * 0",
-			SmartCron:       "0 */6 * * *",
 			StatusCron:      "*/30 * * * *",
 		},
 		Thresholds: Thresholds{
@@ -144,7 +142,6 @@ var agentEnvOverrides = []envOverride{
 	{"VIGIL_SNAPRAID_AGENT_SNAPRAID_CONFIG_PATH", func(c *AgentConfig, v string) { c.SnapRAID.ConfigPath = v }},
 	{"VIGIL_SNAPRAID_AGENT_SCHEDULER_MAINTENANCE_CRON", func(c *AgentConfig, v string) { c.Scheduler.MaintenanceCron = v }},
 	{"VIGIL_SNAPRAID_AGENT_SCHEDULER_SCRUB_CRON", func(c *AgentConfig, v string) { c.Scheduler.ScrubCron = v }},
-	{"VIGIL_SNAPRAID_AGENT_SCHEDULER_SMART_CRON", func(c *AgentConfig, v string) { c.Scheduler.SmartCron = v }},
 	{"VIGIL_SNAPRAID_AGENT_SCHEDULER_STATUS_CRON", func(c *AgentConfig, v string) { c.Scheduler.StatusCron = v }},
 	{"VIGIL_SNAPRAID_AGENT_THRESHOLDS_MAX_DELETED", func(c *AgentConfig, v string) { setInt(v, &c.Thresholds.MaxDeleted) }},
 	{"VIGIL_SNAPRAID_AGENT_THRESHOLDS_MAX_UPDATED", func(c *AgentConfig, v string) { setInt(v, &c.Thresholds.MaxUpdated) }},

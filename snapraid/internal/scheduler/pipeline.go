@@ -214,21 +214,6 @@ func (p *Pipeline) RunScrubOnly(ctx context.Context) {
 	p.emit("scrub_complete", "info", "Standalone scrub completed")
 }
 
-// RunSmartCheck executes a standalone SMART check.
-func (p *Pipeline) RunSmartCheck(ctx context.Context) {
-	p.emit("smart_check_started", "info", "SMART check started")
-
-	p.runStep(ctx, "smart", "scheduled", func(ctx context.Context) (int, string, error) {
-		report, err := p.engine.Smart(ctx)
-		if err != nil {
-			return 0, "", err
-		}
-		return 0, report.Output, nil
-	})
-
-	p.emit("smart_check_complete", "info", "SMART check completed")
-}
-
 // RunStatusRefresh executes a standalone status refresh.
 func (p *Pipeline) RunStatusRefresh(ctx context.Context) {
 	p.runStep(ctx, "status", "scheduled", func(ctx context.Context) (int, string, error) {

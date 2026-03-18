@@ -313,22 +313,21 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	addonutil.WriteJSON(w, http.StatusOK, jobs)
 }
 
-// handleJobHistory returns job records with optional time_range filtering.
-// Query params: time_range (e.g. "24h", "7d", "30d")
-func (s *Server) handleJobHistory(w http.ResponseWriter, r *http.Request) {
-	var jobs []agentdb.JobRecord
-	var err error
-
+// queryJobs returns job records filtered by the time_range query parameter.
+func (s *Server) queryJobs(r *http.Request, limit int) ([]agentdb.JobRecord, error) {
 	if tr := r.URL.Query().Get("time_range"); tr != "" {
 		if d, ok := addonutil.ParseTimeRange(tr); ok {
 			since := time.Now().UTC().Add(-d)
-			jobs, err = agentdb.RecentJobsSince(s.db, since, 200)
-		} else {
-			jobs, err = agentdb.RecentJobs(s.db, 200)
+			return agentdb.RecentJobsSince(s.db, since, limit)
 		}
-	} else {
-		jobs, err = agentdb.RecentJobs(s.db, 200)
 	}
+	return agentdb.RecentJobs(s.db, limit)
+}
+
+// handleJobHistory returns job records with optional time_range filtering.
+// Query params: time_range (e.g. "24h", "7d", "30d")
+func (s *Server) handleJobHistory(w http.ResponseWriter, r *http.Request) {
+	jobs, err := s.queryJobs(r, 200)
 
 	if err != nil {
 		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -354,20 +353,7 @@ type LogEntry struct {
 
 // handleLogHistory returns job output logs formatted for the log-viewer.
 func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
-	var jobs []agentdb.JobRecord
-	var err error
-
-	if tr := r.URL.Query().Get("time_range"); tr != "" {
-		if d, ok := addonutil.ParseTimeRange(tr); ok {
-			since := time.Now().UTC().Add(-d)
-			jobs, err = agentdb.RecentJobsSince(s.db, since, 100)
-		} else {
-			jobs, err = agentdb.RecentJobs(s.db, 100)
-		}
-	} else {
-		jobs, err = agentdb.RecentJobs(s.db, 100)
-	}
-
+	jobs, err := s.queryJobs(r, 100)
 	if err != nil {
 		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -475,45 +461,46 @@ func (s *Server) refreshDiskStorage() {
 	s.collector.SetDiskStorage(storage)
 }
 
-// backgroundRefreshStatus runs snapraid status in the background to populate the cache.
-func (s *Server) backgroundRefreshStatus() {
-	if !s.refreshingStatus.CompareAndSwap(false, true) {
-		return // already running
-	}
-	defer s.refreshingStatus.Store(false)
-
-	s.logger.Info("background refresh: running snapraid status")
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	report, err := s.engine.Status(ctx)
-	if err != nil {
-		s.logger.Error("background refresh status failed", "error", err)
+// backgroundRefresh guards a refresh function with an atomic flag so only one
+// instance runs at a time. The name is used for log messages.
+func (s *Server) backgroundRefresh(flag *atomic.Bool, name string, fn func()) {
+	if !flag.CompareAndSwap(false, true) {
 		return
 	}
-	s.collector.SetArrayStatus(report)
-	s.logger.Info("background refresh: status cache populated")
+	defer flag.Store(false)
 
-	// Also refresh disk storage (lightweight, no snapraid binary needed).
-	s.refreshDiskStorage()
+	s.logger.Info("background refresh: running " + name)
+	fn()
+	s.logger.Info("background refresh: " + name + " cache populated")
+}
+
+// backgroundRefreshStatus runs snapraid status in the background to populate the cache.
+func (s *Server) backgroundRefreshStatus() {
+	s.backgroundRefresh(&s.refreshingStatus, "status", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		report, err := s.engine.Status(ctx)
+		if err != nil {
+			s.logger.Error("background refresh status failed", "error", err)
+			return
+		}
+		s.collector.SetArrayStatus(report)
+		s.refreshDiskStorage()
+	})
 }
 
 // backgroundRefreshSmart runs snapraid smart in the background to populate the cache.
 func (s *Server) backgroundRefreshSmart() {
-	if !s.refreshingSmart.CompareAndSwap(false, true) {
-		return // already running
-	}
-	defer s.refreshingSmart.Store(false)
-
-	s.logger.Info("background refresh: running snapraid smart")
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	report, err := s.engine.Smart(ctx)
-	if err != nil {
-		s.logger.Error("background refresh smart failed", "error", err)
-		return
-	}
-	s.collector.SetSmartStatus(report)
-	s.logger.Info("background refresh: smart cache populated")
+	s.backgroundRefresh(&s.refreshingSmart, "smart", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		report, err := s.engine.Smart(ctx)
+		if err != nil {
+			s.logger.Error("background refresh smart failed", "error", err)
+			return
+		}
+		s.collector.SetSmartStatus(report)
+	})
 }
 
 

@@ -41,6 +41,31 @@ func (s *Server) Handler() http.Handler {
 	return s.mux
 }
 
+// resolveAgentID returns the agent_id from the query string, falling back to
+// the first online agent in the registry. Returns empty string if none found.
+func (s *Server) resolveAgentID(r *http.Request) string {
+	if id := r.URL.Query().Get("agent_id"); id != "" {
+		return id
+	}
+	for _, v := range s.registry.ListViews() {
+		if v.Status == "online" {
+			return v.ID
+		}
+	}
+	return ""
+}
+
+// decodeJSON decodes the request body into T and writes a 400 error response
+// on failure. Returns the decoded value and true on success.
+func decodeJSON[T any](w http.ResponseWriter, r *http.Request, errMsg string) (T, bool) {
+	var v T
+	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
+		return v, false
+	}
+	return v, true
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/deploy-info", s.handleDeployInfo)
@@ -63,8 +88,7 @@ func (s *Server) routes() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, `{"status":"ok"}`)
+	writeRawJSON(w, []byte(`{"status":"ok"}`))
 }
 
 // handleDeployInfo returns connection details that the deploy-wizard
@@ -85,9 +109,8 @@ type AgentRegisterRequest struct {
 }
 
 func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
-	var req AgentRegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+	req, ok := decodeJSON[AgentRegisterRequest](w, r, "invalid request")
+	if !ok {
 		return
 	}
 
@@ -131,14 +154,14 @@ func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	// Accept both {"action":"status"} and {"command":"status"} since the
 	// Vigil action proxy forwards form data as-is (which uses "command").
-	var raw struct {
+	type commandRequest struct {
 		AgentID string          `json:"agent_id"`
 		Action  string          `json:"action"`
 		Command string          `json:"command"`
 		Params  json.RawMessage `json:"params"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
-		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid command"})
+	raw, ok := decodeJSON[commandRequest](w, r, "invalid command")
+	if !ok {
 		return
 	}
 
@@ -162,8 +185,7 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(resp)
+	writeRawJSON(w, resp)
 }
 
 // TelemetryIngestRequest carries a raw telemetry frame from an Agent.
@@ -173,9 +195,8 @@ type TelemetryIngestRequest struct {
 }
 
 func (s *Server) handleTelemetryIngest(w http.ResponseWriter, r *http.Request) {
-	var req TelemetryIngestRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid telemetry"})
+	req, ok := decodeJSON[TelemetryIngestRequest](w, r, "invalid telemetry")
+	if !ok {
 		return
 	}
 
@@ -256,21 +277,10 @@ func (s *Server) handleConfigForward(w http.ResponseWriter, r *http.Request) {
 // handleGetConfig proxies GET /api/config?agent_id=xxx to the target agent.
 // If no agent_id is given, it returns config from the first online agent.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	agentID := r.URL.Query().Get("agent_id")
-
+	agentID := s.resolveAgentID(r)
 	if agentID == "" {
-		// Default to first online agent
-		views := s.registry.ListViews()
-		for _, v := range views {
-			if v.Status == "online" {
-				agentID = v.ID
-				break
-			}
-		}
-		if agentID == "" {
-			addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "no online agents"})
-			return
-		}
+		addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "no online agents"})
+		return
 	}
 
 	body, err := s.router.FetchAgentConfig(agentID)
@@ -280,21 +290,19 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(body)
+	writeRawJSON(w, body)
 }
 
 func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 	// The Vigil proxy sends form data as {"data": {"confirm": "ROTATE"}}
-	var req struct {
+	type rotateRequest struct {
 		Data struct {
 			Confirm string `json:"confirm"`
 		} `json:"data"`
-		// Direct call (not via proxy)
-		Confirm string `json:"confirm"`
+		Confirm string `json:"confirm"` // direct call (not via proxy)
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+	req, ok := decodeJSON[rotateRequest](w, r, "invalid request")
+	if !ok {
 		return
 	}
 
@@ -332,20 +340,10 @@ func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 // preserving the request path and query string. Used for /api/jobs/history
 // and /api/logs/history.
 func (s *Server) handleProxyToAgent(w http.ResponseWriter, r *http.Request) {
-	agentID := r.URL.Query().Get("agent_id")
-
+	agentID := s.resolveAgentID(r)
 	if agentID == "" {
-		views := s.registry.ListViews()
-		for _, v := range views {
-			if v.Status == "online" {
-				agentID = v.ID
-				break
-			}
-		}
-		if agentID == "" {
-			addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "no online agents"})
-			return
-		}
+		addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "no online agents"})
+		return
 	}
 
 	// Build the path + query to forward.
@@ -366,24 +364,22 @@ func (s *Server) handleProxyToAgent(w http.ResponseWriter, r *http.Request) {
 	w.Write(body)
 }
 
+// telemetryFieldInfo maps a URL path to its cache key and agent fallback path.
+type telemetryFieldInfo struct {
+	telemetryKey string
+	agentPath    string
+}
+
+var telemetryFieldMap = map[string]telemetryFieldInfo{
+	"/api/disk_status":  {telemetryKey: "array_status", agentPath: "/api/array_status"},
+	"/api/active_job":   {telemetryKey: "active_job", agentPath: "/api/active_job"},
+	"/api/disk_storage": {telemetryKey: "disk_storage", agentPath: "/api/disk_storage"},
+}
+
 // handleTelemetryField serves cached telemetry data from the aggregator.
 // When no cached data exists, falls back to fetching directly from the agent.
-//
-//	/api/disk_status  → array_status (contains .disk_status array)
-//	/api/active_job   → active_job
 func (s *Server) handleTelemetryField(w http.ResponseWriter, r *http.Request) {
-	// Map URL path to telemetry payload field name and agent fallback path.
-	type fieldInfo struct {
-		telemetryKey string
-		agentPath    string
-	}
-	fieldMap := map[string]fieldInfo{
-		"/api/disk_status":  {telemetryKey: "array_status", agentPath: "/api/array_status"},
-		"/api/active_job":   {telemetryKey: "active_job", agentPath: "/api/active_job"},
-		"/api/disk_storage": {telemetryKey: "disk_storage", agentPath: "/api/disk_storage"},
-	}
-
-	info, ok := fieldMap[r.URL.Path]
+	info, ok := telemetryFieldMap[r.URL.Path]
 	if !ok {
 		addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "unknown telemetry field"})
 		return
@@ -392,57 +388,83 @@ func (s *Server) handleTelemetryField(w http.ResponseWriter, r *http.Request) {
 	agentID := r.URL.Query().Get("agent_id")
 
 	// Try cached telemetry first.
-	data := s.aggregator.LatestTelemetryField(agentID, info.telemetryKey)
-	if data != nil && string(data) != "null" {
-		// For disk_status, extract the disk_status array from the nested object.
-		if info.telemetryKey == "array_status" {
-			var obj map[string]json.RawMessage
-			if err := json.Unmarshal(data, &obj); err == nil {
-				for _, key := range []string{"disk_status", "disks"} {
-					if arr, exists := obj[key]; exists {
-						w.Header().Set("Content-Type", "application/json")
-						w.Write(arr)
-						return
-					}
-				}
-			}
-			// array_status exists but no extractable array — fall through to agent proxy.
-		} else {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
-			return
-		}
+	if data := s.serveCachedTelemetry(w, agentID, info); data {
+		return
 	}
 
-	// No cached telemetry — fall back to fetching directly from agent.
+	// Fall back to fetching directly from agent.
 	if agentID == "" {
-		views := s.registry.ListViews()
-		for _, v := range views {
-			if v.Status == "online" {
-				agentID = v.ID
-				break
-			}
-		}
+		agentID = s.resolveAgentID(r)
 	}
-
-	if agentID != "" {
-		s.logger.Debug("telemetry cache miss, proxying to agent", "agent_id", agentID, "path", info.agentPath)
-		body, statusCode, err := s.router.ProxyGet(agentID, info.agentPath)
-		if err == nil && statusCode < 400 {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(body)
-			return
-		}
-		s.logger.Warn("agent fallback failed", "agent_id", agentID, "path", info.agentPath, "status", statusCode, "error", err)
+	if agentID != "" && s.proxyTelemetryFromAgent(w, agentID, info) {
+		return
 	}
 
 	// Final fallback: empty response.
-	w.Header().Set("Content-Type", "application/json")
-	if info.telemetryKey == "active_job" {
-		w.Write([]byte("null"))
-	} else {
-		w.Write([]byte("[]"))
+	writeRawJSON(w, telemetryEmptyResponse(info.telemetryKey))
+}
+
+// serveCachedTelemetry attempts to serve from the aggregator cache.
+// Returns true if a response was written.
+func (s *Server) serveCachedTelemetry(w http.ResponseWriter, agentID string, info telemetryFieldInfo) bool {
+	data := s.aggregator.LatestTelemetryField(agentID, info.telemetryKey)
+	if data == nil || string(data) == "null" {
+		return false
 	}
+
+	// For array_status, extract the nested disk_status/disks array.
+	if info.telemetryKey == "array_status" {
+		if arr := extractDiskStatusArray(data); arr != nil {
+			writeRawJSON(w, arr)
+			return true
+		}
+		return false // fall through to agent proxy
+	}
+
+	writeRawJSON(w, data)
+	return true
+}
+
+// extractDiskStatusArray pulls the "disk_status" or "disks" array from
+// a nested array_status JSON object. Returns nil if not extractable.
+func extractDiskStatusArray(data json.RawMessage) json.RawMessage {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil
+	}
+	for _, key := range []string{"disk_status", "disks"} {
+		if arr, exists := obj[key]; exists {
+			return arr
+		}
+	}
+	return nil
+}
+
+// proxyTelemetryFromAgent fetches the field directly from the agent.
+// Returns true if a response was written.
+func (s *Server) proxyTelemetryFromAgent(w http.ResponseWriter, agentID string, info telemetryFieldInfo) bool {
+	s.logger.Debug("telemetry cache miss, proxying to agent", "agent_id", agentID, "path", info.agentPath)
+	body, statusCode, err := s.router.ProxyGet(agentID, info.agentPath)
+	if err != nil || statusCode >= 400 {
+		s.logger.Warn("agent fallback failed", "agent_id", agentID, "path", info.agentPath, "status", statusCode, "error", err)
+		return false
+	}
+	writeRawJSON(w, body)
+	return true
+}
+
+// telemetryEmptyResponse returns the appropriate empty value for a telemetry field.
+func telemetryEmptyResponse(key string) []byte {
+	if key == "active_job" {
+		return []byte("null")
+	}
+	return []byte("[]")
+}
+
+// writeRawJSON writes pre-encoded JSON bytes to the response.
+func writeRawJSON(w http.ResponseWriter, data []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
 }
 
 // handleActiveJobs returns the current active job (if any) as a JSON array
@@ -490,17 +512,7 @@ func (s *Server) handleActiveJobs(w http.ResponseWriter, r *http.Request) {
 // button, but SnapRaid only has one active job at a time so it simply sends
 // an abort command to the appropriate agent.
 func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
-	agentID := r.URL.Query().Get("agent_id")
-	if agentID == "" {
-		// Fall back to the first online agent if not specified.
-		agents := s.registry.ListViews()
-		for _, a := range agents {
-			if a.Status == "online" {
-				agentID = a.ID
-				break
-			}
-		}
-	}
+	agentID := s.resolveAgentID(r)
 	if agentID == "" {
 		addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "no online agent found"})
 		return

@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"time"
 )
@@ -24,23 +25,8 @@ func (p *Pipeline) manageContainers(ctx context.Context) func() {
 		"pause", pause, "stop", stop)
 
 	dockerCtx, cancel := context.WithTimeout(ctx, dockerTimeout)
-
-	for _, name := range pause {
-		if err := dockerCmd(dockerCtx, "pause", name); err != nil {
-			p.logger.Warn("failed to pause container", "container", name, "error", err)
-		} else {
-			p.logger.Info("paused container", "container", name)
-		}
-	}
-
-	for _, name := range stop {
-		if err := dockerCmd(dockerCtx, "stop", name); err != nil {
-			p.logger.Warn("failed to stop container", "container", name, "error", err)
-		} else {
-			p.logger.Info("stopped container", "container", name)
-		}
-	}
-
+	dockerBatch(dockerCtx, p.logger, "pause", pause)
+	dockerBatch(dockerCtx, p.logger, "stop", stop)
 	cancel()
 
 	// Return a restore function.
@@ -49,21 +35,18 @@ func (p *Pipeline) manageContainers(ctx context.Context) func() {
 		defer restoreCancel()
 
 		p.logger.Info("restoring docker containers after sync")
+		dockerBatch(restoreCtx, p.logger, "unpause", pause)
+		dockerBatch(restoreCtx, p.logger, "start", stop)
+	}
+}
 
-		for _, name := range pause {
-			if err := dockerCmd(restoreCtx, "unpause", name); err != nil {
-				p.logger.Warn("failed to unpause container", "container", name, "error", err)
-			} else {
-				p.logger.Info("unpaused container", "container", name)
-			}
-		}
-
-		for _, name := range stop {
-			if err := dockerCmd(restoreCtx, "start", name); err != nil {
-				p.logger.Warn("failed to start container", "container", name, "error", err)
-			} else {
-				p.logger.Info("started container", "container", name)
-			}
+// dockerBatch runs a docker action against each container, logging success or failure.
+func dockerBatch(ctx context.Context, logger *slog.Logger, action string, containers []string) {
+	for _, name := range containers {
+		if err := dockerCmd(ctx, action, name); err != nil {
+			logger.Warn("docker "+action+" failed", "container", name, "error", err)
+		} else {
+			logger.Info("docker "+action+" succeeded", "container", name)
 		}
 	}
 }

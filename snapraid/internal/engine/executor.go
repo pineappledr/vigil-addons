@@ -9,7 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
-	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -18,10 +18,6 @@ var (
 	ErrEngineLocked = errors.New("another snapraid operation is already running")
 	ErrNoActiveJob  = errors.New("no active snapraid operation to abort")
 )
-
-// reProgress matches snapraid's progress output lines (e.g. "0%, 100511 MB, 933 MB/s, ...").
-// Used by sync, scrub, fix, and check to extract the leading percentage.
-var reProgress = regexp.MustCompile(`(\d+)%`)
 
 // Engine wraps the snapraid binary and enforces single-command concurrency.
 type Engine struct {
@@ -179,6 +175,31 @@ func scanCR(data []byte, atEOF bool) (advance int, token []byte, err error) {
 
 // lineFunc is called for each line of stdout during a streaming command.
 type lineFunc func(line string)
+
+// progressLineFunc returns a lineFunc that extracts percentage progress from
+// snapraid's stdout and sends deduplicated updates to the given channel.
+// If progress is nil the returned lineFunc is a no-op.
+func progressLineFunc(progress chan<- int) lineFunc {
+	if progress == nil {
+		return func(string) {}
+	}
+	lastPct := -1
+	return func(line string) {
+		if m := reProgress.FindStringSubmatch(line); m != nil {
+			pct, err := strconv.Atoi(m[1])
+			if err != nil {
+				return
+			}
+			if pct != lastPct {
+				lastPct = pct
+				select {
+				case progress <- pct:
+				default:
+				}
+			}
+		}
+	}
+}
 
 // runCommandStreaming executes the snapraid binary and calls onLine for each stdout line in real-time.
 // It is used by sync/scrub for progress tracking.

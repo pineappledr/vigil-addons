@@ -93,15 +93,9 @@ func (s *Scheduler) Reschedule(ctx context.Context) error {
 	return s.Start(ctx)
 }
 
-// runMaintenance executes the full maintenance pipeline under the job mutex.
-func (s *Scheduler) runMaintenance(ctx context.Context) {
-	if !s.jobMu.TryLock() {
-		s.logger.Warn("maintenance skipped: previous scheduled job still running")
-		return
-	}
-	defer s.jobMu.Unlock()
-
-	p := &Pipeline{
+// newPipeline creates a Pipeline wired to the scheduler's dependencies.
+func (s *Scheduler) newPipeline() *Pipeline {
+	return &Pipeline{
 		engine:  s.engine,
 		cfg:     s.cfg,
 		db:      s.db,
@@ -109,45 +103,32 @@ func (s *Scheduler) runMaintenance(ctx context.Context) {
 		tracker: s.tracker,
 		logger:  s.logger,
 	}
-	p.RunMaintenance(ctx)
+}
+
+// runScheduled acquires the job mutex and runs fn with a fresh Pipeline.
+// If the mutex is already held, the job is skipped with a warning.
+func (s *Scheduler) runScheduled(ctx context.Context, name string, fn func(*Pipeline, context.Context)) {
+	if !s.jobMu.TryLock() {
+		s.logger.Warn(name + " skipped: previous scheduled job still running")
+		return
+	}
+	defer s.jobMu.Unlock()
+	fn(s.newPipeline(), ctx)
+}
+
+// runMaintenance executes the full maintenance pipeline under the job mutex.
+func (s *Scheduler) runMaintenance(ctx context.Context) {
+	s.runScheduled(ctx, "maintenance", (*Pipeline).RunMaintenance)
 }
 
 // runScrubOnly executes a standalone scrub job.
 func (s *Scheduler) runScrubOnly(ctx context.Context) {
-	if !s.jobMu.TryLock() {
-		s.logger.Warn("scrub_only skipped: previous scheduled job still running")
-		return
-	}
-	defer s.jobMu.Unlock()
-
-	p := &Pipeline{
-		engine:  s.engine,
-		cfg:     s.cfg,
-		db:      s.db,
-		emitter: s.emitter,
-		tracker: s.tracker,
-		logger:  s.logger,
-	}
-	p.RunScrubOnly(ctx)
+	s.runScheduled(ctx, "scrub_only", (*Pipeline).RunScrubOnly)
 }
 
 // runStatusRefresh executes a standalone status refresh.
 func (s *Scheduler) runStatusRefresh(ctx context.Context) {
-	if !s.jobMu.TryLock() {
-		s.logger.Warn("status_refresh skipped: previous scheduled job still running")
-		return
-	}
-	defer s.jobMu.Unlock()
-
-	p := &Pipeline{
-		engine:  s.engine,
-		cfg:     s.cfg,
-		db:      s.db,
-		emitter: s.emitter,
-		tracker: s.tracker,
-		logger:  s.logger,
-	}
-	p.RunStatusRefresh(ctx)
+	s.runScheduled(ctx, "status_refresh", (*Pipeline).RunStatusRefresh)
 }
 
 // CronRegistrationError describes a failure to register a cron schedule.

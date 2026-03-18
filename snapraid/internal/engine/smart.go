@@ -3,22 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
-)
-
-var (
-	// Matches the tabular disk rows from `snapraid smart -v`:
-	// Temp  Power   Error   FP Size   Serial             Device    Disk      Status
-	//  35C   1095       0   2%  3.6TB  WD-WMAYP1234567   /dev/sda  d1        OK
-	reSmartDisk = regexp.MustCompile(
-		`^\s*(\d+|-)C?\s+(\d+|-)\s+(\d+|-)\s+(\d+|-)%?\s+([\d.]+)\s*([TGMK]?B)\s+(\S+)\s+(\S+)\s+(\S+)\s+(OK|SSD|FAIL|PREFAIL|n/a)\s*$`,
-	)
-
-	// Matches the overall failure probability line:
-	// "The probability that at least one disk is going to fail in the next year is 5%."
-	reOverallFail = regexp.MustCompile(`probability.*?(\d+)%`)
 )
 
 // Smart executes `snapraid smart -v` and parses the output.

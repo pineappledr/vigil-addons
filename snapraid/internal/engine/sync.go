@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"strconv"
 )
 
 // Sync executes `snapraid sync` with the given options.
@@ -25,27 +24,7 @@ func (e *Engine) Sync(ctx context.Context, opts SyncOptions, progress chan<- int
 		args = append(args, "--force-full")
 	}
 
-	lastPct := -1
-	onLine := func(line string) {
-		if progress == nil {
-			return
-		}
-		if m := reProgress.FindStringSubmatch(line); m != nil {
-			pct, err := strconv.Atoi(m[1])
-			if err != nil {
-				return
-			}
-			if pct != lastPct {
-				lastPct = pct
-				select {
-				case progress <- pct:
-				default:
-				}
-			}
-		}
-	}
-
-	result, err := e.runCommandStreaming(ctx, onLine, args...)
+	result, err := e.runCommandStreaming(ctx, progressLineFunc(progress), args...)
 	if err != nil {
 		return nil, fmt.Errorf("sync: %w", err)
 	}

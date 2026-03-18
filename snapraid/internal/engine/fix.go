@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"strconv"
 )
 
 // Fix executes `snapraid fix` with the given options.
@@ -21,27 +20,7 @@ func (e *Engine) Fix(ctx context.Context, opts FixOptions, progress chan<- int) 
 		args = append(args, "-f", opts.Filter)
 	}
 
-	lastPct := -1
-	onLine := func(line string) {
-		if progress == nil {
-			return
-		}
-		if m := reProgress.FindStringSubmatch(line); m != nil {
-			pct, err := strconv.Atoi(m[1])
-			if err != nil {
-				return
-			}
-			if pct != lastPct {
-				lastPct = pct
-				select {
-				case progress <- pct:
-				default:
-				}
-			}
-		}
-	}
-
-	result, err := e.runCommandStreaming(ctx, onLine, args...)
+	result, err := e.runCommandStreaming(ctx, progressLineFunc(progress), args...)
 	if err != nil {
 		return nil, fmt.Errorf("fix: %w", err)
 	}

@@ -3,8 +3,8 @@ package scheduler
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log/slog"
+	"strconv"
 
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
 	agentdb "github.com/pineappledr/vigil-addons/snapraid/internal/db"
@@ -116,7 +116,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	}
 
 	// Docker container management before sync
-	restored := p.manageContainers(ctx, true)
+	restored := p.manageContainers(ctx)
 
 	// Step 4: sync
 	syncOk := p.runStep(ctx, "sync", "scheduled", func(ctx context.Context) (int, string, error) {
@@ -211,7 +211,7 @@ func (p *Pipeline) RunScrubOnly(ctx context.Context) {
 		})
 	}
 
-	p.emit("scrub_complete", "warning", "✅ Standalone scrub completed")
+	p.emit("scrub_complete", "info", "✅ Standalone scrub completed")
 }
 
 // RunStatusRefresh executes a standalone status refresh.
@@ -337,31 +337,6 @@ func (p *Pipeline) emit(eventType, severity, message string) {
 	}
 }
 
-func formatDiffSummary(r *engine.DiffReport) string {
-	return "added=" + itoa(r.Added) +
-		" removed=" + itoa(r.Removed) +
-		" updated=" + itoa(r.Updated) +
-		" moved=" + itoa(r.Moved) +
-		" copied=" + itoa(r.Copied) +
-		" restored=" + itoa(r.Restored)
-}
-
-func formatSmartSummary(r *engine.SmartReport) string {
-	return "disks=" + itoa(len(r.Disks)) +
-		" overall_fail_probability=" + ftoa(r.OverallFailProbability) + "%"
-}
-
-func formatStatusSummary(r *engine.StatusReport) string {
-	return "files=" + itoa(r.Files) +
-		" unsynced=" + itoa(r.UnsyncedBlocks) +
-		" bad_blocks=" + itoa(r.BadBlocks) +
-		" unscrubbed=" + ftoa(r.UnscrubbedPercent) + "%"
-}
-
 func itoa(n int) string {
-	return fmt.Sprintf("%d", n)
-}
-
-func ftoa(f float64) string {
-	return fmt.Sprintf("%.1f", f)
+	return strconv.Itoa(n)
 }

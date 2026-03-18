@@ -13,8 +13,9 @@ type NotificationPayload struct {
 	EventType string `json:"event_type"`
 	Severity  string `json:"severity"`
 	Source    string `json:"source"`
+	Host      string `json:"host"`
 	Message   string `json:"message"`
-	Timestamp string `json:"timestamp"`
+	Timestamp string `json:"time"`
 }
 
 // LogPayload is the payload for a log telemetry frame.

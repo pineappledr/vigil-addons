@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 
+	"time"
+
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
 	"github.com/pineappledr/vigil-addons/snapraid/internal/engine"
 	"github.com/robfig/cron/v3"
@@ -32,7 +34,7 @@ type Scheduler struct {
 // The tracker is optional; pass nil to disable active job tracking.
 func New(eng *engine.Engine, cfg *config.AgentConfig, database *sql.DB, emitter EventEmitter, tracker JobTracker, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
-		cron:    cron.New(cron.WithSeconds()),
+		cron:    cron.New(cron.WithSeconds(), cron.WithLocation(time.Local)),
 		engine:  eng,
 		cfg:     cfg,
 		db:      database,
@@ -87,7 +89,7 @@ func (s *Scheduler) Stop() context.Context {
 // all jobs using the current values in s.cfg. Call this after updating s.cfg fields.
 func (s *Scheduler) Reschedule(ctx context.Context) error {
 	<-s.cron.Stop().Done()
-	s.cron = cron.New(cron.WithSeconds())
+	s.cron = cron.New(cron.WithSeconds(), cron.WithLocation(time.Local))
 	return s.Start(ctx)
 }
 

@@ -239,9 +239,10 @@ func (a *Aggregator) evaluateJobTransition(tc *vigilclient.TelemetryClient, agen
 		a.mu.Unlock()
 
 		evtType := "job_started"
-		if job.Trigger == "manual" {
+		switch job.Trigger {
+		case "manual":
 			evtType = "manual_job_started"
-		} else if job.Trigger == "scheduled" {
+		case "scheduled":
 			evtType = "scheduled_job_started"
 		}
 		a.emitNotification(tc, agentID, evtType, "info",
@@ -255,9 +256,10 @@ func (a *Aggregator) evaluateJobTransition(tc *vigilclient.TelemetryClient, agen
 		a.mu.Unlock()
 
 		evtType := "job_complete"
-		if prev.Trigger == "manual" {
+		switch prev.Trigger {
+		case "manual":
 			evtType = "manual_job_complete"
-		} else if prev.Trigger == "scheduled" {
+		case "scheduled":
 			evtType = "scheduled_job_complete"
 		}
 		a.emitNotification(tc, agentID, evtType, "info",
@@ -359,10 +361,16 @@ func (a *Aggregator) LatestTelemetryField(agentID, field string) json.RawMessage
 }
 
 func (a *Aggregator) emitNotification(tc *vigilclient.TelemetryClient, agentID, eventType, severity, message string) {
+	hostname := agentID
+	if entry := a.registry.Get(agentID); entry != nil && entry.Hostname != "" {
+		hostname = entry.Hostname
+	}
+
 	n := vigilclient.NotificationPayload{
 		EventType: eventType,
 		Severity:  severity,
 		Source:    "snapraid-hub",
+		Host:      hostname,
 		Message:   message,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}

@@ -12,7 +12,7 @@ const dockerTimeout = 2 * time.Minute
 // manageContainers pauses/stops configured Docker containers before sync.
 // Returns a restore function that unpauses/starts them after sync completes.
 // Returns nil if no containers are configured.
-func (p *Pipeline) manageContainers(ctx context.Context, doPause bool) func() {
+func (p *Pipeline) manageContainers(ctx context.Context) func() {
 	pause := p.cfg.Docker.PauseContainers
 	stop := p.cfg.Docker.StopContainers
 

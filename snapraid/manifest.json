@@ -43,7 +43,8 @@
               "scrub.older_than_days": "Scrub Min Age (Days)",
               "scrub.auto_fix_bad_blocks": "Auto-Fix Bad Blocks"
             },
-            "link_page": "automation"
+            "link_page": "automation",
+              "link_params": ["agent_id"]
           }
         },
         {

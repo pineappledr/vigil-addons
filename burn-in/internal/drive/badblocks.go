@@ -65,7 +65,7 @@ func RunBadblocks(ctx context.Context, device string, blockSize, concurrentBlock
 		concurrentBlocks = 65536
 	}
 
-	logFile := filepath.Join(logDir, fmt.Sprintf("badblocks-%s.log", sanitizeDevName(device)))
+	logFile := filepath.Join(logDir, fmt.Sprintf("badblocks-%s.log", SafeDeviceName(device)))
 
 	maxErrors := "0" // unlimited
 	if abortOnError {
@@ -236,38 +236,9 @@ func countStdoutErrors(r io.Reader, result *BadblocksResult) {
 	}
 }
 
-// splitOnCRLF is a bufio.SplitFunc that splits on \r or \n, handling the
-// carriage-return progress updates from badblocks.
-func splitOnCRLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-
-	for i := 0; i < len(data); i++ {
-		if data[i] == '\n' || data[i] == '\r' {
-			// Skip consecutive delimiters.
-			j := i + 1
-			for j < len(data) && (data[j] == '\n' || data[j] == '\r') {
-				j++
-			}
-			return j, data[:i], nil
-		}
-	}
-
-	if atEOF {
-		return len(data), data, nil
-	}
-
-	return 0, nil, nil
-}
 
 // SafeDeviceName converts a device path like /dev/sda to a safe filename component.
 func SafeDeviceName(device string) string {
-	return sanitizeDevName(device)
-}
-
-// sanitizeDevName converts a device path like /dev/sda to a safe filename component.
-func sanitizeDevName(device string) string {
 	name := filepath.Base(device)
 	return strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {

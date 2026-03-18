@@ -213,6 +213,41 @@ func (f *agentFrame) resolveLevel() string {
 	return f.Severity
 }
 
+// resolveTimestamp returns the frame's timestamp, falling back to the current
+// UTC time in RFC3339 format when the field is empty.
+func (f *agentFrame) resolveTimestamp() string {
+	if f.Timestamp != "" {
+		return f.Timestamp
+	}
+	return time.Now().UTC().Format(time.RFC3339)
+}
+
+// resolveSource returns the frame's source, falling back to the agent ID.
+func (f *agentFrame) resolveSource() string {
+	if f.Source != "" {
+		return f.Source
+	}
+	return f.AgentID
+}
+
+// progressPayload builds a ProgressPayload from the frame fields.
+func (f *agentFrame) progressPayload() ProgressPayload {
+	return ProgressPayload{
+		AgentID:      f.AgentID,
+		JobID:        f.JobID,
+		Command:      f.Command,
+		Phase:        f.Phase,
+		PhaseDetail:  f.PhaseDetail,
+		Percent:      f.Percent,
+		SpeedMbps:    f.SpeedMbps,
+		TempC:        f.TempC,
+		ElapsedSec:   f.ElapsedSec,
+		ETASec:       f.ETASec,
+		BadblockErrs: f.BadblockErrs,
+		SmartDeltas:  f.SmartDeltas,
+	}
+}
+
 const agentPingInterval = 30 * time.Second
 
 func (a *Aggregator) readLoop(ac *agentConn) {
@@ -343,21 +378,7 @@ func (a *Aggregator) storeProgressLocally(frame agentFrame) {
 	if frame.JobID == "" {
 		return
 	}
-	p := ProgressPayload{
-		AgentID:      frame.AgentID,
-		JobID:        frame.JobID,
-		Command:      frame.Command,
-		Phase:        frame.Phase,
-		PhaseDetail:  frame.PhaseDetail,
-		Percent:      frame.Percent,
-		SpeedMbps:    frame.SpeedMbps,
-		TempC:        frame.TempC,
-		ElapsedSec:   frame.ElapsedSec,
-		ETASec:       frame.ETASec,
-		BadblockErrs: frame.BadblockErrs,
-		SmartDeltas:  frame.SmartDeltas,
-	}
-	a.storeProgress(frame.JobID, p)
+	a.storeProgress(frame.JobID, frame.progressPayload())
 	if len(frame.SmartDeltas) > 0 {
 		a.storeSmartDeltas(frame.JobID, frame.SmartDeltas)
 	}
@@ -365,55 +386,28 @@ func (a *Aggregator) storeProgressLocally(frame agentFrame) {
 
 // storeLogLocally persists a log entry to the ring buffer independently of upstream.
 func (a *Aggregator) storeLogLocally(frame agentFrame) {
-	ts := frame.Timestamp
-	if ts == "" {
-		ts = time.Now().UTC().Format(time.RFC3339)
-	}
-	source := frame.Source
-	if source == "" {
-		source = frame.AgentID
-	}
 	a.storeLog(StoredLog{
 		Level:     frame.resolveLevel(),
 		Message:   frame.Message,
-		Source:    source,
+		Source:    frame.resolveSource(),
 		JobID:     frame.JobID,
-		Timestamp: ts,
+		Timestamp: frame.resolveTimestamp(),
 	})
 }
 
 // storeChartLocally persists a chart data point independently of upstream.
 func (a *Aggregator) storeChartLocally(frame agentFrame) {
-	ts := frame.Timestamp
-	if ts == "" {
-		ts = time.Now().UTC().Format(time.RFC3339)
-	}
 	a.storeChartPoint(StoredChartPoint{
 		ComponentID: frame.ComponentID,
 		Key:         frame.Key,
 		Value:       frame.Value,
 		Source:      frame.AgentID,
-		Timestamp:   ts,
+		Timestamp:   frame.resolveTimestamp(),
 	})
 }
 
 func (a *Aggregator) forwardProgress(upstream *vigilclient.TelemetryClient, frame agentFrame) {
-	p := ProgressPayload{
-		AgentID:      frame.AgentID,
-		JobID:        frame.JobID,
-		Command:      frame.Command,
-		Phase:        frame.Phase,
-		PhaseDetail:  frame.PhaseDetail,
-		Percent:      frame.Percent,
-		SpeedMbps:    frame.SpeedMbps,
-		TempC:        frame.TempC,
-		ElapsedSec:   frame.ElapsedSec,
-		ETASec:       frame.ETASec,
-		BadblockErrs: frame.BadblockErrs,
-		SmartDeltas:  frame.SmartDeltas,
-	}
-
-	if err := upstream.Send("progress", p); err != nil {
+	if err := upstream.Send("progress", frame.progressPayload()); err != nil {
 		a.logger.Warn("failed to relay progress upstream",
 			"agent_id", frame.AgentID,
 			"job_id", frame.JobID,
@@ -424,14 +418,10 @@ func (a *Aggregator) forwardProgress(upstream *vigilclient.TelemetryClient, fram
 }
 
 func (a *Aggregator) forwardMetric(upstream *vigilclient.TelemetryClient, frame agentFrame) {
-	ts := frame.Timestamp
-	if ts == "" {
-		ts = time.Now().UTC().Format(time.RFC3339)
-	}
 	m := MetricPayload{
 		Key:       frame.Key,
 		Value:     frame.Value,
-		Timestamp: ts,
+		Timestamp: frame.resolveTimestamp(),
 	}
 	if err := upstream.Send("metric", m); err != nil {
 		a.logger.Warn("failed to relay metric upstream",
@@ -443,17 +433,12 @@ func (a *Aggregator) forwardMetric(upstream *vigilclient.TelemetryClient, frame 
 }
 
 func (a *Aggregator) forwardChart(upstream *vigilclient.TelemetryClient, frame agentFrame) {
-	ts := frame.Timestamp
-	if ts == "" {
-		ts = time.Now().UTC().Format(time.RFC3339)
-	}
 	c := ChartPayload{
 		ComponentID: frame.ComponentID,
 		Key:         frame.Key,
 		Value:       frame.Value,
-		Timestamp:   ts,
+		Timestamp:   frame.resolveTimestamp(),
 	}
-
 	if err := upstream.Send("chart", c); err != nil {
 		a.logger.Warn("failed to relay chart upstream",
 			"agent_id", frame.AgentID,
@@ -465,21 +450,13 @@ func (a *Aggregator) forwardChart(upstream *vigilclient.TelemetryClient, frame a
 }
 
 func (a *Aggregator) forwardLog(upstream *vigilclient.TelemetryClient, frame agentFrame) {
-	ts := frame.Timestamp
-	if ts == "" {
-		ts = time.Now().UTC().Format(time.RFC3339)
-	}
-	source := frame.Source
-	if source == "" {
-		source = frame.AgentID
-	}
 	l := vigilclient.LogPayload{
 		ComponentID: frame.ComponentID,
 		Level:       frame.resolveLevel(),
 		Message:     frame.Message,
-		Source:      source,
+		Source:      frame.resolveSource(),
 		JobID:       frame.JobID,
-		Timestamp:   ts,
+		Timestamp:   frame.resolveTimestamp(),
 	}
 
 	if err := upstream.Send("log", l); err != nil {
@@ -497,13 +474,7 @@ func (a *Aggregator) storeLog(entry StoredLog) {
 	a.logMu.Lock()
 	defer a.logMu.Unlock()
 
-	a.logRing = append(a.logRing, entry)
-	if len(a.logRing) > maxStoredLogs {
-		// Drop the oldest 10% to avoid constant slice shifting.
-		drop := maxStoredLogs / 10
-		copy(a.logRing, a.logRing[drop:])
-		a.logRing = a.logRing[:len(a.logRing)-drop]
-	}
+	a.logRing = ringAppend(a.logRing, entry, maxStoredLogs)
 }
 
 // storePhaseTransition checks whether a progress frame represents a phase
@@ -682,12 +653,19 @@ func (a *Aggregator) storeChartPoint(point StoredChartPoint) {
 	a.chartMu.Lock()
 	defer a.chartMu.Unlock()
 
-	a.chartRing = append(a.chartRing, point)
-	if len(a.chartRing) > maxStoredChartPoints {
-		drop := maxStoredChartPoints / 10
-		copy(a.chartRing, a.chartRing[drop:])
-		a.chartRing = a.chartRing[:len(a.chartRing)-drop]
+	a.chartRing = ringAppend(a.chartRing, point, maxStoredChartPoints)
+}
+
+// ringAppend adds an element to a slice and evicts the oldest 10% when the
+// slice exceeds maxLen. This avoids per-append shifting while bounding growth.
+func ringAppend[T any](buf []T, elem T, maxLen int) []T {
+	buf = append(buf, elem)
+	if len(buf) > maxLen {
+		drop := maxLen / 10
+		copy(buf, buf[drop:])
+		buf = buf[:len(buf)-drop]
 	}
+	return buf
 }
 
 // QueryChartHistory returns stored chart data points for a given component,

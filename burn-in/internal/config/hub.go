@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -64,43 +63,18 @@ func LoadHubConfig() (*HubConfig, error) {
 	}
 
 	// Environment variables override file values.
-	if v := os.Getenv("VIGIL_URL"); v != "" {
-		cfg.Vigil.URL = v
-	}
-	if v := os.Getenv("VIGIL_AGENT_TOKEN"); v != "" {
-		cfg.Vigil.AgentToken = v
-	}
-	if v := os.Getenv("VIGIL_SERVER_PUBKEY"); v != "" {
-		cfg.Vigil.ServerPubkey = v
-	}
-	if v := os.Getenv("BURNIN_HUB_LISTEN"); v != "" {
-		cfg.Hub.Listen = v
-	}
-	if v := os.Getenv("BURNIN_HUB_HEARTBEAT_INTERVAL"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("invalid BURNIN_HUB_HEARTBEAT_INTERVAL: %w", err)
-		}
-		cfg.Hub.HeartbeatInterval = d
-	}
-	if v := os.Getenv("BURNIN_HUB_ADVERTISE_URL"); v != "" {
-		cfg.Hub.AdvertiseURL = v
-	}
-	if v := os.Getenv("BURNIN_HUB_AGENT_PSK"); v != "" {
-		cfg.Hub.AgentPSK = v
-	}
-	if v := os.Getenv("BURNIN_HUB_DATA_DIR"); v != "" {
-		cfg.Hub.DataDir = v
-	}
-	if v := os.Getenv("BURNIN_ALERTS_TEMP_WARNING_C"); v != "" {
-		if n, err := parseInt(v); err == nil {
-			cfg.Alerts.TempWarningC = n
-		}
-	}
-	if v := os.Getenv("BURNIN_ALERTS_TEMP_CRITICAL_C"); v != "" {
-		if n, err := parseInt(v); err == nil {
-			cfg.Alerts.TempCriticalC = n
-		}
+	envStr("VIGIL_URL", &cfg.Vigil.URL)
+	envStr("VIGIL_AGENT_TOKEN", &cfg.Vigil.AgentToken)
+	envStr("VIGIL_SERVER_PUBKEY", &cfg.Vigil.ServerPubkey)
+	envStr("BURNIN_HUB_LISTEN", &cfg.Hub.Listen)
+	envStr("BURNIN_HUB_ADVERTISE_URL", &cfg.Hub.AdvertiseURL)
+	envStr("BURNIN_HUB_AGENT_PSK", &cfg.Hub.AgentPSK)
+	envStr("BURNIN_HUB_DATA_DIR", &cfg.Hub.DataDir)
+	envInt("BURNIN_ALERTS_TEMP_WARNING_C", &cfg.Alerts.TempWarningC)
+	envInt("BURNIN_ALERTS_TEMP_CRITICAL_C", &cfg.Alerts.TempCriticalC)
+
+	if err := envDuration("BURNIN_HUB_HEARTBEAT_INTERVAL", &cfg.Hub.HeartbeatInterval); err != nil {
+		return nil, err
 	}
 
 	// Auto-generate AgentPSK if not provided.
@@ -177,10 +151,3 @@ func loadOrGeneratePSK(dataDir string) (string, error) {
 	return psk, nil
 }
 
-func parseInt(s string) (int, error) {
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return 0, err
-	}
-	return n, nil
-}

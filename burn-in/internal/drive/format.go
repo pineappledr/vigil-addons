@@ -61,22 +61,14 @@ func FormatPartition(ctx context.Context, partition, fileSystem string, reserved
 
 // formatSimple runs a single mkfs command without progress parsing.
 func formatSimple(ctx context.Context, partition, fsName string, cmdName string, args ...string) (*FormatResult, error) {
-	cmd := exec.CommandContext(ctx, cmdName, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	cleanup := context.AfterFunc(ctx, func() {
-		if cmd.Process != nil {
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-	})
-	defer cleanup()
-
-	output, err := cmd.CombinedOutput()
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
+	result, err := runWithProcessGroup(ctx, cmdName, args...)
 	if err != nil {
-		return nil, fmt.Errorf("%s failed: %s", cmdName, strings.TrimSpace(string(output)))
+		// Combine stdout+stderr for the error message since mkfs tools vary.
+		combined := strings.TrimSpace(string(result.Stdout) + "\n" + string(result.Stderr))
+		if combined != "" {
+			return nil, fmt.Errorf("%s failed: %s", cmdName, combined)
+		}
+		return nil, fmt.Errorf("%s failed: %w", cmdName, err)
 	}
 
 	return &FormatResult{
@@ -127,11 +119,7 @@ func formatExt4(ctx context.Context, partition string, reservedPct int, onProgre
 	}
 
 	// Kill entire process group on context cancellation.
-	cleanup := context.AfterFunc(ctx, func() {
-		if cmd.Process != nil {
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-	})
+	cleanup := killProcessGroupOnCancel(ctx, cmd)
 	defer cleanup()
 
 	// Parse stdout for progress in a goroutine.

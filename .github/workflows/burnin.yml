@@ -331,7 +331,7 @@ jobs:
           build-args: VERSION=${{ steps.meta.outputs.version }}
           tags: |
             ${{ env.HUB_IMAGE }}:dev-${{ steps.meta.outputs.branch }}
-            ${{ env.HUB_IMAGE }}:dev-${{ steps.meta.outputs.branch }}-${{ github.sha }}
+            ${{ env.HUB_IMAGE }}:dev-${{ steps.meta.outputs.branch }}-${{ steps.meta.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -344,7 +344,7 @@ jobs:
           build-args: VERSION=${{ steps.meta.outputs.version }}
           tags: |
             ${{ env.AGENT_IMAGE }}:dev-${{ steps.meta.outputs.branch }}
-            ${{ env.AGENT_IMAGE }}:dev-${{ steps.meta.outputs.branch }}-${{ github.sha }}
+            ${{ env.AGENT_IMAGE }}:dev-${{ steps.meta.outputs.branch }}-${{ steps.meta.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -357,7 +357,7 @@ jobs:
           build-args: VERSION=${{ steps.meta.outputs.version }}
           tags: |
             ${{ env.AGENT_IMAGE_DEBIAN }}:dev-${{ steps.meta.outputs.branch }}
-            ${{ env.AGENT_IMAGE_DEBIAN }}:dev-${{ steps.meta.outputs.branch }}-${{ github.sha }}
+            ${{ env.AGENT_IMAGE_DEBIAN }}:dev-${{ steps.meta.outputs.branch }}-${{ steps.meta.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

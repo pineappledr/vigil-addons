@@ -175,6 +175,7 @@
           "type": "form",
           "title": "Scheduler & Thresholds",
           "config": {
+            "action": "config",
             "source": "agent_config",
             "fields": [
               {"key": "maintenance_cron", "label": "Maintenance Schedule", "type": "cron", "description": "Full pipeline: touch, diff, gates, sync, scrub"},

@@ -82,6 +82,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/disk_status", s.handleTelemetryField)
 	s.mux.HandleFunc("GET /api/active_job", s.handleTelemetryField)
 	s.mux.HandleFunc("GET /api/disk_storage", s.handleTelemetryField)
+	s.mux.HandleFunc("POST /api/logs/ingest", s.handleLogIngest)
 	s.mux.HandleFunc("GET /api/jobs/active", s.handleActiveJobs)
 	s.mux.HandleFunc("DELETE /api/jobs/{id}", s.handleCancelJob)
 	s.mux.HandleFunc("POST /api/rotate-token", s.handleRotateToken)
@@ -465,6 +466,41 @@ func telemetryEmptyResponse(key string) []byte {
 func writeRawJSON(w http.ResponseWriter, data []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+// LogIngestRequest is the payload from an Agent forwarding a real-time log line.
+type LogIngestRequest struct {
+	AgentID string `json:"agent_id"`
+	Log     struct {
+		Timestamp string `json:"timestamp"`
+		Level     string `json:"level"`
+		Source    string `json:"source"`
+		Message   string `json:"message"`
+	} `json:"log"`
+}
+
+// handleLogIngest receives a real-time log line from an Agent and forwards it
+// upstream as a typed "log" frame so the Vigil Server pushes it to the
+// frontend via SSE (event: log).
+func (s *Server) handleLogIngest(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeJSON[LogIngestRequest](w, r, "invalid log")
+	if !ok {
+		return
+	}
+
+	// Forward via the aggregator's TelemetryClient as a typed "log" frame.
+	// This ensures it arrives as SSE event type "log" on the frontend.
+	logPayload := map[string]string{
+		"level":   req.Log.Level,
+		"message": req.Log.Message,
+		"source":  req.Log.Source,
+	}
+	if req.Log.Timestamp != "" {
+		logPayload["timestamp"] = req.Log.Timestamp
+	}
+	s.aggregator.EmitLogLine(logPayload)
+
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 }
 
 // handleActiveJobs returns the current active job (if any) as a JSON array

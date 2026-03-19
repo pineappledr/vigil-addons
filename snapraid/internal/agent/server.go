@@ -147,6 +147,9 @@ func (s *Server) runCommand(req ExecuteRequest) {
 	s.collector.TrackJob(req.Command, "manual", "running")
 	defer s.collector.ClearJob()
 
+	// Emit a start log line for real-time display.
+	s.collector.EmitLogLine(req.Command, "info", req.Command+" started (manual)")
+
 	progress, stopProgress := s.progressChan()
 	defer stopProgress()
 
@@ -225,9 +228,23 @@ func (s *Server) runCommand(req ExecuteRequest) {
 		if jobID > 0 {
 			agentdb.CompleteJob(s.db, jobID, -1, "error", execErr.Error())
 		}
+		s.collector.EmitLogLine(req.Command, "error", req.Command+" failed: "+execErr.Error())
 		s.logger.Error("command failed", "command", req.Command, "error", execErr)
 		return
 	}
+
+	// Emit the command output as a real-time log line.
+	if output != "" {
+		s.collector.EmitLogLine(req.Command, "info", output)
+	}
+
+	// Emit a completion log line.
+	status := "success"
+	level := "info"
+	if exitCode != 0 {
+		level = "warn"
+	}
+	s.collector.EmitLogLine(req.Command, level, fmt.Sprintf("%s — %s (exit %d)", req.Command, status, exitCode))
 
 	if jobID > 0 {
 		agentdb.CompleteJob(s.db, jobID, exitCode, "success", output)

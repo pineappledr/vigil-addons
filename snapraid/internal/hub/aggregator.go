@@ -360,6 +360,22 @@ func (a *Aggregator) LatestTelemetryField(agentID, field string) json.RawMessage
 	return m[field]
 }
 
+// EmitLogLine sends a real-time log line upstream as a typed "log" frame
+// so it arrives as an SSE event: log on the frontend.
+func (a *Aggregator) EmitLogLine(payload map[string]string) {
+	a.mu.RLock()
+	tc := a.telemetry
+	a.mu.RUnlock()
+
+	if tc == nil {
+		return
+	}
+
+	if err := tc.Send("log", payload); err != nil {
+		a.logger.Debug("failed to send log line upstream", "error", err)
+	}
+}
+
 func (a *Aggregator) emitNotification(tc *vigilclient.TelemetryClient, agentID, eventType, severity, message string) {
 	hostname := agentID
 	if entry := a.registry.Get(agentID); entry != nil && entry.Hostname != "" {

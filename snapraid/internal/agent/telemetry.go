@@ -82,6 +82,11 @@ type Collector struct {
 	lastEvent       *AgentEvent
 	snapraidVersion string
 	logger          *slog.Logger
+	logSink         LogSink // live log line forwarding (set during command execution)
+
+	// flushCh signals the hub forwarder to send an immediate telemetry frame.
+	// Buffered so callers never block.
+	flushCh chan struct{}
 }
 
 // NewCollector creates a telemetry Collector with the given identity.
@@ -92,6 +97,20 @@ func NewCollector(agentID, hostname, version string, logger *slog.Logger) *Colle
 		startTime: time.Now(),
 		version:   version,
 		logger:    logger,
+		flushCh:   make(chan struct{}, 1),
+	}
+}
+
+// FlushCh returns a channel that signals when an immediate telemetry send is needed.
+func (c *Collector) FlushCh() <-chan struct{} {
+	return c.flushCh
+}
+
+// requestFlush signals the hub forwarder to send telemetry immediately.
+func (c *Collector) requestFlush() {
+	select {
+	case c.flushCh <- struct{}{}:
+	default:
 	}
 }
 
@@ -123,6 +142,7 @@ func (c *Collector) SetActiveJob(j *ActiveJob)               { c.mu.Lock(); c.ac
 func (c *Collector) ClearActiveJob()                         { c.mu.Lock(); c.activeJob = nil; c.mu.Unlock() }
 
 // TrackJob implements scheduler.JobTracker — sets the active job visible on the dashboard.
+// Triggers an immediate telemetry flush so the hub sees the job without waiting for the next tick.
 func (c *Collector) TrackJob(jobType, trigger, phase string) {
 	now := time.Now().UTC()
 	c.SetActiveJob(&ActiveJob{
@@ -131,6 +151,7 @@ func (c *Collector) TrackJob(jobType, trigger, phase string) {
 		StartedAt:    &now,
 		CurrentPhase: phase,
 	})
+	c.requestFlush()
 }
 
 // UpdateProgress sets the progress percentage on the active job.
@@ -143,8 +164,10 @@ func (c *Collector) UpdateProgress(pct int) {
 }
 
 // ClearJob implements scheduler.JobTracker — clears the active job after completion.
+// Triggers an immediate telemetry flush so the hub sees the job is done.
 func (c *Collector) ClearJob() {
 	c.ClearActiveJob()
+	c.requestFlush()
 }
 func (c *Collector) SetHubConnected(v bool)                  { c.mu.Lock(); c.hubConnected = v; c.mu.Unlock() }
 func (c *Collector) SetSnapraidVersion(v string)             { c.mu.Lock(); c.snapraidVersion = v; c.mu.Unlock() }
@@ -220,6 +243,41 @@ func (c *Collector) Build() *TelemetryPayload {
 			SnapraidVersion: c.snapraidVersion,
 		},
 	}
+}
+
+// LogLine is a real-time log entry forwarded to the hub during command execution.
+type LogLine struct {
+	Timestamp string `json:"timestamp"`
+	Level     string `json:"level"`
+	Source    string `json:"source"`
+	Message   string `json:"message"`
+}
+
+// LogSink receives real-time log lines during command execution.
+// It is set before a command starts and cleared after.
+type LogSink func(LogLine)
+
+// SetLogSink sets (or clears) the live log forwarding function.
+func (c *Collector) SetLogSink(sink LogSink) {
+	c.mu.Lock()
+	c.logSink = sink
+	c.mu.Unlock()
+}
+
+// EmitLogLine sends a log line to the current sink, if any.
+func (c *Collector) EmitLogLine(source, level, message string) {
+	c.mu.RLock()
+	sink := c.logSink
+	c.mu.RUnlock()
+	if sink == nil {
+		return
+	}
+	sink(LogLine{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Level:     level,
+		Source:    source,
+		Message:   message,
+	})
 }
 
 // MarshalPayload serializes the current telemetry to JSON.

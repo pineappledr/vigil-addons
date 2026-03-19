@@ -138,6 +138,7 @@ func main() {
 			logger.Error("VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR is required for Hub registration (set to http://<host-LAN-IP>:<port>)")
 		} else {
 			go agent.RegisterWithHub(appCtx, cfg.Hub.URL, agentID, hostname, advertiseAddr, version, logger)
+			agent.SetupLogForwarding(appCtx, collector, cfg.Hub.URL, agentID, logger)
 			go agent.StartHubForwarder(appCtx, collector, cfg.Hub.URL, agentID, 30*time.Second, logger)
 		}
 	}

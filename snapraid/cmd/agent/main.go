@@ -46,6 +46,13 @@ func main() {
 	}
 	defer db.Close()
 
+	// Hydrate in-memory config from SQLite config_cache so user-changed
+	// settings (schedules, thresholds, etc.) survive container restarts.
+	if err := agent.HydrateConfigFromCache(db, cfg, logger); err != nil {
+		logger.Error("failed to hydrate config from cache", "error", err)
+		os.Exit(1)
+	}
+
 	config.LogAgentConfig(logger, cfg)
 
 	appCtx, appCancel := context.WithCancel(context.Background())

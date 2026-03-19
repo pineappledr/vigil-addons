@@ -188,8 +188,6 @@ func runSelfTest(ctx context.Context, devicePath, testType string, onProgress Sm
 			return
 		}
 		elapsed := time.Since(start)
-		// Estimate percent based on elapsed vs expected duration. Cap at 95%
-		// since we can't know completion until smartctl confirms it.
 		pct := float64(elapsed) / float64(pollInterval) * 100.0
 		if pct > 95 {
 			pct = 95
@@ -197,27 +195,39 @@ func runSelfTest(ctx context.Context, devicePath, testType string, onProgress Sm
 		onProgress(pct, elapsed, msg)
 	}
 
-	// ── Initial wait phase with periodic heartbeats ──────────────────
+	// Wait for ~90% of the estimated duration before polling.
 	initialWait := time.Duration(float64(pollInterval) * 0.9)
+	if err := awaitSelfTest(ctx, testType, initialWait, emitHeartbeat); err != nil {
+		return nil, err
+	}
+
+	return pollSelfTest(ctx, devicePath, testType, start, onProgress, emitHeartbeat)
+}
+
+// awaitSelfTest blocks until the initial wait period elapses or ctx is
+// cancelled, emitting periodic heartbeats during the wait.
+func awaitSelfTest(ctx context.Context, testType string, wait time.Duration, emitHeartbeat func(string)) error {
 	heartbeatTick := time.NewTicker(30 * time.Second)
 	defer heartbeatTick.Stop()
 
-	waitDeadline := time.After(initialWait)
-	emitHeartbeat(fmt.Sprintf("SMART %s test running, estimated %s", testType, pollInterval.Round(time.Second)))
-waitLoop:
+	waitDeadline := time.After(wait)
+	emitHeartbeat(fmt.Sprintf("SMART %s test running, estimated %s", testType, wait.Round(time.Second)))
+
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		case <-waitDeadline:
 			emitHeartbeat(fmt.Sprintf("SMART %s initial wait complete, polling for result", testType))
-			break waitLoop
+			return nil
 		case <-heartbeatTick.C:
 			emitHeartbeat(fmt.Sprintf("SMART %s test in progress", testType))
 		}
 	}
+}
 
-	// ── Polling phase ────────────────────────────────────────────────
+// pollSelfTest polls smartctl until the self-test completes or ctx is cancelled.
+func pollSelfTest(ctx context.Context, devicePath, testType string, start time.Time, onProgress SmartProgressCallback, emitHeartbeat func(string)) (*TestResult, error) {
 	const checkInterval = 30 * time.Second
 	for {
 		done, passed, status, err := checkTestComplete(devicePath)

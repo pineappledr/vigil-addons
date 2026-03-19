@@ -129,30 +129,45 @@ func PruneOlderThan(db *sql.DB, retention time.Duration) (int64, error) {
 	return res.RowsAffected()
 }
 
-// StartPruneLoop runs a daily background loop that deletes job_history records
-// older than the given retention period. It stops when ctx is cancelled.
+// PruneTelemetryQueue deletes queued telemetry records older than the given duration.
+func PruneTelemetryQueue(db *sql.DB, retention time.Duration) (int64, error) {
+	cutoff := time.Now().UTC().Add(-retention).Format(timeFmt)
+	res, err := db.Exec(`DELETE FROM telemetry_queue WHERE created_at < ?`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune telemetry queue: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// StartPruneLoop runs a daily background loop that deletes job_history and
+// telemetry_queue records older than the given retention period.
+// It stops when ctx is cancelled.
 func StartPruneLoop(ctx context.Context, database *sql.DB, retention time.Duration, logger *slog.Logger) {
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 
-		// Run once immediately on startup
-		if n, err := PruneOlderThan(database, retention); err != nil {
-			logger.Error("job history prune failed", "error", err)
-		} else if n > 0 {
-			logger.Info("pruned old job history records", "deleted", n)
+		prune := func() {
+			if n, err := PruneOlderThan(database, retention); err != nil {
+				logger.Error("job history prune failed", "error", err)
+			} else if n > 0 {
+				logger.Info("pruned old job history records", "deleted", n)
+			}
+			if n, err := PruneTelemetryQueue(database, retention); err != nil {
+				logger.Error("telemetry queue prune failed", "error", err)
+			} else if n > 0 {
+				logger.Info("pruned old telemetry queue records", "deleted", n)
+			}
 		}
+
+		prune() // Run once immediately on startup
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if n, err := PruneOlderThan(database, retention); err != nil {
-					logger.Error("job history prune failed", "error", err)
-				} else if n > 0 {
-					logger.Info("pruned old job history records", "deleted", n)
-				}
+				prune()
 			}
 		}
 	}()

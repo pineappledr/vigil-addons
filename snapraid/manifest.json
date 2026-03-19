@@ -14,98 +14,72 @@
       "title": "Dashboard",
       "icon": "layout-dashboard",
       "default": true,
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            {"value": "30", "label": "30s"},
+            {"value": "60", "label": "1m"},
+            {"value": "300", "label": "5m"}
+          ]
+        }
+      },
       "components": [
         {
-          "id": "agent_selector",
-          "type": "select",
-          "label": "Agent",
-          "data_source": "hub_registry",
-          "description": "Select which Agent/host to view"
-        },
-        {
-          "id": "array_health_badge",
-          "type": "status-badge",
-          "label": "Array Health",
-          "data_source": "telemetry.array_status",
-          "conditions": {
-            "green": "bad_blocks == 0 && unsynced_blocks == 0",
-            "yellow": "bad_blocks == 0 && unsynced_blocks > 0",
-            "red": "bad_blocks > 0"
+          "id": "config_summary",
+          "type": "config-card",
+          "title": "Configuration",
+          "source": "agent_config",
+          "config": {
+            "source": "agent_config",
+            "labels": {
+              "maintenance_cron": "Maintenance Schedule",
+              "scrub_cron": "Scrub Schedule",
+              "max_deleted": "Deletion Threshold",
+              "max_updated": "Update Threshold",
+              "sync.pre_hash": "Pre-Hash",
+              "scrub.plan": "Default Scrub Plan",
+              "scrub.older_than_days": "Scrub Min Age (Days)",
+              "scrub.auto_fix_bad_blocks": "Auto-Fix Bad Blocks"
+            },
+            "link_page": "automation",
+              "link_params": ["agent_id"]
           }
         },
         {
-          "id": "disk_table",
-          "type": "data-table",
-          "label": "Disk Status",
-          "data_source": "telemetry.array_status.disks",
-          "columns": [
-            {"key": "name", "label": "Disk"},
-            {"key": "device", "label": "Device"},
-            {"key": "used", "label": "Used", "format": "bytes"},
-            {"key": "free", "label": "Free", "format": "bytes"},
-            {"key": "wasted", "label": "Wasted", "format": "bytes"}
-          ]
+          "id": "disk_status",
+          "type": "smart-table",
+          "title": "Disk Status",
+          "source": "disk_status",
+          "config": {
+            "source": "disk_status",
+            "columns": [
+              {"key": "name", "label": "Disk"},
+              {"key": "device", "label": "Device"},
+              {"key": "used", "label": "Used", "format": "bytes"},
+              {"key": "free", "label": "Free", "format": "bytes"},
+              {"key": "wasted", "label": "Wasted", "format": "bytes"}
+            ]
+          }
         },
         {
-          "id": "parity_summary",
-          "type": "stat-group",
-          "label": "Parity Summary",
-          "data_source": "telemetry.array_status",
-          "stats": [
-            {"key": "parity_size", "label": "Parity Size", "format": "bytes"},
-            {"key": "files", "label": "Total Files", "format": "number"},
-            {"key": "fragmented", "label": "Fragmented", "format": "number"},
-            {"key": "excess_fragments", "label": "Excess Fragments", "format": "number"}
-          ]
+          "id": "active_jobs",
+          "type": "progress",
+          "title": "Active Job",
+          "config": {
+            "source": "active_jobs"
+          }
         },
         {
-          "id": "last_operations",
-          "type": "stat-group",
-          "label": "Last Operations",
-          "data_source": "telemetry.scheduler_state",
-          "stats": [
-            {"key": "last_sync_time", "label": "Last Sync", "format": "relative_time"},
-            {"key": "last_scrub_time", "label": "Last Scrub", "format": "relative_time"},
-            {"key": "last_smart_time", "label": "Last SMART Check", "format": "relative_time"}
-          ]
-        },
-        {
-          "id": "smart_overview",
-          "type": "data-table",
-          "label": "SMART Overview",
-          "data_source": "telemetry.smart_status.disks",
-          "columns": [
-            {"key": "disk_name", "label": "Disk"},
-            {"key": "device", "label": "Device"},
-            {"key": "serial", "label": "Serial"},
-            {"key": "temperature", "label": "Temp", "format": "celsius"},
-            {"key": "power_on_days", "label": "Power-On Days", "format": "number"},
-            {"key": "error_count", "label": "Errors", "format": "number"},
-            {"key": "failure_probability", "label": "Fail %", "format": "percent"},
-            {"key": "status", "label": "Status"}
-          ]
-        },
-        {
-          "id": "scrub_coverage",
-          "type": "progress-bar",
-          "label": "Scrub Coverage",
-          "data_source": "telemetry.array_status",
-          "value_key": "unscrubbed_percent",
-          "invert": true,
-          "description": "Percentage of array verified by scrub"
-        },
-        {
-          "id": "active_job_banner",
-          "type": "alert-banner",
-          "label": "Active Job",
-          "data_source": "telemetry.active_job",
-          "visible_when": "active_job != null",
-          "fields": [
-            {"key": "type", "label": "Operation"},
-            {"key": "started_at", "label": "Started", "format": "relative_time"},
-            {"key": "progress_percent", "label": "Progress", "format": "percent"},
-            {"key": "current_phase", "label": "Phase"}
-          ]
+          "id": "disk_storage",
+          "type": "disk-storage",
+          "title": "Disk Storage",
+          "source": "disk_storage",
+          "config": {
+            "source": "disk_storage",
+            "thresholds": {"warning": 70, "danger": 90}
+          }
         }
       ]
     },
@@ -113,87 +87,78 @@
       "id": "operations",
       "title": "Operations",
       "icon": "terminal",
-      "role": "operator",
+      "page_config": {
+        "agent_selector": true
+      },
       "components": [
         {
-          "id": "sync_button",
-          "type": "action-button",
-          "label": "Sync",
-          "action": "execute",
-          "params": {"command": "sync"},
-          "role": "operator",
-          "description": "Update parity data. Runs pre-flight safety gates before execution."
+          "id": "command_form",
+          "type": "form",
+          "title": "Run Command",
+          "config": {
+            "actions": [
+              {
+                "id": "sync",
+                "label": "Sync",
+                "command": "sync",
+                "description": "Update parity data. Runs pre-flight safety gates before execution.",
+                "params": [
+                  {"key": "force_zero", "label": "Force Zero Sync", "type": "toggle", "warning": true, "description": "Treats entire array as new data. For initial setup only."},
+                  {"key": "force_thresholds", "label": "Bypass Threshold Checks", "type": "toggle", "warning": true, "description": "Skip diff threshold safety gates for the next sync only."}
+                ]
+              },
+              {
+                "id": "scrub",
+                "label": "Scrub",
+                "command": "scrub",
+                "description": "Verify data integrity against parity.",
+                "params": [
+                  {"key": "plan", "label": "Plan", "type": "select", "options": [
+                    {"value": "8", "label": "Standard (8%)"},
+                    {"value": "bad", "label": "Bad Blocks Only"},
+                    {"value": "new", "label": "New Blocks Only"},
+                    {"value": "full", "label": "Full Scrub"}
+                  ]}
+                ]
+              },
+              {
+                "id": "fix_bad",
+                "label": "Fix Bad Blocks",
+                "command": "fix",
+                "description": "Repair blocks marked bad during scrub.",
+                "confirm": "This will repair only blocks marked bad by scrub.",
+                "params": [
+                  {"key": "bad_blocks_only", "type": "hidden", "value": true}
+                ]
+              },
+              {
+                "id": "fix_disk",
+                "label": "Fix Disk / Files",
+                "command": "fix",
+                "description": "Recover data for a specific disk or file pattern.",
+                "confirm": "This will revert files to the last synced state.",
+                "params": [
+                  {"key": "disk", "label": "Disk Name (-d)", "type": "text"},
+                  {"key": "filter", "label": "File Filter (-f)", "type": "text"}
+                ]
+              },
+              {
+                "id": "abort",
+                "label": "Abort",
+                "command": "abort",
+                "description": "Send abort signal to the running operation.",
+                "visible_when": "active_job"
+              }
+            ]
+          }
         },
         {
-          "id": "force_zero_sync_toggle",
-          "type": "toggle",
-          "label": "Force Zero Sync",
-          "param_key": "force_zero",
-          "role": "admin",
-          "description": "Treats entire array as new data. For initial setup only. Resets after use.",
-          "warning": true
-        },
-        {
-          "id": "force_sync_toggle",
-          "type": "toggle",
-          "label": "Bypass Threshold Checks",
-          "param_key": "force_thresholds",
-          "role": "admin",
-          "description": "Skip diff threshold safety gates for the next sync only. Resets after use.",
-          "warning": true
-        },
-        {
-          "id": "scrub_button",
-          "type": "action-button",
-          "label": "Scrub",
-          "action": "execute",
-          "params": {"command": "scrub"},
-          "role": "operator",
-          "description": "Verify data integrity against parity.",
-          "options": [
-            {"value": "standard", "label": "Standard (-p 8 -o 10)"},
-            {"value": "bad", "label": "Bad Blocks Only (-p bad)"},
-            {"value": "new", "label": "New Blocks Only (-p new)"},
-            {"value": "full", "label": "Full Scrub (-p full)"},
-            {"value": "custom", "label": "Custom Percentage"}
-          ]
-        },
-        {
-          "id": "fix_bad_blocks_button",
-          "type": "action-button",
-          "label": "Fix Bad Blocks",
-          "action": "execute",
-          "params": {"command": "fix", "bad_blocks_only": true},
-          "role": "operator",
-          "confirm": "This will repair only blocks marked bad by scrub.",
-          "description": "Run snapraid -e fix to repair blocks marked bad during scrub."
-        },
-        {
-          "id": "fix_disk_button",
-          "type": "action-button",
-          "label": "Fix Disk / Files",
-          "action": "execute",
-          "params": {"command": "fix"},
-          "role": "admin",
-          "confirm_gates": [
-            "This will revert files to the last synced state.",
-            "Type the disk name to confirm.",
-            "Final confirmation required."
-          ],
-          "inputs": [
-            {"key": "disk", "label": "Disk Name (-d)", "type": "text"},
-            {"key": "filter", "label": "File Filter (-f)", "type": "text"}
-          ],
-          "description": "Recover data for a specific disk or file pattern."
-        },
-        {
-          "id": "abort_button",
-          "type": "action-button",
-          "label": "Abort",
-          "action": "abort",
-          "role": "operator",
-          "visible_when": "active_job != null",
-          "description": "Send abort signal to the running operation."
+          "id": "op_progress",
+          "type": "progress",
+          "title": "Active Job",
+          "config": {
+            "source": "active_jobs"
+          }
         }
       ]
     },
@@ -201,146 +166,91 @@
       "id": "automation",
       "title": "Automation",
       "icon": "clock",
-      "role": "admin",
+      "page_config": {
+        "agent_selector": true
+      },
       "components": [
         {
-          "id": "maintenance_schedule",
-          "type": "cron-input",
-          "label": "Maintenance Schedule",
-          "config_key": "scheduler.maintenance_cron",
-          "description": "Full maintenance pipeline: touch, diff, gates, sync, scrub"
-        },
+          "id": "automation_form",
+          "type": "form",
+          "title": "Scheduler & Thresholds",
+          "config": {
+            "action": "config",
+            "source": "agent_config",
+            "fields": [
+              {"key": "agent_id", "label": "Agent", "type": "select", "source": "addon_agents", "required": true},
+              {"key": "maintenance_cron", "label": "Maintenance Schedule", "type": "cron", "description": "Full pipeline: touch, diff, gates, sync, scrub"},
+              {"key": "scrub_cron", "label": "Scrub Schedule", "type": "cron", "description": "Independent scrub for periodic integrity verification"},
+              {"key": "sync.pre_hash", "label": "Enable Pre-Hash", "type": "toggle", "description": "Hash files before writing parity. Slower but detects RAM errors."},
+              {"key": "thresholds.max_deleted", "label": "Deletion Threshold", "type": "number", "default": 50, "description": "Maximum deleted files before aborting automated sync. Set to 0 to disable."},
+              {"key": "thresholds.max_updated", "label": "Update Threshold", "type": "number", "default": -1, "description": "Maximum updated files before aborting. -1 to disable."},
+              {"key": "scrub.plan", "label": "Scrub Plan", "type": "select", "default": "8", "options": [
+                {"value": "bad", "label": "Bad Blocks Only"},
+                {"value": "new", "label": "New Blocks Only"},
+                {"value": "full", "label": "Full Scrub"},
+                {"value": "8", "label": "8% (default)"}
+              ], "description": "Default scrub plan for automated runs."},
+              {"key": "scrub.older_than_days", "label": "Scrub Min Age (days)", "type": "number", "default": 10, "description": "Only scrub blocks older than this many days."},
+              {"key": "scrub.auto_fix_bad_blocks", "label": "Auto-Fix Bad Blocks", "type": "toggle", "description": "Automatically run fix when bad blocks are detected."}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "agents",
+      "title": "Agents",
+      "icon": "server",
+      "components": [
         {
-          "id": "scrub_schedule",
-          "type": "cron-input",
-          "label": "Scrub Schedule",
-          "config_key": "scheduler.scrub_cron",
-          "description": "Independent scrub for periodic integrity verification"
-        },
-        {
-          "id": "smart_schedule",
-          "type": "cron-input",
-          "label": "SMART Check Schedule",
-          "config_key": "scheduler.smart_cron",
-          "description": "Periodic SMART health polling"
-        },
-        {
-          "id": "enable_pre_hash",
-          "type": "toggle",
-          "label": "Enable Pre-Hash",
-          "config_key": "sync.pre_hash",
-          "description": "Hash files before writing parity. Slower but detects RAM errors."
-        },
-        {
-          "id": "deletion_threshold",
-          "type": "number-input",
-          "label": "Deletion Threshold",
-          "config_key": "thresholds.max_deleted",
-          "default": 50,
-          "description": "Maximum deleted files before aborting automated sync. Set to 0 to disable."
-        },
-        {
-          "id": "update_threshold",
-          "type": "number-input",
-          "label": "Update Threshold",
-          "config_key": "thresholds.max_updated",
-          "default": -1,
-          "description": "Maximum updated files before aborting. -1 to disable."
-        },
-        {
-          "id": "add_del_ratio",
-          "type": "number-input",
-          "label": "Add/Delete Ratio Override",
-          "config_key": "thresholds.add_del_ratio",
-          "default": -1,
-          "description": "Allow sync despite deletion breach when added/deleted ratio exceeds this value. -1 to disable."
-        },
-        {
-          "id": "smart_fail_threshold",
-          "type": "number-input",
-          "label": "SMART Failure Threshold (%)",
-          "config_key": "thresholds.smart_fail_probability",
-          "default": 50,
-          "description": "Maximum disk failure probability before aborting sync."
-        },
-        {
-          "id": "scrub_plan",
-          "type": "select",
-          "label": "Scrub Plan",
-          "config_key": "scrub.plan",
-          "default": "8",
-          "options": [
-            {"value": "bad", "label": "Bad Blocks Only"},
-            {"value": "new", "label": "New Blocks Only"},
-            {"value": "full", "label": "Full Scrub"},
-            {"value": "8", "label": "8% (default)"},
-            {"value": "custom", "label": "Custom Percentage"}
-          ],
-          "description": "Default scrub plan for automated runs."
-        },
-        {
-          "id": "scrub_min_age",
-          "type": "number-input",
-          "label": "Scrub Min Age (days)",
-          "config_key": "scrub.older_than_days",
-          "default": 10,
-          "description": "Only scrub blocks older than this many days."
-        },
-        {
-          "id": "auto_fix_bad_blocks",
-          "type": "toggle",
-          "label": "Auto-Fix Bad Blocks",
-          "config_key": "scrub.auto_fix_bad_blocks",
-          "description": "Automatically run fix + verification scrub when bad blocks are detected."
-        },
-        {
-          "id": "snapraid_binary_path",
-          "type": "text-input",
-          "label": "SnapRAID Binary Path",
-          "config_key": "snapraid.binary_path",
-          "description": "Override path to the snapraid binary. Leave empty for auto-detect."
-        },
-        {
-          "id": "config_file_path",
-          "type": "text-input",
-          "label": "Config File Path",
-          "config_key": "snapraid.config_path",
-          "default": "/etc/snapraid.conf",
-          "description": "Path to snapraid.conf on the Agent host."
+          "id": "agent_list",
+          "type": "smart-table",
+          "title": "Registered Agents",
+          "config": {
+            "source": "addon_agents",
+            "columns": [
+              {"key": "agent_id", "label": "Agent ID"},
+              {"key": "hostname", "label": "Hostname"},
+              {"key": "status", "label": "Status"},
+              {"key": "last_seen_at", "label": "Last Seen", "format": "relative_time"},
+              {"key": "version", "label": "Version"}
+            ]
+          }
         }
       ]
     },
     {
       "id": "logs",
-      "title": "Live Logs",
+      "title": "Logs",
       "icon": "scroll-text",
+      "page_config": {
+        "agent_selector": true
+      },
       "components": [
         {
           "id": "live_log_viewer",
           "type": "log-viewer",
-          "label": "Live Output",
-          "data_source": "ws.log_stream",
-          "auto_scroll": true,
-          "description": "Real-time stdout/stderr from the active SnapRAID operation."
+          "title": "Live Output",
+          "config": {
+            "auto_scroll": true
+          }
         },
         {
-          "id": "job_history_table",
-          "type": "data-table",
-          "label": "Job History",
-          "data_source": "api.job_history",
-          "paginated": true,
-          "columns": [
-            {"key": "job_type", "label": "Type"},
-            {"key": "trigger", "label": "Trigger"},
-            {"key": "started_at", "label": "Started", "format": "datetime"},
-            {"key": "finished_at", "label": "Finished", "format": "datetime"},
-            {"key": "status", "label": "Status"},
-            {"key": "exit_code", "label": "Exit Code"}
-          ],
-          "row_action": {
-            "type": "modal",
-            "title": "Job Detail",
-            "fields": ["output_log"]
+          "id": "job_history",
+          "type": "smart-table",
+          "title": "Job History",
+          "config": {
+            "source": "job_history",
+            "columns": [
+              {"key": "job_type", "label": "Type"},
+              {"key": "trigger", "label": "Trigger"},
+              {"key": "started_at", "label": "Started", "format": "datetime"},
+              {"key": "finished_at", "label": "Finished", "format": "datetime"},
+              {"key": "status", "label": "Status"},
+              {"key": "exit_code", "label": "Exit Code"}
+            ],
+            "sortable": true,
+            "default_sort": {"key": "started_at", "direction": "desc"}
           }
         }
       ]

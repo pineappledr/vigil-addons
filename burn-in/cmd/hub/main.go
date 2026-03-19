@@ -13,6 +13,7 @@ import (
 
 	"github.com/pineapple/vigil-addons/burn-in/internal/config"
 	"github.com/pineapple/vigil-addons/burn-in/internal/hub"
+	"github.com/pineappledr/vigil-addons/shared/vigilclient"
 )
 
 //go:embed manifest.json
@@ -46,7 +47,7 @@ func run(logger *slog.Logger) error {
 	}
 
 	// Create Vigil registration client.
-	vigilClient, err := hub.NewVigilClient(cfg.Vigil.URL, cfg.Vigil.AgentToken, manifestData, logger)
+	vigilClient, err := vigilclient.NewVigilClient(cfg.Vigil.URL, cfg.Vigil.AgentToken, manifestData, logger)
 	if err != nil {
 		return err
 	}
@@ -84,11 +85,12 @@ func run(logger *slog.Logger) error {
 		)
 
 		// Start the persistent upstream telemetry WebSocket.
-		telemetry := hub.NewTelemetryClient(
+		telemetry := vigilclient.NewTelemetryClient(
 			cfg.Vigil.URL,
 			resp.AddonID,
 			cfg.Vigil.AgentToken,
 			cfg.Hub.HeartbeatInterval,
+			nil, // no channel-based forwarding; burn-in uses typed Send calls
 			logger,
 		)
 

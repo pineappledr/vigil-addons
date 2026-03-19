@@ -1,12 +1,9 @@
 package drive
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
-	"syscall"
 )
 
 // PartitionResult holds the outcome of a partitioning operation.
@@ -90,34 +87,12 @@ func PartitionGPT(ctx context.Context, devicePath, fileSystem string, reservedPc
 }
 
 // runSgdisk executes sgdisk with the given arguments against the device.
-// It sets up a process group for safe cancellation.
 func runSgdisk(ctx context.Context, device string, args ...string) error {
 	cmdArgs := append(args, device)
-	cmd := exec.CommandContext(ctx, "sgdisk", cmdArgs...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	// Kill the process group on context cancellation.
-	cleanup := context.AfterFunc(ctx, func() {
-		if cmd.Process != nil {
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-	})
-	defer cleanup()
-
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return fmt.Errorf("sgdisk %s: %s", strings.Join(args, " "), errMsg)
-		}
-		return fmt.Errorf("sgdisk %s: %w", strings.Join(args, " "), err)
+	result, err := runWithProcessGroup(ctx, "sgdisk", cmdArgs...)
+	if err != nil {
+		return stderrMessage(result, err, "sgdisk "+strings.Join(args, " "))
 	}
-
 	return nil
 }
 

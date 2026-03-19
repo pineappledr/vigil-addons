@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.26.1-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.1 AS builder
 ARG TARGETOS TARGETARCH
 ARG VERSION=dev
 WORKDIR /src
@@ -9,10 +9,12 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags="-s -w -X main.version=$VERSION" \
     -o /burnin-agent ./cmd/agent
 
-FROM alpine:3.21
-RUN apk add --no-cache ca-certificates tzdata \
-    smartmontools e2fsprogs e2fsprogs-extra util-linux gptfdisk sgdisk \
-    xfsprogs btrfs-progs dosfstools
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates tzdata \
+    smartmontools e2fsprogs util-linux gdisk \
+    xfsprogs btrfs-progs dosfstools \
+    && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /var/lib/vigil-agent/logs
 COPY --from=builder /burnin-agent /usr/local/bin/burnin-agent
 VOLUME ["/var/lib/vigil-agent/logs"]

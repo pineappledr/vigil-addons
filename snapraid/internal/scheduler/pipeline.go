@@ -3,8 +3,8 @@ package scheduler
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log/slog"
+	"strconv"
 
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
 	agentdb "github.com/pineappledr/vigil-addons/snapraid/internal/db"
@@ -20,7 +20,8 @@ type EventEmitter interface {
 // JobTracker allows the pipeline to report active job state upstream
 // so the dashboard can display running operations.
 type JobTracker interface {
-	TrackJob(jobType, phase string)
+	TrackJob(jobType, trigger, phase string)
+	UpdateProgress(pct int)
 	ClearJob()
 }
 
@@ -38,14 +39,14 @@ type Pipeline struct {
 // touch -> diff -> safety gates (SMART + diff thresholds) -> sync -> scrub.
 func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	p.logger.Info("maintenance pipeline started")
-	p.emit("maintenance_started", "info", "Maintenance pipeline started")
+	p.emit("maintenance_started", "info", "▶️ Maintenance pipeline started")
 
 	// Gate 0: Validate content and parity files exist and are non-empty.
 	gate := CheckConfigFiles(p.engine)
 	if !gate.Passed {
 		p.logger.Error("maintenance aborted: config files gate failed", "reason", gate.Reason)
 		p.recordGateFailure("config_files_gate", gate.Reason)
-		p.emit("gate_failed", "warning", "Maintenance aborted: "+gate.Reason)
+		p.emit("gate_failed", "warning", "⚠️ Maintenance aborted: "+gate.Reason)
 		return
 	}
 
@@ -91,7 +92,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	if !gate.Passed {
 		p.logger.Error("maintenance aborted: SMART gate failed", "reason", gate.Reason)
 		p.recordGateFailure("smart_gate", gate.Reason)
-		p.emit("gate_failed", "warning", "Maintenance aborted: "+gate.Reason)
+		p.emit("gate_failed", "warning", "⚠️ Maintenance aborted: "+gate.Reason)
 		return
 	}
 
@@ -100,7 +101,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	if !gate.Passed {
 		p.logger.Error("maintenance aborted: diff threshold gate failed", "reason", gate.Reason)
 		p.recordGateFailure("diff_gate", gate.Reason)
-		p.emit("gate_failed", "warning", "Maintenance aborted: "+gate.Reason)
+		p.emit("gate_failed", "warning", "⚠️ Maintenance aborted: "+gate.Reason)
 		return
 	}
 
@@ -110,18 +111,20 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	if err := runHook(ctx, "pre_sync", p.cfg.Hooks.PreSync, p.logger); err != nil {
 		p.logger.Error("maintenance aborted: pre-sync hook failed", "error", err)
 		p.recordGateFailure("pre_sync_hook", err.Error())
-		p.emit("gate_failed", "warning", "Pre-sync hook failed: "+err.Error())
+		p.emit("gate_failed", "warning", "⚠️ Pre-sync hook failed: "+err.Error())
 		return
 	}
 
 	// Docker container management before sync
-	restored := p.manageContainers(ctx, true)
+	restored := p.manageContainers(ctx)
 
 	// Step 4: sync
 	syncOk := p.runStep(ctx, "sync", "scheduled", func(ctx context.Context) (int, string, error) {
+		progress, stopProgress := p.progressChan()
+		defer stopProgress()
 		report, err := p.engine.Sync(ctx, engine.SyncOptions{
 			PreHash: p.cfg.Sync.PreHash,
-		}, nil)
+		}, progress)
 		if err != nil {
 			return 0, "", err
 		}
@@ -145,10 +148,12 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	// Step 5: scrub
 	var scrubExitCode int
 	p.runStep(ctx, "scrub", "scheduled", func(ctx context.Context) (int, string, error) {
+		progress, stopProgress := p.progressChan()
+		defer stopProgress()
 		report, err := p.engine.Scrub(ctx, engine.ScrubOptions{
 			Plan:          p.cfg.Scrub.Plan,
 			OlderThanDays: p.cfg.Scrub.OlderThanDays,
-		})
+		}, progress)
 		if err != nil {
 			return 0, "", err
 		}
@@ -160,7 +165,9 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	if p.cfg.Scrub.AutoFixBadBlocks && scrubExitCode == 2 {
 		p.logger.Info("scrub reported bad blocks, running auto-fix")
 		p.runStep(ctx, "fix", "auto-fix", func(ctx context.Context) (int, string, error) {
-			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true})
+			progress, stopProgress := p.progressChan()
+			defer stopProgress()
+			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true}, progress)
 			if err != nil {
 				return 0, "", err
 			}
@@ -169,17 +176,21 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	}
 
 	p.logger.Info("maintenance pipeline completed")
-	p.emit("maintenance_complete", "info", "Maintenance pipeline completed successfully")
+	p.emit("maintenance_complete", "warning", "✅ Maintenance pipeline completed successfully")
 }
 
 // RunScrubOnly executes a standalone scrub job.
 func (p *Pipeline) RunScrubOnly(ctx context.Context) {
+	p.emit("scrub_started", "info", "▶️ Standalone scrub started")
+
 	var scrubExitCode int
 	p.runStep(ctx, "scrub", "scheduled", func(ctx context.Context) (int, string, error) {
+		progress, stopProgress := p.progressChan()
+		defer stopProgress()
 		report, err := p.engine.Scrub(ctx, engine.ScrubOptions{
 			Plan:          p.cfg.Scrub.Plan,
 			OlderThanDays: p.cfg.Scrub.OlderThanDays,
-		})
+		}, progress)
 		if err != nil {
 			return 0, "", err
 		}
@@ -190,24 +201,17 @@ func (p *Pipeline) RunScrubOnly(ctx context.Context) {
 	if p.cfg.Scrub.AutoFixBadBlocks && scrubExitCode == 2 {
 		p.logger.Info("scrub reported bad blocks, running auto-fix")
 		p.runStep(ctx, "fix", "auto-fix", func(ctx context.Context) (int, string, error) {
-			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true})
+			progress, stopProgress := p.progressChan()
+			defer stopProgress()
+			report, err := p.engine.Fix(ctx, engine.FixOptions{BadBlocksOnly: true}, progress)
 			if err != nil {
 				return 0, "", err
 			}
 			return report.ExitCode, report.Output, nil
 		})
 	}
-}
 
-// RunSmartCheck executes a standalone SMART check.
-func (p *Pipeline) RunSmartCheck(ctx context.Context) {
-	p.runStep(ctx, "smart", "scheduled", func(ctx context.Context) (int, string, error) {
-		report, err := p.engine.Smart(ctx)
-		if err != nil {
-			return 0, "", err
-		}
-		return 0, report.Output, nil
-	})
+	p.emit("scrub_complete", "info", "✅ Standalone scrub completed")
 }
 
 // RunStatusRefresh executes a standalone status refresh.
@@ -219,6 +223,26 @@ func (p *Pipeline) RunStatusRefresh(ctx context.Context) {
 		}
 		return 0, report.Output, nil
 	})
+
+	p.emit("status_refresh_complete", "info", "🔄 Status refresh completed")
+}
+
+// progressChan creates a buffered progress channel that drains into the
+// tracker's UpdateProgress. Returns the channel and a stop function.
+// Returns (nil, noop) if no tracker is configured.
+func (p *Pipeline) progressChan() (chan<- int, func()) {
+	if p.tracker == nil {
+		return nil, func() {}
+	}
+	ch := make(chan int, 4)
+	done := make(chan struct{})
+	go func() {
+		for pct := range ch {
+			p.tracker.UpdateProgress(pct)
+		}
+		close(done)
+	}()
+	return ch, func() { close(ch); <-done }
 }
 
 // stepFunc executes a SnapRAID operation and returns (exitCode, output, error).
@@ -230,7 +254,7 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 	p.logger.Info("pipeline step started", "job", jobType)
 
 	if p.tracker != nil {
-		p.tracker.TrackJob(jobType, "running")
+		p.tracker.TrackJob(jobType, trigger, "running")
 		defer p.tracker.ClearJob()
 	}
 
@@ -240,6 +264,14 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 	}
 
 	exitCode, output, err := fn(ctx)
+
+	// Signal completion so non-streaming jobs (diff, smart, status, touch)
+	// don't leave the progress bar stuck at 0% for their entire duration.
+	// For streaming jobs (sync, scrub, fix) this is redundant but harmless —
+	// the progress channel has already been fully drained before fn returns.
+	if err == nil && p.tracker != nil {
+		p.tracker.UpdateProgress(100)
+	}
 
 	status := "success"
 	if err != nil {
@@ -254,6 +286,9 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 		p.logger.Error("pipeline step failed", "job", jobType, "error", err, "output", output)
 		if jobID > 0 {
 			agentdb.CompleteJob(p.db, jobID, -1, status, err.Error())
+		}
+		if trigger != "pre-flight" {
+			p.emit("job_failed", "critical", "🔴 SnapRAID "+jobType+" ("+trigger+") failed: "+err.Error())
 		}
 		return false
 	}
@@ -278,6 +313,10 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 		p.logger.Info("snapraid output", "job", jobType, "output", output)
 	}
 
+	if status == "error" && trigger != "pre-flight" {
+		p.emit("job_failed", "critical", "🔴 SnapRAID "+jobType+" ("+trigger+") failed: exit code "+itoa(exitCode))
+	}
+
 	return status == "success" || status == "warning"
 }
 
@@ -298,31 +337,6 @@ func (p *Pipeline) emit(eventType, severity, message string) {
 	}
 }
 
-func formatDiffSummary(r *engine.DiffReport) string {
-	return "added=" + itoa(r.Added) +
-		" removed=" + itoa(r.Removed) +
-		" updated=" + itoa(r.Updated) +
-		" moved=" + itoa(r.Moved) +
-		" copied=" + itoa(r.Copied) +
-		" restored=" + itoa(r.Restored)
-}
-
-func formatSmartSummary(r *engine.SmartReport) string {
-	return "disks=" + itoa(len(r.Disks)) +
-		" overall_fail_probability=" + ftoa(r.OverallFailProbability) + "%"
-}
-
-func formatStatusSummary(r *engine.StatusReport) string {
-	return "files=" + itoa(r.Files) +
-		" unsynced=" + itoa(r.UnsyncedBlocks) +
-		" bad_blocks=" + itoa(r.BadBlocks) +
-		" unscrubbed=" + ftoa(r.UnscrubbedPercent) + "%"
-}
-
 func itoa(n int) string {
-	return fmt.Sprintf("%d", n)
-}
-
-func ftoa(f float64) string {
-	return fmt.Sprintf("%.1f", f)
+	return strconv.Itoa(n)
 }

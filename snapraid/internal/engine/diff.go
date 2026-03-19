@@ -3,16 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
-)
-
-var (
-	// Matches summary lines like: "   123 added" or "   456 removed"
-	reDiffCounter = regexp.MustCompile(`^\s*(\d+)\s+(added|removed|updated|moved|copied|restored)$`)
-
-	// Matches verbose per-file lines like: "add path/to/file"
-	reDiffEntry = regexp.MustCompile(`^(add|remove|update|move|copy|restore)\s+(.+)$`)
 )
 
 // Diff executes `snapraid diff` and parses the output.

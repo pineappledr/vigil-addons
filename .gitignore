@@ -8,6 +8,8 @@ burnin-hub
 burnin-agent
 snapraid-hub
 snapraid-agent
+agent
+hub
 
 # Build output
 burn-in/dist/

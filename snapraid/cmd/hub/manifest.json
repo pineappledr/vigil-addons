@@ -31,7 +31,7 @@
             "labels": {
               "maintenance_cron": "Maintenance Schedule",
               "scrub_cron": "Scrub Schedule",
-              "smart_cron": "SMART Check Schedule",
+              "status_cron": "Status Refresh Schedule",
               "max_deleted": "Deletion Threshold",
               "max_updated": "Update Threshold",
               "pre_hash": "Pre-Hash",
@@ -39,31 +39,6 @@
               "scrub_older_than_days": "Scrub Min Age (days)",
               "auto_fix_bad_blocks": "Auto-Fix Bad Blocks"
             }
-          }
-        },
-        {
-          "type": "smart-table",
-          "id": "disk-status",
-          "title": "Disk Status",
-          "config": {
-            "source": "disk_status",
-            "columns": [
-              { "key": "name", "label": "Disk" },
-              { "key": "device", "label": "Device" },
-              { "key": "used", "label": "Used", "format": "bytes" },
-              { "key": "free", "label": "Free", "format": "bytes" },
-              { "key": "wasted", "label": "Wasted", "format": "bytes" }
-            ]
-          }
-        },
-        {
-          "type": "disk-storage",
-          "id": "disk-storage",
-          "title": "Disk Storage",
-          "config": {
-            "source": "disk_storage",
-            "aliases": {},
-            "thresholds": { "warning": 70, "danger": 90 }
           }
         },
         {
@@ -84,21 +59,13 @@
           }
         },
         {
-          "type": "smart-table",
-          "id": "smart-overview",
-          "title": "SMART Overview",
+          "type": "disk-storage",
+          "id": "disk-storage",
+          "title": "Disk Storage",
           "config": {
-            "source": "smart_status",
-            "columns": [
-              { "key": "disk_name", "label": "Disk" },
-              { "key": "device", "label": "Device" },
-              { "key": "serial", "label": "Serial" },
-              { "key": "temperature", "label": "Temp" },
-              { "key": "power_on_days", "label": "Power-On Days" },
-              { "key": "error_count", "label": "Errors" },
-              { "key": "failure_probability", "label": "Fail %" },
-              { "key": "status", "label": "Status" }
-            ]
+            "source": "disk_storage",
+            "aliases": {},
+            "thresholds": { "warning": 70, "danger": 90 }
           }
         }
       ]
@@ -131,7 +98,6 @@
                   { "value": "sync", "label": "Sync" },
                   { "value": "scrub", "label": "Scrub" },
                   { "value": "status", "label": "Status" },
-                  { "value": "smart", "label": "SMART" },
                   { "value": "diff", "label": "Diff" },
                   { "value": "touch", "label": "Touch" },
                   { "value": "fix", "label": "Fix" }
@@ -248,20 +214,20 @@
                 "custom_placeholder": "0 4 * * 0 (min hour day month weekday)"
               },
               {
-                "name": "smart_cron",
-                "label": "SMART Check Schedule",
-                "hint": "Polls drive health and reports disk failures",
+                "name": "status_cron",
+                "label": "Status Refresh Schedule",
+                "hint": "Periodic status check that updates the dashboard telemetry (disk usage, array health)",
                 "type": "select",
-                "default": "0 */6 * * *",
+                "default": "*/30 * * * *",
                 "options": [
                   { "value": "", "label": "Disabled" },
+                  { "value": "*/30 * * * *", "label": "Every 30 minutes" },
+                  { "value": "0 * * * *", "label": "Every hour" },
+                  { "value": "0 */2 * * *", "label": "Every 2 hours" },
                   { "value": "0 */6 * * *", "label": "Every 6 hours" },
-                  { "value": "0 */4 * * *", "label": "Every 4 hours" },
-                  { "value": "0 */12 * * *", "label": "Every 12 hours" },
-                  { "value": "0 0 * * *", "label": "Daily at midnight" },
                   { "value": "__custom__", "label": "Custom..." }
                 ],
-                "custom_placeholder": "0 */6 * * * (min hour day month weekday)"
+                "custom_placeholder": "*/30 * * * * (min hour day month weekday)"
               },
               {
                 "name": "max_deleted",
@@ -395,8 +361,10 @@
               "ports": ["9400:9400"],
               "volumes": [
                 "agent-data:/var/lib/vigil-snapraid-agent",
+                "/dev:/dev:ro",
                 "/etc/snapraid.conf:/etc/snapraid.conf:ro",
-                "/usr/bin/snapraid:/usr/bin/snapraid:ro"
+                "/usr/bin/snapraid:/usr/bin/snapraid:ro",
+                "/var/snapraid:/var/snapraid"
               ],
               "named_volumes": ["agent-data"],
               "environment": {
@@ -411,7 +379,7 @@
               "platforms": {
                 "linux": {
                   "label": "Standard Linux",
-                  "hint": "Copy the docker-compose.yml to deploy the SnapRAID agent. Mount all data and parity disks used by snapraid. If your snapraid binary is not at /usr/bin/snapraid, adjust the volume mount (run 'which snapraid' to find it)."
+                  "hint": "Copy the docker-compose.yml to deploy the SnapRAID agent. Mount all data and parity disks used by snapraid. Content files MUST be in a mounted directory (e.g. /var/snapraid:/var/snapraid) — never mount the .content file directly or sync will fail with EBUSY. Ensure snapraid.conf uses 'content /var/snapraid/snapraid.content'. If your snapraid binary is not at /usr/bin/snapraid, adjust the volume mount (run 'which snapraid' to find it)."
                 }
               }
             },
@@ -452,6 +420,7 @@
           "title": "Job History",
           "config": {
             "source": "job_history",
+            "page_size": 10,
             "columns": [
               { "key": "job_type", "label": "Type" },
               { "key": "trigger", "label": "Trigger" },

@@ -6,7 +6,8 @@ import (
 )
 
 // Fix executes `snapraid fix` with the given options.
-func (e *Engine) Fix(ctx context.Context, opts FixOptions) (*FixReport, error) {
+// Progress updates (0-100) are sent to the progress channel if non-nil.
+func (e *Engine) Fix(ctx context.Context, opts FixOptions, progress chan<- int) (*FixReport, error) {
 	args := []string{"fix"}
 
 	if opts.BadBlocksOnly {
@@ -19,7 +20,7 @@ func (e *Engine) Fix(ctx context.Context, opts FixOptions) (*FixReport, error) {
 		args = append(args, "-f", opts.Filter)
 	}
 
-	result, err := e.runCommand(ctx, args...)
+	result, err := e.runCommandStreaming(ctx, progressLineFunc(progress), args...)
 	if err != nil {
 		return nil, fmt.Errorf("fix: %w", err)
 	}

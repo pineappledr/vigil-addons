@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/pineappledr/vigil-addons/shared/vigilclient"
 )
 
 // AggregatedFrame wraps an Agent's telemetry with its identity for upstream transmission.
@@ -38,6 +40,7 @@ type agentEvent struct {
 
 type agentActiveJob struct {
 	Type         string `json:"type"`
+	Trigger      string `json:"trigger"`
 	CurrentPhase string `json:"current_phase"`
 }
 
@@ -54,8 +57,9 @@ type agentSmartDisk struct {
 
 // trackedJob records the last-known job state for an agent.
 type trackedJob struct {
-	Type  string
-	Phase string
+	Type    string
+	Phase   string
+	Trigger string
 }
 
 // Aggregator multiplexes inbound WebSocket telemetry from multiple Agents
@@ -64,7 +68,7 @@ type Aggregator struct {
 	mu        sync.RWMutex
 	registry  *Registry
 	upstream  chan<- []byte
-	telemetry *TelemetryClient // optional, for typed notification frames
+	telemetry *vigilclient.TelemetryClient // optional, for typed notification frames
 	logger    *slog.Logger
 
 	// Per-agent tracking for state transition detection.
@@ -94,7 +98,7 @@ func NewAggregator(registry *Registry, upstream chan<- []byte, logger *slog.Logg
 
 // SetTelemetryClient attaches a TelemetryClient for sending typed notification
 // frames directly upstream. Must be called before IngestAgentFrame.
-func (a *Aggregator) SetTelemetryClient(tc *TelemetryClient) {
+func (a *Aggregator) SetTelemetryClient(tc *vigilclient.TelemetryClient) {
 	a.mu.Lock()
 	a.telemetry = tc
 	a.mu.Unlock()
@@ -190,7 +194,7 @@ func (a *Aggregator) evaluateTelemetry(agentID string, raw []byte) {
 // lifecycle) as notifications upstream, deduplicating by event ID.
 // Gate failures are further deduplicated by message so that repeated identical
 // failures (e.g. missing content file) only notify once until resolved.
-func (a *Aggregator) evaluateAgentEvent(tc *TelemetryClient, agentID string, evt *agentEvent) {
+func (a *Aggregator) evaluateAgentEvent(tc *vigilclient.TelemetryClient, agentID string, evt *agentEvent) {
 	if evt == nil || evt.ID == "" {
 		return
 	}
@@ -223,18 +227,26 @@ func (a *Aggregator) evaluateAgentEvent(tc *TelemetryClient, agentID string, evt
 	a.emitNotification(tc, agentID, evt.Type, evt.Severity, evt.Message+" on "+agentID)
 }
 
-// evaluateJobTransition detects job started/completed transitions.
-func (a *Aggregator) evaluateJobTransition(tc *TelemetryClient, agentID string, job *agentActiveJob) {
+// evaluateJobTransition detects job started/completed and phase transitions.
+// Uses trigger-aware event types so users can toggle manual vs scheduled notifications.
+func (a *Aggregator) evaluateJobTransition(tc *vigilclient.TelemetryClient, agentID string, job *agentActiveJob) {
 	a.mu.Lock()
 	prev := a.lastJobs[agentID]
 
 	if job != nil && prev == nil {
 		// Job started.
-		a.lastJobs[agentID] = &trackedJob{Type: job.Type, Phase: job.CurrentPhase}
+		a.lastJobs[agentID] = &trackedJob{Type: job.Type, Phase: job.CurrentPhase, Trigger: job.Trigger}
 		a.mu.Unlock()
 
-		a.emitNotification(tc, agentID, "job_started", "info",
-			"SnapRAID "+job.Type+" started on "+agentID)
+		evtType := "job_started"
+		switch job.Trigger {
+		case "manual":
+			evtType = "manual_job_started"
+		case "scheduled":
+			evtType = "scheduled_job_started"
+		}
+		a.emitNotification(tc, agentID, evtType, "info",
+			"▶️ SnapRAID "+job.Type+" started ("+job.Trigger+") on "+agentID)
 		return
 	}
 
@@ -243,19 +255,39 @@ func (a *Aggregator) evaluateJobTransition(tc *TelemetryClient, agentID string, 
 		delete(a.lastJobs, agentID)
 		a.mu.Unlock()
 
-		a.emitNotification(tc, agentID, "job_complete", "info",
-			"SnapRAID "+prev.Type+" completed on "+agentID)
+		evtType := "job_complete"
+		switch prev.Trigger {
+		case "manual":
+			evtType = "manual_job_complete"
+		case "scheduled":
+			evtType = "scheduled_job_complete"
+		}
+		a.emitNotification(tc, agentID, evtType, "info",
+			"✅ SnapRAID "+prev.Type+" completed ("+prev.Trigger+") on "+agentID)
 		return
 	}
 
 	if job != nil {
+		// Detect phase transition within a running job.
+		prevPhase := ""
+		if prev != nil {
+			prevPhase = prev.Phase
+		}
 		a.lastJobs[agentID] = &trackedJob{Type: job.Type, Phase: job.CurrentPhase}
+		a.mu.Unlock()
+
+		if prevPhase != "" && job.CurrentPhase != "" && prevPhase != job.CurrentPhase {
+			a.emitNotification(tc, agentID, "phase_complete", "info",
+				"🔄 SnapRAID "+prevPhase+" → "+job.CurrentPhase+" on "+agentID)
+		}
+		return
 	}
+
 	a.mu.Unlock()
 }
 
 // evaluateSmartStatus checks for SMART failures and emits warnings.
-func (a *Aggregator) evaluateSmartStatus(tc *TelemetryClient, agentID string, smart *agentSmartState) {
+func (a *Aggregator) evaluateSmartStatus(tc *vigilclient.TelemetryClient, agentID string, smart *agentSmartState) {
 	if smart == nil {
 		return
 	}
@@ -275,8 +307,14 @@ func (a *Aggregator) evaluateSmartStatus(tc *TelemetryClient, agentID string, sm
 		a.smartAlerted[key] = true
 
 		a.mu.Unlock()
-		a.emitNotification(tc, agentID, "smart_warning", "warning",
-			"SMART "+disk.Status+" detected on "+disk.DiskName+" ("+disk.Device+") on "+agentID)
+		icon := "⚠️"
+		severity := "warning"
+		if disk.Status == "FAIL" {
+			icon = "🔴"
+			severity = "critical"
+		}
+		a.emitNotification(tc, agentID, "smart_warning", severity,
+			icon+" SMART "+disk.Status+": "+disk.DiskName+" ("+disk.Device+") on "+agentID)
 		a.mu.Lock()
 	}
 }
@@ -292,7 +330,7 @@ func (a *Aggregator) emitCommandFailure(agentID, action string, err error) {
 	}
 
 	a.emitNotification(tc, agentID, "job_failed", "critical",
-		"SnapRAID "+action+" failed on "+agentID+": "+err.Error())
+		"🔴 SnapRAID "+action+" failed on "+agentID+": "+err.Error())
 }
 
 // LatestTelemetryField extracts a top-level field from the cached telemetry of
@@ -322,16 +360,38 @@ func (a *Aggregator) LatestTelemetryField(agentID, field string) json.RawMessage
 	return m[field]
 }
 
-func (a *Aggregator) emitNotification(tc *TelemetryClient, agentID, eventType, severity, message string) {
-	n := NotificationPayload{
+// EmitLogLine sends a real-time log line upstream as a typed "log" frame
+// so it arrives as an SSE event: log on the frontend.
+func (a *Aggregator) EmitLogLine(payload map[string]string) {
+	a.mu.RLock()
+	tc := a.telemetry
+	a.mu.RUnlock()
+
+	if tc == nil {
+		return
+	}
+
+	if err := tc.Send("log", payload); err != nil {
+		a.logger.Debug("failed to send log line upstream", "error", err)
+	}
+}
+
+func (a *Aggregator) emitNotification(tc *vigilclient.TelemetryClient, agentID, eventType, severity, message string) {
+	hostname := agentID
+	if entry := a.registry.Get(agentID); entry != nil && entry.Hostname != "" {
+		hostname = entry.Hostname
+	}
+
+	n := vigilclient.NotificationPayload{
 		EventType: eventType,
 		Severity:  severity,
 		Source:    "snapraid-hub",
+		Host:      hostname,
 		Message:   message,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	if err := tc.SendNotification(n); err != nil {
+	if err := tc.Send("notification", n); err != nil {
 		a.logger.Warn("failed to transmit notification upstream",
 			"event_type", eventType,
 			"agent_id", agentID,

@@ -55,40 +55,19 @@ func LoadAgentConfig() (*AgentConfig, error) {
 		}
 	}
 
-	if v := os.Getenv("BURNIN_HUB_URL"); v != "" {
-		cfg.Hub.URL = v
+	envStr("BURNIN_HUB_URL", &cfg.Hub.URL)
+	envStr("BURNIN_HUB_PSK", &cfg.Hub.PSK)
+	envStr("BURNIN_AGENT_ID", &cfg.Agent.ID)
+	envStr("BURNIN_AGENT_LISTEN", &cfg.Agent.Listen)
+	envStr("BURNIN_AGENT_ADVERTISE_ADDR", &cfg.Agent.AdvertiseAddr)
+	envStr("BURNIN_AGENT_SERVER_PUBKEY", &cfg.Agent.ServerPubkey)
+	envStr("BURNIN_AGENT_LOG_DIR", &cfg.Agent.LogDir)
+
+	if err := envDuration("BURNIN_AGENT_SMART_POLL_INTERVAL", &cfg.Agent.SmartPollInterval); err != nil {
+		return nil, err
 	}
-	if v := os.Getenv("BURNIN_HUB_PSK"); v != "" {
-		cfg.Hub.PSK = v
-	}
-	if v := os.Getenv("BURNIN_AGENT_ID"); v != "" {
-		cfg.Agent.ID = v
-	}
-	if v := os.Getenv("BURNIN_AGENT_LISTEN"); v != "" {
-		cfg.Agent.Listen = v
-	}
-	if v := os.Getenv("BURNIN_AGENT_ADVERTISE_ADDR"); v != "" {
-		cfg.Agent.AdvertiseAddr = v
-	}
-	if v := os.Getenv("BURNIN_AGENT_SERVER_PUBKEY"); v != "" {
-		cfg.Agent.ServerPubkey = v
-	}
-	if v := os.Getenv("BURNIN_AGENT_SMART_POLL_INTERVAL"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("invalid BURNIN_AGENT_SMART_POLL_INTERVAL: %w", err)
-		}
-		cfg.Agent.SmartPollInterval = d
-	}
-	if v := os.Getenv("BURNIN_AGENT_TEMP_POLL_INTERVAL"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("invalid BURNIN_AGENT_TEMP_POLL_INTERVAL: %w", err)
-		}
-		cfg.Agent.TempPollInterval = d
-	}
-	if v := os.Getenv("BURNIN_AGENT_LOG_DIR"); v != "" {
-		cfg.Agent.LogDir = v
+	if err := envDuration("BURNIN_AGENT_TEMP_POLL_INTERVAL", &cfg.Agent.TempPollInterval); err != nil {
+		return nil, err
 	}
 
 	if err := cfg.validate(); err != nil {

@@ -1,4 +1,4 @@
-package hub
+package vigilclient
 
 import (
 	"context"
@@ -20,47 +20,16 @@ const (
 	maxMessageSize = 64 * 1024 // 64 KB per Vigil spec
 )
 
-// TelemetryFrame is the envelope for all frames sent upstream to Vigil.
-type TelemetryFrame struct {
-	Type    string          `json:"type"`
-	Payload json.RawMessage `json:"payload,omitempty"`
-}
-
-// NotificationPayload is the payload for a notification telemetry frame.
-type NotificationPayload struct {
-	EventType string `json:"event_type"`
-	Severity  string `json:"severity"`
-	Source    string `json:"source"`
-	Message   string `json:"message"`
-	Timestamp string `json:"timestamp"`
-}
-
-// LogPayload is the payload for a log telemetry frame.
-type LogPayload struct {
-	Level     string `json:"level"`
-	Message   string `json:"message"`
-	Source    string `json:"source,omitempty"`
-	JobID     string `json:"job_id,omitempty"`
-	Timestamp string `json:"timestamp,omitempty"`
-}
-
-// ProgressPayload is the payload for a progress telemetry frame.
-type ProgressPayload struct {
-	AgentID  string  `json:"agent_id"`
-	JobID    string  `json:"job_id"`
-	Command  string  `json:"command"`
-	Phase    string  `json:"phase"`
-	Percent  float64 `json:"percent"`
-}
-
 // TelemetryClient manages the persistent WebSocket connection to the Vigil server.
-// It reads aggregated frames from the upstream channel and transmits them to Vigil.
+// It supports two modes of operation:
+//   - Typed: call Send(frameType, payload) to transmit structured frames
+//   - Channel: provide an upstream channel for raw frame forwarding (optional)
 type TelemetryClient struct {
 	serverURL    string
 	addonID      int64
 	token        string
 	heartbeatInt time.Duration
-	upstream     <-chan []byte
+	upstream     <-chan []byte // optional: raw frames forwarded to Vigil
 	logger       *slog.Logger
 
 	mu    sync.Mutex
@@ -69,8 +38,9 @@ type TelemetryClient struct {
 	once  sync.Once
 }
 
-// NewTelemetryClient creates an upstream telemetry client that reads from
-// the provided channel and forwards frames to the Vigil server via WebSocket.
+// NewTelemetryClient creates an upstream telemetry client.
+// If upstream is nil, only typed Send calls are available.
+// If upstream is non-nil, raw frames from the channel are also forwarded.
 func NewTelemetryClient(serverURL string, addonID int64, token string, heartbeatInterval time.Duration, upstream <-chan []byte, logger *slog.Logger) *TelemetryClient {
 	return &TelemetryClient{
 		serverURL:    serverURL,
@@ -102,7 +72,7 @@ func (t *TelemetryClient) Run(ctx context.Context) {
 		}
 
 		attempt++
-		delay := registrationBackoff(attempt)
+		delay := BackoffDelay(attempt)
 		t.logger.Warn("upstream websocket disconnected, reconnecting",
 			"error", err,
 			"attempt", attempt,
@@ -136,7 +106,13 @@ func (t *TelemetryClient) connectAndServe(ctx context.Context) error {
 	}()
 
 	conn.SetReadLimit(maxMessageSize)
+
+	// Set initial read deadline — the server sends pings every 30s,
+	// so we allow up to pongWait (60s) before considering it dead.
 	conn.SetReadDeadline(time.Now().Add(pongWait))
+
+	// Handle pings FROM the Vigil server: extend the read deadline and
+	// reply with a pong.
 	conn.SetPingHandler(func(appData string) error {
 		conn.SetReadDeadline(time.Now().Add(pongWait))
 		return conn.WriteControl(websocket.PongMessage,
@@ -155,19 +131,42 @@ func (t *TelemetryClient) connectAndServe(ctx context.Context) error {
 		"url", wsURL,
 	)
 
-	// Heartbeat + upstream forwarding in a separate goroutine.
+	// Writer goroutine: handles heartbeats and optional channel forwarding.
 	serveCtx, serveCancel := context.WithCancel(ctx)
 	defer serveCancel()
 
 	go func() {
-		t.forwardLoop(serveCtx, conn)
+		if t.upstream != nil {
+			t.forwardLoop(serveCtx, conn)
+		} else {
+			t.heartbeatLoop(serveCtx, conn)
+		}
 		conn.Close()
 	}()
 
-	// Read loop keeps the connection alive and detects closure.
+	// Read loop — keeps the connection alive and detects closure.
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			return fmt.Errorf("read: %w", err)
+		}
+	}
+}
+
+// heartbeatLoop sends periodic heartbeats (used when no upstream channel).
+func (t *TelemetryClient) heartbeatLoop(ctx context.Context, conn *websocket.Conn) {
+	ticker := time.NewTicker(t.heartbeatInt)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			frame := TelemetryFrame{Type: "heartbeat"}
+			if err := t.writeFrame(conn, frame); err != nil {
+				t.logger.Warn("failed to transmit heartbeat", "error", err)
+				return
+			}
 		}
 	}
 }
@@ -194,7 +193,6 @@ func (t *TelemetryClient) forwardLoop(ctx context.Context, conn *websocket.Conn)
 			if !ok {
 				return
 			}
-			// Wrap the raw aggregated frame as a telemetry payload.
 			frame := TelemetryFrame{
 				Type:    "telemetry",
 				Payload: json.RawMessage(data),
@@ -208,32 +206,8 @@ func (t *TelemetryClient) forwardLoop(ctx context.Context, conn *websocket.Conn)
 	}
 }
 
-func (t *TelemetryClient) writeFrame(conn *websocket.Conn, frame TelemetryFrame) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if err := conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-		return err
-	}
-	return conn.WriteJSON(frame)
-}
-
-// SendNotification transmits a notification frame upstream to Vigil.
-func (t *TelemetryClient) SendNotification(n NotificationPayload) error {
-	return t.sendTyped("notification", n)
-}
-
-// SendLog transmits a log frame upstream to Vigil.
-func (t *TelemetryClient) SendLog(l LogPayload) error {
-	return t.sendTyped("log", l)
-}
-
-// SendProgress transmits a progress frame upstream to Vigil.
-func (t *TelemetryClient) SendProgress(p ProgressPayload) error {
-	return t.sendTyped("progress", p)
-}
-
-func (t *TelemetryClient) sendTyped(frameType string, payload any) error {
+// Send transmits a typed frame upstream. The payload is marshalled to JSON.
+func (t *TelemetryClient) Send(frameType string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshaling %s payload: %w", frameType, err)
@@ -250,6 +224,7 @@ func (t *TelemetryClient) sendTyped(frameType string, payload any) error {
 	if conn == nil {
 		t.logger.Warn("upstream frame dropped: websocket not connected",
 			"frame_type", frameType,
+			"payload_size", len(data),
 		)
 		return fmt.Errorf("upstream websocket not connected")
 	}
@@ -264,6 +239,16 @@ func (t *TelemetryClient) sendTyped(frameType string, payload any) error {
 
 	t.logger.Debug("upstream frame sent", "frame_type", frameType, "payload_size", len(data))
 	return nil
+}
+
+func (t *TelemetryClient) writeFrame(conn *websocket.Conn, frame TelemetryFrame) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if err := conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		return err
+	}
+	return conn.WriteJSON(frame)
 }
 
 func (t *TelemetryClient) wsURL() string {

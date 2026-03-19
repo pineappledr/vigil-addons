@@ -1,13 +1,10 @@
 package drive
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
-	"syscall"
 )
 
 // VerifyResult holds the outcome of a filesystem verification.
@@ -80,65 +77,31 @@ func VerifyFilesystem(ctx context.Context, partition string, baseline *SmartSnap
 
 // mountReadOnly mounts the partition read-only at the given mount point.
 func mountReadOnly(ctx context.Context, partition, mountPoint string) error {
-	cmd := exec.CommandContext(ctx, "mount", "-o", "ro", partition, mountPoint)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return fmt.Errorf("mount: %s", errMsg)
-		}
-		return fmt.Errorf("mount: %w", err)
+	result, err := runWithProcessGroup(ctx, "mount", "-o", "ro", partition, mountPoint)
+	if err != nil {
+		return stderrMessage(result, err, "mount")
 	}
-
 	return nil
 }
 
 // unmount unmounts the given mount point.
 func unmount(mountPoint string) error {
-	cmd := exec.Command("umount", mountPoint)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return fmt.Errorf("umount: %s", errMsg)
-		}
-		return fmt.Errorf("umount: %w", err)
+	result, err := runWithProcessGroup(context.Background(), "umount", mountPoint)
+	if err != nil {
+		return stderrMessage(result, err, "umount")
 	}
-
 	return nil
 }
 
 // checkMetadata runs dumpe2fs -h on the partition to validate filesystem
 // metadata integrity. It checks for a valid superblock and clean state.
 func checkMetadata(ctx context.Context, partition string) error {
-	cmd := exec.CommandContext(ctx, "dumpe2fs", "-h", partition)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return fmt.Errorf("dumpe2fs: %s", errMsg)
-		}
-		return fmt.Errorf("dumpe2fs: %w", err)
+	result, err := runWithProcessGroup(ctx, "dumpe2fs", "-h", partition)
+	if err != nil {
+		return stderrMessage(result, err, "dumpe2fs")
 	}
 
-	output := stdout.String()
+	output := string(result.Stdout)
 
 	// Verify the filesystem state is clean.
 	if strings.Contains(output, "Filesystem state:") && !strings.Contains(output, "clean") {

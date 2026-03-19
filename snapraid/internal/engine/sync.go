@@ -3,11 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strconv"
 )
-
-var reSyncProgress = regexp.MustCompile(`(\d+)%`)
 
 // Sync executes `snapraid sync` with the given options.
 // Progress updates (0-100) are sent to the progress channel if non-nil.
@@ -28,27 +24,7 @@ func (e *Engine) Sync(ctx context.Context, opts SyncOptions, progress chan<- int
 		args = append(args, "--force-full")
 	}
 
-	lastPct := -1
-	onLine := func(line string) {
-		if progress == nil {
-			return
-		}
-		if m := reSyncProgress.FindStringSubmatch(line); m != nil {
-			pct, err := strconv.Atoi(m[1])
-			if err != nil {
-				return
-			}
-			if pct != lastPct {
-				lastPct = pct
-				select {
-				case progress <- pct:
-				default:
-				}
-			}
-		}
-	}
-
-	result, err := e.runCommandStreaming(ctx, onLine, args...)
+	result, err := e.runCommandStreaming(ctx, progressLineFunc(progress), args...)
 	if err != nil {
 		return nil, fmt.Errorf("sync: %w", err)
 	}

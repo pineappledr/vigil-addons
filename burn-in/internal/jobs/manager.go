@@ -351,19 +351,9 @@ func (m *JobManager) runFullJob(ctx context.Context, mj *managedJob) {
 	m.logger.Info("full pipeline: entering BURNIN phase", "job_id", rec.JobID, "device", rec.DevicePath)
 
 	burninResult, err := RunBurnin(ctx, rec.JobID, rec.DevicePath, burninParams, m.sink, m.logger)
-	if err != nil {
-		if ctx.Err() != nil {
-			rec.Status = StatusCancelled
-			rec.FailReason = "job cancelled"
-			m.logger.Info("full pipeline: cancelled during BURNIN", "job_id", rec.JobID)
-		} else {
-			rec.Status = StatusFailed
-			rec.FailReason = err.Error()
-			m.logger.Error("full pipeline: BURNIN error", "job_id", rec.JobID, "error", err)
-		}
+	if m.handlePhaseError(ctx, rec, "BURNIN", err) {
 		return
 	}
-
 	if !burninResult.Passed {
 		rec.Status = StatusFailed
 		rec.FailReason = "burn-in failed: " + burninResult.FailReason
@@ -375,7 +365,6 @@ func (m *JobManager) runFullJob(ctx context.Context, mj *managedJob) {
 	rec.BurninPassed = &passed
 	m.logger.Info("full pipeline: BURNIN passed, transitioning to PRECLEAR", "job_id", rec.JobID)
 
-	// Emit BurninPassed telemetry event.
 	if m.sink != nil {
 		m.sink.SendLog(rec.JobID, SeverityInfo, "burn-in passed, starting pre-clear phase")
 	}
@@ -393,18 +382,8 @@ func (m *JobManager) runFullJob(ctx context.Context, mj *managedJob) {
 	m.logger.Info("full pipeline: entering PRECLEAR phase", "job_id", rec.JobID, "device", rec.DevicePath)
 
 	preclearParams := parsePreclearParams(rec.Params, m.logDir)
-
 	preclearResult, err := RunPreclear(ctx, rec.JobID, rec.DevicePath, preclearParams, m.sink, m.logger)
-	if err != nil {
-		if ctx.Err() != nil {
-			rec.Status = StatusCancelled
-			rec.FailReason = "job cancelled"
-			m.logger.Info("full pipeline: cancelled during PRECLEAR", "job_id", rec.JobID)
-		} else {
-			rec.Status = StatusFailed
-			rec.FailReason = err.Error()
-			m.logger.Error("full pipeline: PRECLEAR error", "job_id", rec.JobID, "error", err)
-		}
+	if m.handlePhaseError(ctx, rec, "PRECLEAR", err) {
 		return
 	}
 
@@ -418,6 +397,24 @@ func (m *JobManager) runFullJob(ctx context.Context, mj *managedJob) {
 	}
 }
 
+// handlePhaseError sets the job record status when a pipeline phase returns
+// an error. Returns true if the caller should abort (error or cancellation).
+func (m *JobManager) handlePhaseError(ctx context.Context, rec *JobRecord, phase string, err error) bool {
+	if err == nil {
+		return false
+	}
+	if ctx.Err() != nil {
+		rec.Status = StatusCancelled
+		rec.FailReason = "job cancelled"
+		m.logger.Info("full pipeline: cancelled during "+phase, "job_id", rec.JobID)
+	} else {
+		rec.Status = StatusFailed
+		rec.FailReason = err.Error()
+		m.logger.Error("full pipeline: "+phase+" error", "job_id", rec.JobID, "error", err)
+	}
+	return true
+}
+
 // finishJob releases the drive lock, unregisters from the API, persists
 // final state, and removes from active tracking.
 func (m *JobManager) finishJob(mj *managedJob) {
@@ -426,11 +423,24 @@ func (m *JobManager) finishJob(mj *managedJob) {
 	rec.CompletedAt = &now
 	rec.Phase = PhaseComplete
 
-	// Emit a cancellation frame so the hub/UI know the job ended.
-	if rec.Status == StatusCancelled && m.sink != nil {
+	// Emit a final frame so the hub/UI know the job ended.
+	if m.sink != nil {
 		elapsedSec := int64(now.Sub(rec.StartedAt).Seconds())
-		_ = m.sink.SendProgress(rec.JobID, rec.Command, "CANCELLED", "job cancelled by user", 100, 0, 0, elapsedSec, 0, 0, nil)
-		_ = m.sink.SendLog(rec.JobID, SeverityWarning, "job cancelled by user")
+		switch rec.Status {
+		case StatusCompleted:
+			_ = m.sink.SendProgress(rec.JobID, rec.Command, PhaseComplete, "job completed successfully", 100, 0, 0, elapsedSec, 0, 0, nil)
+			_ = m.sink.SendLog(rec.JobID, SeverityInfo, fmt.Sprintf("%s completed successfully", rec.Command))
+		case StatusFailed:
+			reason := rec.FailReason
+			if reason == "" {
+				reason = "unknown error"
+			}
+			_ = m.sink.SendProgress(rec.JobID, rec.Command, PhaseComplete, reason, 100, 0, 0, elapsedSec, 0, 0, nil)
+			_ = m.sink.SendLog(rec.JobID, SeverityError, fmt.Sprintf("%s failed: %s", rec.Command, reason))
+		case StatusCancelled:
+			_ = m.sink.SendProgress(rec.JobID, rec.Command, "CANCELLED", "job cancelled by user", 100, 0, 0, elapsedSec, 0, 0, nil)
+			_ = m.sink.SendLog(rec.JobID, SeverityWarning, "job cancelled by user")
+		}
 	}
 
 	elapsed := now.Sub(rec.StartedAt)

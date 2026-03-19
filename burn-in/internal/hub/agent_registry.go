@@ -12,10 +12,13 @@ import (
 
 // DriveInfo describes a single drive attached to an agent.
 type DriveInfo struct {
-	Path          string `json:"path"`
-	Model         string `json:"model"`
-	Serial        string `json:"serial"`
-	CapacityBytes int64  `json:"capacity_bytes"`
+	Path          string   `json:"path"`
+	Model         string   `json:"model"`
+	Serial        string   `json:"serial"`
+	CapacityBytes int64    `json:"capacity_bytes"`
+	Transport     string   `json:"transport,omitempty"`
+	IsOSDrive     bool     `json:"is_os_drive"`
+	MountPoints   []string `json:"mount_points,omitempty"`
 }
 
 // AgentRegistration is the payload an agent sends when registering.

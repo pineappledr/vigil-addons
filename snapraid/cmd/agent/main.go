@@ -46,12 +46,19 @@ func main() {
 	}
 	defer db.Close()
 
+	// Hydrate in-memory config from SQLite config_cache so user-changed
+	// settings (schedules, thresholds, etc.) survive container restarts.
+	if err := agent.HydrateConfigFromCache(db, cfg, logger); err != nil {
+		logger.Error("failed to hydrate config from cache", "error", err)
+		os.Exit(1)
+	}
+
 	config.LogAgentConfig(logger, cfg)
 
 	appCtx, appCancel := context.WithCancel(context.Background())
 	defer appCancel()
 
-	agentdb.StartPruneLoop(appCtx, db, 90*24*time.Hour, logger)
+	agentdb.StartPruneLoop(appCtx, db, 30*24*time.Hour, logger)
 
 	eng := engine.NewEngine(cfg.SnapRAID.BinaryPath, cfg.SnapRAID.ConfigPath, logger)
 
@@ -67,7 +74,15 @@ func main() {
 	collector := agent.NewCollector(agentID, hostname, version, logger)
 	collector.SetSnapraidVersion(eng.Version())
 
-	srv := agent.NewServer(cfg, eng, db, collector, logger)
+	// Start the cron scheduler for automated jobs.
+	sched := scheduler.New(eng, cfg, db, collector, collector, logger)
+	if err := sched.Start(appCtx); err != nil {
+		logger.Error("failed to start scheduler", "error", err)
+		os.Exit(1)
+	}
+	defer sched.Stop()
+
+	srv := agent.NewServer(cfg, eng, db, collector, sched, appCtx, logger)
 
 	// Populate telemetry cache on startup so data is immediately available.
 	go func() {
@@ -100,13 +115,22 @@ func main() {
 		}
 	}()
 
-	// Start the cron scheduler for automated jobs.
-	sched := scheduler.New(eng, cfg, db, collector, collector, logger)
-	if err := sched.Start(appCtx); err != nil {
-		logger.Error("failed to start scheduler", "error", err)
-		os.Exit(1)
-	}
-	defer sched.Stop()
+	// Periodically refresh disk storage (lightweight: just syscall.Statfs).
+	// This ensures telemetry frames always carry current disk usage.
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-appCtx.Done():
+				return
+			case <-ticker.C:
+				if storage, err := eng.CollectDiskStorage(); err == nil {
+					collector.SetDiskStorage(storage)
+				}
+			}
+		}
+	}()
 
 	// Self-register with the Hub (retries in background)
 	if cfg.Hub.URL != "" {
@@ -114,6 +138,7 @@ func main() {
 			logger.Error("VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR is required for Hub registration (set to http://<host-LAN-IP>:<port>)")
 		} else {
 			go agent.RegisterWithHub(appCtx, cfg.Hub.URL, agentID, hostname, advertiseAddr, version, logger)
+			agent.SetupLogForwarding(appCtx, collector, cfg.Hub.URL, agentID, logger)
 			go agent.StartHubForwarder(appCtx, collector, cfg.Hub.URL, agentID, 30*time.Second, logger)
 		}
 	}

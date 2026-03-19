@@ -75,6 +75,36 @@ The Hub has no special requirements beyond network connectivity. It can run on a
 
 ## Deployment
 
+### ⚠️ CRITICAL: Docker Volume Mounts for Content Files
+
+**Never bind-mount a `.content` file directly into the container.** SnapRAID writes to a temporary `.content.tmp` file and then calls `rename()` to atomically swap it over the original. When you mount the file itself (e.g., `-v /var/snapraid.content:/var/snapraid.content`), the Linux kernel holds the inode open — `rename()` fails with `Device or resource busy (EBUSY)` and the sync aborts.
+
+**The fix:** Mount the **parent directory** and configure `snapraid.conf` to point at the file inside it:
+
+```yaml
+# docker-compose.yml
+volumes:
+  - /var/snapraid:/var/snapraid          # ✅ mount the DIRECTORY
+```
+
+```conf
+# snapraid.conf (on the host)
+content /var/snapraid/snapraid.content
+```
+
+This gives the OS a proper directory entry to swap inodes during `rename()`.
+
+> **Migrating an existing setup?** Move your content file into a directory, update `snapraid.conf`, and change your compose volume mount:
+> ```bash
+> mkdir -p /var/snapraid
+> mv /var/snapraid.content /var/snapraid/snapraid.content
+> # Edit /etc/snapraid.conf: change "content /var/snapraid.content"
+> #   to "content /var/snapraid/snapraid.content"
+> # Edit docker-compose.yml: change "- /var/snapraid.content:/var/snapraid.content"
+> #   to "- /var/snapraid:/var/snapraid"
+> docker compose down && docker compose up -d
+> ```
+
 ### Docker Compose (Recommended)
 
 #### Hub
@@ -122,9 +152,10 @@ services:
       TZ: ${TZ:-UTC}
     volumes:
       - agent-data:/var/lib/vigil-snapraid-agent
+      - /dev:/dev:ro
       - /etc/snapraid.conf:/etc/snapraid.conf:ro
-      # Content files — read-write (updated by sync/scrub):
-      # - /var/snapraid.content:/var/snapraid.content
+      # Content file directory — mount the DIRECTORY, not the file (see warning above):
+      # - /var/snapraid:/var/snapraid
       # Parity disks — read-write (written by sync):
       # - /mnt/parity:/mnt/parity
       # Data disks — read-write (needed for touch/fix):
@@ -139,7 +170,7 @@ volumes:
 
 The Agent **does not require a YAML config file** — all settings are provided via environment variables. The Hub URL and Token are pre-filled by the deploy wizard from the Hub's `/api/deploy-info` endpoint.
 
-> **Important:** Data, parity, and content file volumes must be mounted **read-write** (no `:ro` flag). SnapRAID needs write access to parity disks for `sync`, content files for `sync`/`scrub`, and data disks for `touch`/`fix`.
+> **Important:** Data, parity, and content file volumes must be mounted **read-write** (no `:ro` flag). SnapRAID needs write access to parity disks for `sync`, content files for `sync`/`scrub`, and data disks for `touch`/`fix`. Content files **must** be mounted as a directory, not as individual files (see the EBUSY warning above).
 
 Uncomment and adjust the disk mount lines for your array layout, then:
 
@@ -250,7 +281,7 @@ The Vigil UI renders five pages from the Hub manifest:
 | Page | Components | Purpose |
 |------|-----------|---------|
 | **Dashboard** | Disk Storage cards, Active Job progress, SMART Overview | At-a-glance array health with visual storage cards, progress bars, and inline alias editing |
-| **Operations** | Execute Command form | Manually trigger sync, scrub, fix, status, smart, diff, or touch against a selected Agent |
+| **Operations** | Execute Command form | Manually trigger sync, scrub, fix, status, diff, or touch against a selected Agent |
 | **Automation** | Schedule Configuration form | Configure maintenance, scrub, and SMART schedules with presets or custom cron; set safety thresholds |
 | **Agents** | Registered Agents table, Deploy Wizard | View connected Agents and deploy new ones via generated docker-compose |
 | **Logs** | Live Output viewer, Job History table | Real-time log streaming and historical job records |
@@ -500,7 +531,7 @@ Notifications are dispatched through the Vigil Server's notification system. Con
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
-| `POST` | `/api/execute` | Trigger a SnapRAID command (sync, scrub, fix, status, smart, diff, touch) |
+| `POST` | `/api/execute` | Trigger a SnapRAID command (sync, scrub, fix, status, diff, touch) |
 | `POST` | `/api/abort` | Cancel the currently running SnapRAID operation |
 | `POST` | `/api/config` | Push configuration updates (persisted to SQLite) |
 | `GET` | `/api/jobs` | Retrieve recent job history |
@@ -521,6 +552,12 @@ Notifications are dispatched through the Vigil Server's notification system. Con
 | `POST` | `/api/rotate-token` | Rotate the Hub token (requires `{"confirm":"ROTATE"}`) |
 
 ## Troubleshooting
+
+### Sync fails with "Device or resource busy" (EBUSY)
+
+The `.content` file is bind-mounted directly into the container. SnapRAID writes to `.content.tmp` then calls `rename()` to swap it over the original, but Docker's bind-mount holds the inode open and `rename()` returns `EBUSY`.
+
+**Fix:** Mount the parent **directory** instead of the file. See the [Docker Volume Mounts](#%EF%B8%8F-critical-docker-volume-mounts-for-content-files) section above.
 
 ### Hub cannot connect to Vigil Server
 

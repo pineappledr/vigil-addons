@@ -30,7 +30,6 @@ func ValidateAgentConfig(cfg *AgentConfig) error {
 	}{
 		{"scheduler.maintenance_cron", cfg.Scheduler.MaintenanceCron},
 		{"scheduler.scrub_cron", cfg.Scheduler.ScrubCron},
-		{"scheduler.smart_cron", cfg.Scheduler.SmartCron},
 		{"scheduler.status_cron", cfg.Scheduler.StatusCron},
 	}
 	for _, c := range crons {
@@ -94,7 +93,6 @@ func LogAgentConfig(logger *slog.Logger, cfg *AgentConfig) {
 		"snapraid_config", cfg.SnapRAID.ConfigPath,
 		"maintenance_cron", cfg.Scheduler.MaintenanceCron,
 		"scrub_cron", cfg.Scheduler.ScrubCron,
-		"smart_cron", cfg.Scheduler.SmartCron,
 		"status_cron", cfg.Scheduler.StatusCron,
 		"log_level", cfg.Logging.Level,
 	)

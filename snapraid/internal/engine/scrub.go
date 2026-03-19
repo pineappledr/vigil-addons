@@ -7,7 +7,8 @@ import (
 )
 
 // Scrub executes `snapraid scrub` with the given options.
-func (e *Engine) Scrub(ctx context.Context, opts ScrubOptions) (*ScrubReport, error) {
+// Progress updates (0-100) are sent to the progress channel if non-nil.
+func (e *Engine) Scrub(ctx context.Context, opts ScrubOptions, progress chan<- int) (*ScrubReport, error) {
 	args := []string{"scrub"}
 
 	if opts.Plan != "" {
@@ -17,7 +18,7 @@ func (e *Engine) Scrub(ctx context.Context, opts ScrubOptions) (*ScrubReport, er
 		args = append(args, "-o", strconv.Itoa(opts.OlderThanDays))
 	}
 
-	result, err := e.runCommand(ctx, args...)
+	result, err := e.runCommandStreaming(ctx, progressLineFunc(progress), args...)
 	if err != nil {
 		return nil, fmt.Errorf("scrub: %w", err)
 	}

@@ -7,17 +7,20 @@ on:
       - 'v*'
     paths:
       - 'burn-in/**'
+      - 'shared/**'
       - '.github/workflows/burnin.yml'
   pull_request:
     branches: [ "main", "develop" ]
     paths:
       - 'burn-in/**'
+      - 'shared/**'
       - '.github/workflows/burnin.yml'
 
 env:
   REGISTRY: ghcr.io
   HUB_IMAGE: ghcr.io/pineappledr/vigil-addons-burnin-hub
   AGENT_IMAGE: ghcr.io/pineappledr/vigil-addons-burnin-agent
+  AGENT_IMAGE_DEBIAN: ghcr.io/pineappledr/vigil-addons-burnin-agent-debian
   GO_VERSION: '1.26.1'
   WORKDIR: burn-in
 
@@ -104,7 +107,7 @@ jobs:
       - name: Build hub image for scanning
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.hub
           push: false
           load: true
@@ -114,11 +117,21 @@ jobs:
       - name: Build agent image for scanning
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.agent
           push: false
           load: true
           tags: burnin-agent:scan
+          cache-from: type=gha
+
+      - name: Build agent Debian image for scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: burn-in/Dockerfile.agent-debian
+          push: false
+          load: true
+          tags: burnin-agent-debian:scan
           cache-from: type=gha
 
       - name: Install Trivy
@@ -133,6 +146,9 @@ jobs:
 
       - name: Trivy scan - Agent image
         run: trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed burnin-agent:scan
+
+      - name: Trivy scan - Agent Debian image
+        run: trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed burnin-agent-debian:scan
 
   # ─────────────────────────────────────────────────────────────────────────
   # PR PREVIEW - Build preview images for pull requests
@@ -168,7 +184,7 @@ jobs:
       - name: Build Hub
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.hub
           push: true
           build-args: VERSION=${{ steps.version.outputs.tag }}
@@ -179,11 +195,22 @@ jobs:
       - name: Build Agent
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.agent
           push: true
           build-args: VERSION=${{ steps.version.outputs.tag }}
           tags: ${{ env.AGENT_IMAGE }}:${{ steps.version.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Agent (Debian)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: burn-in/Dockerfile.agent-debian
+          push: true
+          build-args: VERSION=${{ steps.version.outputs.tag }}
+          tags: ${{ env.AGENT_IMAGE_DEBIAN }}:${{ steps.version.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -298,26 +325,39 @@ jobs:
       - name: Build Hub image
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.hub
           push: true
           build-args: VERSION=${{ steps.meta.outputs.version }}
           tags: |
             ${{ env.HUB_IMAGE }}:dev-${{ steps.meta.outputs.branch }}
-            ${{ env.HUB_IMAGE }}:dev-${{ steps.meta.outputs.branch }}-${{ github.sha }}
+            ${{ env.HUB_IMAGE }}:dev-${{ steps.meta.outputs.branch }}-${{ steps.meta.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Build Agent image
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.agent
           push: true
           build-args: VERSION=${{ steps.meta.outputs.version }}
           tags: |
             ${{ env.AGENT_IMAGE }}:dev-${{ steps.meta.outputs.branch }}
-            ${{ env.AGENT_IMAGE }}:dev-${{ steps.meta.outputs.branch }}-${{ github.sha }}
+            ${{ env.AGENT_IMAGE }}:dev-${{ steps.meta.outputs.branch }}-${{ steps.meta.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Agent image (Debian)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: burn-in/Dockerfile.agent-debian
+          push: true
+          build-args: VERSION=${{ steps.meta.outputs.version }}
+          tags: |
+            ${{ env.AGENT_IMAGE_DEBIAN }}:dev-${{ steps.meta.outputs.branch }}
+            ${{ env.AGENT_IMAGE_DEBIAN }}:dev-${{ steps.meta.outputs.branch }}-${{ steps.meta.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -357,28 +397,42 @@ jobs:
       - name: Build Hub
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.hub
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: VERSION=latest-${{ steps.meta.outputs.sha }}
           tags: |
             ${{ env.HUB_IMAGE }}:latest
-            ${{ env.HUB_IMAGE }}:${{ github.sha }}
+            ${{ env.HUB_IMAGE }}:sha-${{ steps.meta.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Build Agent
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.agent
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: VERSION=latest-${{ steps.meta.outputs.sha }}
           tags: |
             ${{ env.AGENT_IMAGE }}:latest
-            ${{ env.AGENT_IMAGE }}:${{ github.sha }}
+            ${{ env.AGENT_IMAGE }}:sha-${{ steps.meta.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Agent (Debian)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: burn-in/Dockerfile.agent-debian
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=latest-${{ steps.meta.outputs.sha }}
+          tags: |
+            ${{ env.AGENT_IMAGE_DEBIAN }}:latest
+            ${{ env.AGENT_IMAGE_DEBIAN }}:sha-${{ steps.meta.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -432,7 +486,7 @@ jobs:
       - name: Build Hub image
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.hub
           push: true
           platforms: linux/amd64,linux/arm64
@@ -446,7 +500,7 @@ jobs:
       - name: Build Agent image
         uses: docker/build-push-action@v5
         with:
-          context: ./burn-in
+          context: .
           file: burn-in/Dockerfile.agent
           push: true
           platforms: linux/amd64,linux/arm64
@@ -454,6 +508,20 @@ jobs:
           tags: |
             ${{ env.AGENT_IMAGE }}:${{ steps.version.outputs.version }}
             ${{ env.AGENT_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Agent image (Debian)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: burn-in/Dockerfile.agent-debian
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ steps.version.outputs.version }}
+          tags: |
+            ${{ env.AGENT_IMAGE_DEBIAN }}:${{ steps.version.outputs.version }}
+            ${{ env.AGENT_IMAGE_DEBIAN }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

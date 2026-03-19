@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pineappledr/vigil-addons/shared/vigilclient"
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
 	"github.com/pineappledr/vigil-addons/snapraid/internal/hub"
 )
@@ -83,7 +84,7 @@ func main() {
 	// Register with the Vigil server in the background, then start telemetry.
 	if cfg.Vigil.Token != "" {
 		go func() {
-			vigilClient, err := hub.NewVigilClient(cfg.Vigil.ServerURL, cfg.Vigil.Token, manifestData, logger)
+			vigilClient, err := vigilclient.NewVigilClient(cfg.Vigil.ServerURL, cfg.Vigil.Token, manifestData, logger)
 			if err != nil {
 				logger.Error("failed to create vigil client", "error", err)
 				return
@@ -100,7 +101,7 @@ func main() {
 			)
 
 			// Start the persistent upstream telemetry WebSocket.
-			telemetry := hub.NewTelemetryClient(
+			telemetry := vigilclient.NewTelemetryClient(
 				cfg.Vigil.ServerURL,
 				resp.AddonID,
 				cfg.Vigil.Token,

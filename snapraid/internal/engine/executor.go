@@ -9,8 +9,10 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 var (
@@ -113,6 +115,7 @@ func (e *Engine) setCancel(fn context.CancelFunc) {
 
 // runCommand executes the snapraid binary with the given arguments under mutex protection.
 // It prepends --conf <configPath> automatically.
+// All commands are bounded by timeouts to prevent indefinite hangs from frozen disks or deadlocked processes.
 func (e *Engine) runCommand(ctx context.Context, args ...string) (*commandResult, error) {
 	if !e.mu.TryLock() {
 		return nil, ErrEngineLocked
@@ -120,6 +123,26 @@ func (e *Engine) runCommand(ctx context.Context, args ...string) (*commandResult
 	defer e.mu.Unlock()
 
 	cmdCtx, cancel := context.WithCancel(ctx)
+
+	// Apply operation-specific timeouts to prevent deadlocking the scheduler.
+	// Quick operations (status, diff, smart, touch): 60 seconds.
+	// Long operations (sync, scrub, fix): 60 minutes.
+	if len(args) > 0 {
+		var timeout time.Duration
+		cmd := args[0]
+		switch cmd {
+		case "status", "diff", "smart", "touch":
+			timeout = 60 * time.Second
+		case "sync", "scrub", "fix":
+			timeout = 60 * time.Minute
+		default:
+			timeout = 5 * time.Minute // Generic fallback
+		}
+		var timeoutCancel context.CancelFunc
+		cmdCtx, timeoutCancel = context.WithTimeout(cmdCtx, timeout)
+		defer timeoutCancel()
+	}
+
 	e.setCancel(cancel)
 	defer func() {
 		e.setCancel(nil)
@@ -154,11 +177,55 @@ func (e *Engine) runCommand(ctx context.Context, args ...string) (*commandResult
 	return result, nil
 }
 
+// scanCR is a bufio.SplitFunc that treats both \r and \n as line terminators.
+// SnapRAID emits progress updates separated by \r rather than \n, so the
+// default ScanLines would accumulate the entire progress run into one token
+// and only yield it at the trailing newline — causing the first regex match
+// (0%) to be the only value ever seen. This splitter yields each \r- or
+// \n-terminated chunk immediately as it arrives.
+func scanCR(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	for i, b := range data {
+		if b == '\r' || b == '\n' {
+			return i + 1, data[:i], nil
+		}
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
 // lineFunc is called for each line of stdout during a streaming command.
 type lineFunc func(line string)
 
+// progressLineFunc returns a lineFunc that extracts percentage progress from
+// snapraid's stdout and sends deduplicated updates to the given channel.
+// If progress is nil the returned lineFunc is a no-op.
+func progressLineFunc(progress chan<- int) lineFunc {
+	if progress == nil {
+		return func(string) {}
+	}
+	lastPct := -1
+	return func(line string) {
+		if m := reProgress.FindStringSubmatch(line); m != nil {
+			pct, err := strconv.Atoi(m[1])
+			if err != nil {
+				return
+			}
+			if pct != lastPct {
+				lastPct = pct
+				select {
+				case progress <- pct:
+				default:
+				}
+			}
+		}
+	}
+}
+
 // runCommandStreaming executes the snapraid binary and calls onLine for each stdout line in real-time.
 // It is used by sync/scrub for progress tracking.
+// All streaming commands are bounded by a 60-minute timeout to prevent indefinite hangs.
 func (e *Engine) runCommandStreaming(ctx context.Context, onLine lineFunc, args ...string) (*commandResult, error) {
 	if !e.mu.TryLock() {
 		return nil, ErrEngineLocked
@@ -166,6 +233,23 @@ func (e *Engine) runCommandStreaming(ctx context.Context, onLine lineFunc, args 
 	defer e.mu.Unlock()
 
 	cmdCtx, cancel := context.WithCancel(ctx)
+
+	// Apply operation-specific timeouts to prevent deadlocking the scheduler.
+	// Streaming operations (sync, scrub, fix): 60 minutes.
+	if len(args) > 0 {
+		var timeout time.Duration
+		cmd := args[0]
+		switch cmd {
+		case "sync", "scrub", "fix":
+			timeout = 60 * time.Minute
+		default:
+			timeout = 10 * time.Minute // Generic fallback
+		}
+		var timeoutCancel context.CancelFunc
+		cmdCtx, timeoutCancel = context.WithTimeout(cmdCtx, timeout)
+		defer timeoutCancel()
+	}
+
 	e.setCancel(cancel)
 	defer func() {
 		e.setCancel(nil)
@@ -191,6 +275,7 @@ func (e *Engine) runCommandStreaming(ctx context.Context, onLine lineFunc, args 
 
 	var stdoutBuf bytes.Buffer
 	scanner := bufio.NewScanner(io.TeeReader(stdoutPipe, &stdoutBuf))
+	scanner.Split(scanCR)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if onLine != nil {

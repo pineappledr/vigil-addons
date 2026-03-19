@@ -54,7 +54,7 @@ scheduler:
   smart_cron: "0 */6 * * *"             # Every 6 hours
 
   # Status refresh for dashboard telemetry updates.
-  status_cron: "*/30 * * * *"           # Every 30 minutes
+  status_cron: "0 */6 * * *"            # Every 6 hours
 
 # ── Safety Thresholds ───────────────────────────────────────────────
 # These gates protect against accidental mass deletion or sync during

@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 
+	"time"
+
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
 	"github.com/pineappledr/vigil-addons/snapraid/internal/engine"
 	"github.com/robfig/cron/v3"
@@ -32,7 +34,7 @@ type Scheduler struct {
 // The tracker is optional; pass nil to disable active job tracking.
 func New(eng *engine.Engine, cfg *config.AgentConfig, database *sql.DB, emitter EventEmitter, tracker JobTracker, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
-		cron:    cron.New(cron.WithSeconds()),
+		cron:    cron.New(cron.WithSeconds(), cron.WithLocation(time.Local)),
 		engine:  eng,
 		cfg:     cfg,
 		db:      database,
@@ -51,7 +53,6 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	}{
 		{s.cfg.Scheduler.MaintenanceCron, "maintenance", s.runMaintenance},
 		{s.cfg.Scheduler.ScrubCron, "scrub_only", s.runScrubOnly},
-		{s.cfg.Scheduler.SmartCron, "smart_check", s.runSmartCheck},
 		{s.cfg.Scheduler.StatusCron, "status_refresh", s.runStatusRefresh},
 	}
 
@@ -59,6 +60,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	// Our config uses standard 5-field cron, so we prepend "0 " for the seconds field.
 	for _, sched := range schedules {
 		if sched.expr == "" {
+			s.logger.Warn("cron schedule not configured, job will not run", "job", sched.name)
 			continue
 		}
 		expr := "0 " + sched.expr
@@ -83,15 +85,17 @@ func (s *Scheduler) Stop() context.Context {
 	return s.cron.Stop()
 }
 
-// runMaintenance executes the full maintenance pipeline under the job mutex.
-func (s *Scheduler) runMaintenance(ctx context.Context) {
-	if !s.jobMu.TryLock() {
-		s.logger.Warn("maintenance skipped: previous scheduled job still running")
-		return
-	}
-	defer s.jobMu.Unlock()
+// Reschedule stops the current cron runner, creates a fresh one, and re-registers
+// all jobs using the current values in s.cfg. Call this after updating s.cfg fields.
+func (s *Scheduler) Reschedule(ctx context.Context) error {
+	<-s.cron.Stop().Done()
+	s.cron = cron.New(cron.WithSeconds(), cron.WithLocation(time.Local))
+	return s.Start(ctx)
+}
 
-	p := &Pipeline{
+// newPipeline creates a Pipeline wired to the scheduler's dependencies.
+func (s *Scheduler) newPipeline() *Pipeline {
+	return &Pipeline{
 		engine:  s.engine,
 		cfg:     s.cfg,
 		db:      s.db,
@@ -99,64 +103,32 @@ func (s *Scheduler) runMaintenance(ctx context.Context) {
 		tracker: s.tracker,
 		logger:  s.logger,
 	}
-	p.RunMaintenance(ctx)
+}
+
+// runScheduled acquires the job mutex and runs fn with a fresh Pipeline.
+// If the mutex is already held, the job is skipped with a warning.
+func (s *Scheduler) runScheduled(ctx context.Context, name string, fn func(*Pipeline, context.Context)) {
+	if !s.jobMu.TryLock() {
+		s.logger.Warn(name + " skipped: previous scheduled job still running")
+		return
+	}
+	defer s.jobMu.Unlock()
+	fn(s.newPipeline(), ctx)
+}
+
+// runMaintenance executes the full maintenance pipeline under the job mutex.
+func (s *Scheduler) runMaintenance(ctx context.Context) {
+	s.runScheduled(ctx, "maintenance", (*Pipeline).RunMaintenance)
 }
 
 // runScrubOnly executes a standalone scrub job.
 func (s *Scheduler) runScrubOnly(ctx context.Context) {
-	if !s.jobMu.TryLock() {
-		s.logger.Warn("scrub_only skipped: previous scheduled job still running")
-		return
-	}
-	defer s.jobMu.Unlock()
-
-	p := &Pipeline{
-		engine:  s.engine,
-		cfg:     s.cfg,
-		db:      s.db,
-		emitter: s.emitter,
-		tracker: s.tracker,
-		logger:  s.logger,
-	}
-	p.RunScrubOnly(ctx)
-}
-
-// runSmartCheck executes a standalone SMART check.
-func (s *Scheduler) runSmartCheck(ctx context.Context) {
-	if !s.jobMu.TryLock() {
-		s.logger.Warn("smart_check skipped: previous scheduled job still running")
-		return
-	}
-	defer s.jobMu.Unlock()
-
-	p := &Pipeline{
-		engine:  s.engine,
-		cfg:     s.cfg,
-		db:      s.db,
-		emitter: s.emitter,
-		tracker: s.tracker,
-		logger:  s.logger,
-	}
-	p.RunSmartCheck(ctx)
+	s.runScheduled(ctx, "scrub_only", (*Pipeline).RunScrubOnly)
 }
 
 // runStatusRefresh executes a standalone status refresh.
 func (s *Scheduler) runStatusRefresh(ctx context.Context) {
-	if !s.jobMu.TryLock() {
-		s.logger.Warn("status_refresh skipped: previous scheduled job still running")
-		return
-	}
-	defer s.jobMu.Unlock()
-
-	p := &Pipeline{
-		engine:  s.engine,
-		cfg:     s.cfg,
-		db:      s.db,
-		emitter: s.emitter,
-		tracker: s.tracker,
-		logger:  s.logger,
-	}
-	p.RunStatusRefresh(ctx)
+	s.runScheduled(ctx, "status_refresh", (*Pipeline).RunStatusRefresh)
 }
 
 // CronRegistrationError describes a failure to register a cron schedule.

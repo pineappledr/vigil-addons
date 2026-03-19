@@ -35,7 +35,7 @@ echo "$LOGPREFIX Starting post-sync tasks at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # ─── Backup content files ────────────────────────────────────────────
 # SnapRAID content files are small but critical — back them up.
 #
-# cp /var/snapraid/content /mnt/backup/snapraid-content-$(date +%Y%m%d)
+# cp /var/snapraid/snapraid.content /mnt/backup/snapraid-content-$(date +%Y%m%d)
 # echo "$LOGPREFIX Content file backed up"
 
 # ─── Restart non-Docker services ────────────────────────────────────

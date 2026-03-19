@@ -46,8 +46,9 @@ services:
       - /dev:/dev:ro
       - /etc/snapraid.conf:/etc/snapraid.conf:ro
 
-      # ─── Content files — read-write (updated by sync/scrub) ───
-      # - /var/snapraid.content:/var/snapraid.content
+      # ─── Content file directory — mount the DIRECTORY, never the file ───
+      # ─── (direct file mounts cause EBUSY on rename during sync/scrub) ───
+      # - /var/snapraid:/var/snapraid
 
       # ─── Parity disks — read-write (written by sync) ───
       # - /mnt/parity:/mnt/parity

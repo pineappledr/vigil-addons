@@ -363,7 +363,8 @@
                 "agent-data:/var/lib/vigil-snapraid-agent",
                 "/dev:/dev:ro",
                 "/etc/snapraid.conf:/etc/snapraid.conf:ro",
-                "/usr/bin/snapraid:/usr/bin/snapraid:ro"
+                "/usr/bin/snapraid:/usr/bin/snapraid:ro",
+                "/var/snapraid:/var/snapraid"
               ],
               "named_volumes": ["agent-data"],
               "environment": {
@@ -378,7 +379,7 @@
               "platforms": {
                 "linux": {
                   "label": "Standard Linux",
-                  "hint": "Copy the docker-compose.yml to deploy the SnapRAID agent. Mount all data and parity disks used by snapraid. If your snapraid binary is not at /usr/bin/snapraid, adjust the volume mount (run 'which snapraid' to find it)."
+                  "hint": "Copy the docker-compose.yml to deploy the SnapRAID agent. Mount all data and parity disks used by snapraid. Content files MUST be in a mounted directory (e.g. /var/snapraid:/var/snapraid) — never mount the .content file directly or sync will fail with EBUSY. Ensure snapraid.conf uses 'content /var/snapraid/snapraid.content'. If your snapraid binary is not at /usr/bin/snapraid, adjust the volume mount (run 'which snapraid' to find it)."
                 }
               }
             },

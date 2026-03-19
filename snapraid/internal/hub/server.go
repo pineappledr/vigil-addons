@@ -496,12 +496,21 @@ func (s *Server) handleActiveJobs(w http.ResponseWriter, r *http.Request) {
 		elapsedSec = int64(time.Since(t).Seconds())
 	}
 
+	// Non-streaming commands (status, diff, touch, smart) don't produce
+	// real-time progress — flag them so the frontend shows an indeterminate bar.
+	indeterminate := false
+	switch activeJob.Type {
+	case "status", "diff", "touch", "smart":
+		indeterminate = true
+	}
+
 	progressPayload := map[string]any{
-		"job_id":      activeJob.Type + "_" + activeJob.StartedAt,
-		"command":     activeJob.Type,
-		"phase":       activeJob.CurrentPhase,
-		"percent":     activeJob.ProgressPercent,
-		"elapsed_sec": elapsedSec,
+		"job_id":        activeJob.Type + "_" + activeJob.StartedAt,
+		"command":       activeJob.Type,
+		"phase":         activeJob.CurrentPhase,
+		"percent":       activeJob.ProgressPercent,
+		"elapsed_sec":   elapsedSec,
+		"indeterminate": indeterminate,
 	}
 
 	addonutil.WriteJSON(w, http.StatusOK, []any{progressPayload})

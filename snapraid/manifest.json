@@ -178,6 +178,7 @@
             "action": "config",
             "source": "agent_config",
             "fields": [
+              {"key": "agent_id", "label": "Agent", "type": "select", "source": "addon_agents", "required": true},
               {"key": "maintenance_cron", "label": "Maintenance Schedule", "type": "cron", "description": "Full pipeline: touch, diff, gates, sync, scrub"},
               {"key": "scrub_cron", "label": "Scrub Schedule", "type": "cron", "description": "Independent scrub for periodic integrity verification"},
               {"key": "sync.pre_hash", "label": "Enable Pre-Hash", "type": "toggle", "description": "Hash files before writing parity. Slower but detects RAM errors."},

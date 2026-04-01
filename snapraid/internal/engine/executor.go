@@ -126,14 +126,16 @@ func (e *Engine) runCommand(ctx context.Context, args ...string) (*commandResult
 
 	// Apply operation-specific timeouts to prevent deadlocking the scheduler.
 	// Quick operations (status, diff, smart, touch): 60 seconds.
-	// Long operations (sync, scrub, fix): 60 minutes.
+	// Scrub: 8 hours. Other long operations (sync, fix): 60 minutes.
 	if len(args) > 0 {
 		var timeout time.Duration
 		cmd := args[0]
 		switch cmd {
 		case "status", "diff", "smart", "touch":
 			timeout = 60 * time.Second
-		case "sync", "scrub", "fix":
+		case "scrub":
+			timeout = 8 * time.Hour
+		case "sync", "fix":
 			timeout = 60 * time.Minute
 		default:
 			timeout = 5 * time.Minute // Generic fallback
@@ -235,12 +237,14 @@ func (e *Engine) runCommandStreaming(ctx context.Context, onLine lineFunc, args 
 	cmdCtx, cancel := context.WithCancel(ctx)
 
 	// Apply operation-specific timeouts to prevent deadlocking the scheduler.
-	// Streaming operations (sync, scrub, fix): 60 minutes.
+	// Scrub: 8 hours. Other streaming operations (sync, fix): 60 minutes.
 	if len(args) > 0 {
 		var timeout time.Duration
 		cmd := args[0]
 		switch cmd {
-		case "sync", "scrub", "fix":
+		case "scrub":
+			timeout = 8 * time.Hour
+		case "sync", "fix":
 			timeout = 60 * time.Minute
 		default:
 			timeout = 10 * time.Minute // Generic fallback

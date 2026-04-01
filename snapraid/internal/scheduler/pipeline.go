@@ -3,8 +3,11 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/pineappledr/vigil-addons/snapraid/internal/config"
 	agentdb "github.com/pineappledr/vigil-addons/snapraid/internal/db"
@@ -45,8 +48,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	gate := CheckConfigFiles(p.engine)
 	if !gate.Passed {
 		p.logger.Error("maintenance aborted: config files gate failed", "reason", gate.Reason)
-		p.recordGateFailure("config_files_gate", gate.Reason)
-		p.emit("gate_failed", "warning", "⚠️ Maintenance aborted: "+gate.Reason)
+		p.abortWithStatus(ctx, "config_files_gate", gate.Reason)
 		return
 	}
 
@@ -91,8 +93,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	gate = CheckSMART(smartReport, p.cfg.Thresholds)
 	if !gate.Passed {
 		p.logger.Error("maintenance aborted: SMART gate failed", "reason", gate.Reason)
-		p.recordGateFailure("smart_gate", gate.Reason)
-		p.emit("gate_failed", "warning", "⚠️ Maintenance aborted: "+gate.Reason)
+		p.abortWithStatus(ctx, "smart_gate", gate.Reason)
 		return
 	}
 
@@ -100,8 +101,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	gate = CheckDiffThresholds(diffReport, p.cfg.Thresholds)
 	if !gate.Passed {
 		p.logger.Error("maintenance aborted: diff threshold gate failed", "reason", gate.Reason)
-		p.recordGateFailure("diff_gate", gate.Reason)
-		p.emit("gate_failed", "warning", "⚠️ Maintenance aborted: "+gate.Reason)
+		p.abortWithStatus(ctx, "diff_gate", gate.Reason)
 		return
 	}
 
@@ -288,7 +288,11 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 			agentdb.CompleteJob(p.db, jobID, -1, status, err.Error())
 		}
 		if trigger != "pre-flight" {
-			p.emit("job_failed", "critical", "🔴 SnapRAID "+jobType+" ("+trigger+") failed: "+err.Error())
+			msg := "🔴 SnapRAID " + jobType + " (" + trigger + ") failed: " + err.Error()
+			if summary := formatCommandSummary(jobType, output); summary != "" {
+				msg += "\n\n" + summary
+			}
+			p.emit("job_failed", "critical", msg)
 		}
 		return false
 	}
@@ -313,11 +317,25 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 		p.logger.Info("snapraid output", "job", jobType, "output", output)
 	}
 
-	if status == "error" && trigger != "pre-flight" {
-		p.emit("job_failed", "critical", "🔴 SnapRAID "+jobType+" ("+trigger+") failed: exit code "+itoa(exitCode))
+	if status == "error" {
+		if trigger != "pre-flight" {
+			msg := "🔴 SnapRAID " + jobType + " (" + trigger + ") failed: exit code " + itoa(exitCode)
+			if summary := formatCommandSummary(jobType, output); summary != "" {
+				msg += "\n\n" + summary
+			}
+			p.emit("job_failed", "critical", msg)
+		}
+		return false
 	}
 
-	return status == "success" || status == "warning"
+	// Emit a completion notification with a summary parsed from the command output.
+	completionMsg := "✅ SnapRAID " + jobType + " (" + trigger + ") completed"
+	if summary := formatCommandSummary(jobType, output); summary != "" {
+		completionMsg += "\n\n" + summary
+	}
+	p.emit("job_complete", "info", completionMsg)
+
+	return true
 }
 
 // recordGateFailure logs a gate failure as a job history entry.
@@ -339,4 +357,59 @@ func (p *Pipeline) emit(eventType, severity, message string) {
 
 func itoa(n int) string {
 	return strconv.Itoa(n)
+}
+
+// abortWithStatus records a gate failure and emits a notification with a
+// current snapraid status summary appended.
+func (p *Pipeline) abortWithStatus(ctx context.Context, gateType, reason string) {
+	p.recordGateFailure(gateType, reason)
+	msg := "⚠️ Maintenance aborted: " + reason
+	if summary := p.fetchStatusSummary(ctx); summary != "" {
+		msg += "\n\n" + summary
+	}
+	p.emit("gate_failed", "warning", msg)
+}
+
+// fetchStatusSummary runs snapraid status and returns a formatted summary.
+// Returns an empty string if status fails.
+func (p *Pipeline) fetchStatusSummary(ctx context.Context) string {
+	status, err := p.engine.Status(ctx)
+	if err != nil {
+		p.logger.Warn("status check failed for notification summary", "error", err)
+		return ""
+	}
+	return formatStatusSummary(status)
+}
+
+// formatStatusSummary formats a StatusReport into a human-readable summary.
+func formatStatusSummary(s *engine.StatusReport) string {
+	var b strings.Builder
+	now := time.Now().UTC()
+
+	if !s.ScrubAge.Oldest.IsZero() {
+		oldest := int(now.Sub(s.ScrubAge.Oldest).Hours() / 24)
+		median := int(now.Sub(s.ScrubAge.Median).Hours() / 24)
+		newest := int(now.Sub(s.ScrubAge.Newest).Hours() / 24)
+		fmt.Fprintf(&b, "The oldest block was scrubbed %d days ago, the median %d, the newest %d.\n", oldest, median, newest)
+	}
+
+	if s.UnsyncedBlocks > 0 {
+		fmt.Fprintf(&b, "%d block(s) not yet synced.\n", s.UnsyncedBlocks)
+	} else {
+		b.WriteString("No sync is in progress.\n")
+	}
+
+	if s.UnscrubbedPercent > 0 {
+		fmt.Fprintf(&b, "%.0f%% of the array is not scrubbed.\n", s.UnscrubbedPercent)
+	} else {
+		b.WriteString("The array is fully scrubbed.\n")
+	}
+
+	if s.BadBlocks > 0 {
+		fmt.Fprintf(&b, "%d bad block(s) detected.\n", s.BadBlocks)
+	} else {
+		b.WriteString("No error detected.\n")
+	}
+
+	return strings.TrimRight(b.String(), "\n")
 }

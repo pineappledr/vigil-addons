@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -58,6 +59,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/config", s.handleConfig)
 	s.mux.HandleFunc("GET /api/jobs", s.handleJobs)
 	s.mux.HandleFunc("GET /api/jobs/history", s.handleJobHistory)
+	s.mux.HandleFunc("GET /api/jobs/{id}", s.handleJobDetail)
 	s.mux.HandleFunc("GET /api/logs/history", s.handleLogHistory)
 	s.mux.HandleFunc("GET /api/array_status", s.handleArrayStatus)
 	s.mux.HandleFunc("GET /api/smart_status", s.handleSmartStatus)
@@ -230,6 +232,8 @@ func (s *Server) runCommand(req ExecuteRequest) {
 		}
 		s.collector.EmitLogLine(req.Command, "error", req.Command+" failed: "+execErr.Error())
 		s.logger.Error("command failed", "command", req.Command, "error", execErr)
+		msg := "🔴 SnapRAID " + req.Command + " (manual) failed: " + execErr.Error()
+		s.collector.EmitEvent("job_failed", "critical", msg)
 		return
 	}
 
@@ -238,22 +242,36 @@ func (s *Server) runCommand(req ExecuteRequest) {
 		s.collector.EmitLogLine(req.Command, "info", output)
 	}
 
-	// Emit a completion log line.
 	status := "success"
-	level := "info"
-	if exitCode != 0 {
-		level = "warn"
+	if exitCode == 2 {
+		status = "warning"
+	} else if exitCode != 0 {
+		status = "error"
 	}
-	s.collector.EmitLogLine(req.Command, level, fmt.Sprintf("%s — %s (exit %d)", req.Command, status, exitCode))
 
 	if jobID > 0 {
-		agentdb.CompleteJob(s.db, jobID, exitCode, "success", output)
+		agentdb.CompleteJob(s.db, jobID, exitCode, status, output)
 	}
 
 	// Log the full command output to container logs.
 	if output != "" {
 		s.logger.Info("command output", "command", req.Command, "output", output)
 	}
+
+	// Emit a completion notification with a parsed summary.
+	msg := "✅ SnapRAID " + req.Command + " (manual) completed"
+	if summary := scheduler.FormatCommandSummary(req.Command, output); summary != "" {
+		msg += "\n\n" + summary
+	}
+	// For sync and scrub, append a status overview.
+	if req.Command == "sync" || req.Command == "scrub" {
+		if statusReport, err := s.engine.Status(ctx); err == nil {
+			if statusSummary := scheduler.FormatStatusSummary(statusReport); statusSummary != "" {
+				msg += "\n\n" + statusSummary
+			}
+		}
+	}
+	s.collector.EmitEvent("job_complete", "info", msg)
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -339,6 +357,26 @@ func (s *Server) queryJobs(r *http.Request, limit int) ([]agentdb.JobRecord, err
 		}
 	}
 	return agentdb.RecentJobs(s.db, limit)
+}
+
+// handleJobDetail returns a single job record by ID, including the full output_log.
+func (s *Server) handleJobDetail(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid job id"})
+		return
+	}
+	job, err := agentdb.GetJobByID(s.db, id)
+	if err != nil {
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if job == nil {
+		addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "job not found"})
+		return
+	}
+	addonutil.WriteJSON(w, http.StatusOK, job)
 }
 
 // handleJobHistory returns job records with optional time_range filtering.

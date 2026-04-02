@@ -46,6 +46,36 @@ func CompleteJob(db *sql.DB, id int64, exitCode int, status, outputLog string) e
 	return nil
 }
 
+// GetJobByID returns a single job record by its ID, including the full output_log.
+func GetJobByID(db *sql.DB, id int64) (*JobRecord, error) {
+	row := db.QueryRow(
+		`SELECT id, job_type, trigger, started_at, finished_at, exit_code, status, COALESCE(output_log, '') FROM job_history WHERE id = ?`,
+		id,
+	)
+	var j JobRecord
+	var startStr string
+	var finishStr sql.NullString
+	var exitCode sql.NullInt64
+	if err := row.Scan(&j.ID, &j.JobType, &j.Trigger, &startStr, &finishStr, &exitCode, &j.Status, &j.OutputLog); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get job %d: %w", id, err)
+	}
+	j.StartedAt = parseFlexTime(startStr)
+	if finishStr.Valid {
+		t := parseFlexTime(finishStr.String)
+		if !t.IsZero() {
+			j.FinishedAt = &t
+		}
+	}
+	if exitCode.Valid {
+		code := int(exitCode.Int64)
+		j.ExitCode = &code
+	}
+	return &j, nil
+}
+
 // RecentJobs returns the most recent N job records ordered by start time descending.
 func RecentJobs(db *sql.DB, limit int) ([]JobRecord, error) {
 	rows, err := db.Query(

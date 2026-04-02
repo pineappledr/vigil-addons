@@ -176,7 +176,11 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	}
 
 	p.logger.Info("maintenance pipeline completed")
-	p.emit("maintenance_complete", "warning", "✅ Maintenance pipeline completed successfully")
+	completionMsg := "✅ Maintenance pipeline completed successfully"
+	if summary := p.fetchStatusSummary(ctx); summary != "" {
+		completionMsg += "\n\n" + summary
+	}
+	p.emit("maintenance_complete", "info", completionMsg)
 }
 
 // RunScrubOnly executes a standalone scrub job.
@@ -289,7 +293,7 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 		}
 		if trigger != "pre-flight" {
 			msg := "🔴 SnapRAID " + jobType + " (" + trigger + ") failed: " + err.Error()
-			if summary := formatCommandSummary(jobType, output); summary != "" {
+			if summary := FormatCommandSummary(jobType, output); summary != "" {
 				msg += "\n\n" + summary
 			}
 			p.emit("job_failed", "critical", msg)
@@ -320,7 +324,7 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 	if status == "error" {
 		if trigger != "pre-flight" {
 			msg := "🔴 SnapRAID " + jobType + " (" + trigger + ") failed: exit code " + itoa(exitCode)
-			if summary := formatCommandSummary(jobType, output); summary != "" {
+			if summary := FormatCommandSummary(jobType, output); summary != "" {
 				msg += "\n\n" + summary
 			}
 			p.emit("job_failed", "critical", msg)
@@ -330,7 +334,7 @@ func (p *Pipeline) runStep(ctx context.Context, jobType, trigger string, fn step
 
 	// Emit a completion notification with a summary parsed from the command output.
 	completionMsg := "✅ SnapRAID " + jobType + " (" + trigger + ") completed"
-	if summary := formatCommandSummary(jobType, output); summary != "" {
+	if summary := FormatCommandSummary(jobType, output); summary != "" {
 		completionMsg += "\n\n" + summary
 	}
 	p.emit("job_complete", "info", completionMsg)
@@ -378,11 +382,11 @@ func (p *Pipeline) fetchStatusSummary(ctx context.Context) string {
 		p.logger.Warn("status check failed for notification summary", "error", err)
 		return ""
 	}
-	return formatStatusSummary(status)
+	return FormatStatusSummary(status)
 }
 
-// formatStatusSummary formats a StatusReport into a human-readable summary.
-func formatStatusSummary(s *engine.StatusReport) string {
+// FormatStatusSummary formats a StatusReport into a human-readable summary.
+func FormatStatusSummary(s *engine.StatusReport) string {
 	var b strings.Builder
 	now := time.Now().UTC()
 

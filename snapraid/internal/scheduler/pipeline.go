@@ -53,7 +53,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	}
 
 	// Step 1: touch
-	if !p.runStep(ctx, "touch", "scheduled", func(ctx context.Context) (int, string, error) {
+	if !p.runStep(ctx, "touch", "maintenance", func(ctx context.Context) (int, string, error) {
 		report, err := p.engine.Touch(ctx)
 		if err != nil {
 			return 0, "", err
@@ -119,7 +119,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 	restored := p.manageContainers(ctx)
 
 	// Step 4: sync
-	syncOk := p.runStep(ctx, "sync", "scheduled", func(ctx context.Context) (int, string, error) {
+	syncOk := p.runStep(ctx, "sync", "maintenance", func(ctx context.Context) (int, string, error) {
 		progress, stopProgress := p.progressChan()
 		defer stopProgress()
 		report, err := p.engine.Sync(ctx, engine.SyncOptions{
@@ -147,7 +147,7 @@ func (p *Pipeline) RunMaintenance(ctx context.Context) {
 
 	// Step 5: scrub
 	var scrubExitCode int
-	p.runStep(ctx, "scrub", "scheduled", func(ctx context.Context) (int, string, error) {
+	p.runStep(ctx, "scrub", "maintenance", func(ctx context.Context) (int, string, error) {
 		progress, stopProgress := p.progressChan()
 		defer stopProgress()
 		report, err := p.engine.Scrub(ctx, engine.ScrubOptions{

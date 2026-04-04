@@ -78,6 +78,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	s.mux.HandleFunc("DELETE /api/agents/{id}", s.handleAgentDelete)
 	s.mux.HandleFunc("GET /api/jobs/history", s.handleProxyToAgent)
+	s.mux.HandleFunc("GET /api/jobs/{id}", s.handleProxyToAgent)
 	s.mux.HandleFunc("GET /api/logs/history", s.handleProxyToAgent)
 	s.mux.HandleFunc("GET /api/disk_status", s.handleTelemetryField)
 	s.mux.HandleFunc("GET /api/active_job", s.handleTelemetryField)

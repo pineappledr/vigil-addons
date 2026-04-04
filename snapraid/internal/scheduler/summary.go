@@ -4,9 +4,9 @@ import (
 	"strings"
 )
 
-// formatCommandSummary extracts a concise human-readable summary from a
+// FormatCommandSummary extracts a concise human-readable summary from a
 // snapraid command's raw output. Each command type has its own extractor.
-func formatCommandSummary(jobType, output string) string {
+func FormatCommandSummary(jobType, output string) string {
 	if output == "" {
 		return ""
 	}

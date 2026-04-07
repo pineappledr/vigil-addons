@@ -1,0 +1,198 @@
+{
+  "name": "ZFS Manager",
+  "version": "0.1.0",
+  "description": "ZFS pool, dataset, and snapshot management for homelab servers",
+  "author": "Vigil Add-ons",
+  "docker_image": "ghcr.io/pineappledr/vigil-addons-zfs-manager:latest",
+  "pages": [
+    {
+      "id": "pools",
+      "title": "Pools",
+      "icon": "database",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 60, "label": "1 Minute" },
+            { "value": 300, "label": "5 Minutes" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "pool-list",
+          "title": "ZFS Pools",
+          "config": {
+            "source": "/api/pools",
+            "columns": [
+              { "key": "name",   "label": "Pool",        "sortable": true },
+              { "key": "health", "label": "Health",      "sortable": true, "badge": {
+                "ONLINE":   "success",
+                "DEGRADED": "warning",
+                "FAULTED":  "danger",
+                "OFFLINE":  "muted",
+                "REMOVED":  "muted",
+                "UNAVAIL":  "danger"
+              }},
+              { "key": "size",  "label": "Size",        "sortable": true, "format": "bytes" },
+              { "key": "alloc", "label": "Used",        "sortable": true, "format": "bytes" },
+              { "key": "free",  "label": "Free",        "sortable": true, "format": "bytes" },
+              { "key": "frag",  "label": "Frag %",      "sortable": true, "suffix": "%" },
+              { "key": "dedup", "label": "Dedup",       "sortable": true, "suffix": "x" },
+              { "key": "last_scrub",   "label": "Last Scrub",   "sortable": false },
+              { "key": "scrub_status", "label": "Scrub Status", "sortable": false }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "name", "direction": "asc" },
+            "expandable": true,
+            "expand_key": "vdevs"
+          }
+        }
+      ]
+    },
+    {
+      "id": "datasets",
+      "title": "Datasets",
+      "icon": "folder-tree",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 60, "label": "1 Minute" },
+            { "value": 300, "label": "5 Minutes" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "dataset-list",
+          "title": "Datasets",
+          "config": {
+            "source": "/api/datasets",
+            "columns": [
+              { "key": "name",        "label": "Dataset",     "sortable": true },
+              { "key": "used",        "label": "Used",        "sortable": true, "format": "bytes" },
+              { "key": "avail",       "label": "Available",   "sortable": true, "format": "bytes" },
+              { "key": "refer",       "label": "Referenced",  "sortable": true, "format": "bytes" },
+              { "key": "compress",    "label": "Compression", "sortable": true },
+              { "key": "record_size", "label": "Record Size", "sortable": true, "format": "bytes" },
+              { "key": "mountpoint",  "label": "Mountpoint",  "sortable": false },
+              { "key": "atime",       "label": "Atime",       "sortable": true },
+              { "key": "sync",        "label": "Sync",        "sortable": true }
+            ],
+            "sortable": true,
+            "filterable": true,
+            "default_sort": { "key": "name", "direction": "asc" }
+          }
+        }
+      ]
+    },
+    {
+      "id": "snapshots",
+      "title": "Snapshots",
+      "icon": "camera",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 60, "label": "1 Minute" },
+            { "value": 300, "label": "5 Minutes" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "snapshot-list",
+          "title": "Snapshots",
+          "config": {
+            "source": "/api/snapshots",
+            "columns": [
+              { "key": "dataset",     "label": "Dataset",    "sortable": true },
+              { "key": "snap_name",   "label": "Snapshot",   "sortable": true },
+              { "key": "creation",    "label": "Created",    "sortable": true, "format": "timestamp" },
+              { "key": "used",        "label": "Used",       "sortable": true, "format": "bytes" },
+              { "key": "referenced",  "label": "Referenced", "sortable": true, "format": "bytes" }
+            ],
+            "sortable": true,
+            "filterable": true,
+            "default_sort": { "key": "creation", "direction": "desc" }
+          }
+        }
+      ]
+    },
+    {
+      "id": "agents",
+      "title": "Agents",
+      "icon": "server",
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "agent-list",
+          "title": "Registered Agents",
+          "config": {
+            "source": "/api/agents",
+            "columns": [
+              { "key": "agent_id",      "label": "Agent ID",   "sortable": true },
+              { "key": "hostname",      "label": "Hostname",   "sortable": true },
+              { "key": "status",        "label": "Status",     "sortable": true, "badge": {
+                "online":  "success",
+                "offline": "muted"
+              }},
+              { "key": "arch",          "label": "Arch",       "sortable": true },
+              { "key": "version",       "label": "Version",    "sortable": false },
+              { "key": "last_seen_at",  "label": "Last Seen",  "sortable": true, "format": "timestamp" }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "agent_id", "direction": "asc" }
+          }
+        },
+        {
+          "type": "deploy-wizard",
+          "id": "add-zfs-agent",
+          "title": "Add ZFS Agent",
+          "config": {
+            "target_label": "Agent",
+            "docker": {
+              "image": "ghcr.io/pineappledr/vigil-addons-zfs-agent",
+              "default_tag": "latest",
+              "container_name": "zfs-agent",
+              "privileged": true,
+              "ports": ["9600:9600"],
+              "volumes": [
+                "zfs-agent-data:/data",
+                "/dev/zfs:/dev/zfs",
+                "/sbin/zpool:/sbin/zpool:ro",
+                "/sbin/zfs:/sbin/zfs:ro",
+                "/lib:/lib:ro",
+                "/lib64:/lib64:ro",
+                "/usr/lib:/usr/lib:ro"
+              ],
+              "named_volumes": ["zfs-agent-data"],
+              "environment": {
+                "VIGIL_ZFS_AGENT_HUB_URL":        { "source": "prefill",    "key": "hub_url", "label": "Manager URL" },
+                "VIGIL_ZFS_AGENT_HUB_PSK":        { "source": "prefill",    "key": "hub_psk", "label": "Hub PSK", "secret": true, "rotate_action": "rotate-psk" },
+                "VIGIL_ZFS_AGENT_ID":             { "source": "user_input", "label": "Agent ID", "placeholder": "nas-01" },
+                "VIGIL_ZFS_AGENT_ADVERTISE_ADDR": { "source": "user_input", "label": "Advertise Address", "placeholder": "http://192.168.1.100:9600", "hint": "URL where the Manager can reach this agent" },
+                "VIGIL_ZFS_AGENT_LISTEN_PORT":    { "source": "literal",    "value": "9600" },
+                "TZ":                             { "source": "literal",    "value": "${TZ:-UTC}" }
+              },
+              "platforms": {
+                "linux": {
+                  "label": "Standard Linux",
+                  "hint": "Deploy on any Linux host with ZFS installed. The agent mounts host ZFS binaries — use the Debian image for Proxmox/Ubuntu/Debian hosts."
+                }
+              }
+            },
+            "prefill_endpoint": "/api/deploy-info"
+          }
+        }
+      ]
+    }
+  ]
+}

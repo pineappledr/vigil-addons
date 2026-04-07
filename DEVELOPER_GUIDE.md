@@ -7,11 +7,12 @@ This guide explains how to build, package, and publish a new add-on for the [Vig
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [JSON UI Manifest](#json-ui-manifest)
-3. [WebSocket Communication Protocol](#websocket-communication-protocol)
-4. [Multi-Architecture Builds](#multi-architecture-builds)
-5. [CI/CD Pipeline Conventions](#cicd-pipeline-conventions)
-6. [Development Workflow](#development-workflow)
+2. [Hub/Agent Pattern](#hubagent-pattern)
+3. [JSON UI Manifest](#json-ui-manifest)
+4. [WebSocket Communication Protocol](#websocket-communication-protocol)
+5. [Multi-Architecture Builds](#multi-architecture-builds)
+6. [CI/CD Pipeline Conventions](#cicd-pipeline-conventions)
+7. [Development Workflow](#development-workflow)
 
 ---
 
@@ -35,6 +36,69 @@ Registration is a two-phase process:
 After registration, the add-on opens a WebSocket connection for telemetry. The token is reused for WebSocket authentication on reconnect.
 
 If the token is not yet bound to an add-on (admin hasn't completed step 1), the server returns `412 Precondition Failed` and the add-on should retry with backoff.
+
+---
+
+## Hub/Agent Pattern
+
+Most add-ons in this repo use a **two-tier Hub/Agent model**. The Hub runs alongside the Vigil server (or anywhere on the network). Agents run on the hosts where the actual work happens. The Hub registers with Vigil, aggregates agent telemetry, and serves UI data. Agents register with the Hub and push telemetry.
+
+```text
+Vigil Server
+    │  POST /api/addons/connect
+    │  WS   /api/addons/ws
+    │
+Hub (port varies per addon)
+    │  POST /api/agents/register    ← PSK required
+    │  POST /api/telemetry/ingest   ← PSK required
+    │  GET  /api/deploy-info        ← returns hub_url + hub_psk
+    │
+Agent (port varies per addon)   ← one per host
+    │
+    └─ host tooling (CLI, binaries, etc.)
+```
+
+### PSK Authentication
+
+Because agents often execute privileged or destructive operations, every agent-to-hub request must include a **Pre-Shared Key**:
+
+```text
+Authorization: Bearer <psk>
+```
+
+**How the PSK lifecycle works:**
+
+1. The Hub generates a cryptographically random 32-byte hex PSK on first boot and saves it to `/data/hub.psk` with `0600` permissions.
+2. `GET /api/deploy-info` returns `{"hub_url": "...", "hub_psk": "..."}`. The `deploy-wizard` manifest component calls this endpoint automatically to pre-fill the generated Docker Compose.
+3. Agents include the PSK in every request. The Hub rejects any missing or mismatched PSK with `401 Unauthorized`.
+4. `POST /api/rotate-psk` (body: `{"confirm":"ROTATE"}`) generates a new PSK, persists it, and returns it. All agents must be redeployed with the new value.
+
+**Implementation reference:** `shared/` libraries handle the registration and telemetry client. See `snapraid/internal/hub/` or `zfs-manager/internal/manager/` for the full server-side pattern.
+
+### Shared Libraries
+
+The `shared/` directory contains reusable packages available to all add-ons via `replace` directives in `go.mod`:
+
+| Package              | Description                                                                      |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `shared/addonutil`   | `WriteJSON(w, status, v)` and other HTTP helpers                                 |
+| `shared/vigilclient` | Vigil registration (`POST /api/addons/connect`) and WebSocket telemetry client   |
+
+```go
+// go.mod
+replace (
+    github.com/pineappledr/vigil-addons/shared/addonutil  => ../shared/addonutil
+    github.com/pineappledr/vigil-addons/shared/vigilclient => ../shared/vigilclient
+)
+```
+
+### Agent Registry
+
+The Hub persists registered agents to a JSON file (`/data/agents.json` by default). An agent is considered **online** if its `last_seen_at` is within 2 minutes. Agents update `last_seen_at` on every telemetry ingest (`POST /api/telemetry/ingest`).
+
+### Telemetry Cache
+
+The Hub caches the latest telemetry payload per agent in memory. UI data endpoints (`GET /api/pools`, `GET /api/datasets`, etc.) read from this cache. If the cache is empty for an agent, endpoints return `[]`.
 
 ---
 

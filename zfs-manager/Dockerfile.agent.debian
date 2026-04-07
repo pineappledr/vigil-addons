@@ -1,0 +1,20 @@
+FROM --platform=$BUILDPLATFORM golang:1.26.1 AS builder
+ARG TARGETOS TARGETARCH
+ARG VERSION=dev
+WORKDIR /src
+COPY shared/ shared/
+COPY zfs-manager/ zfs-manager/
+WORKDIR /src/zfs-manager
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -ldflags="-s -w -X main.version=$VERSION" \
+    -o /zfs-agent ./cmd/agent
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /data
+COPY --from=builder /zfs-agent /usr/local/bin/zfs-agent
+VOLUME ["/data"]
+EXPOSE 9600
+ENTRYPOINT ["zfs-agent"]

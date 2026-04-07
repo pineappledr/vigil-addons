@@ -1,0 +1,232 @@
+package manager
+
+import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"sync"
+
+	"github.com/pineappledr/vigil-addons/shared/addonutil"
+	"github.com/pineappledr/vigil-addons/zfs-manager/internal/config"
+)
+
+// Server is the manager HTTP server.
+type Server struct {
+	cfg        *config.ManagerConfig
+	registry   *Registry
+	aggregator *Aggregator
+	mux        *http.ServeMux
+	logger     *slog.Logger
+	pskMu      sync.RWMutex
+	psk        string
+}
+
+// NewServer creates the manager HTTP server.
+func NewServer(cfg *config.ManagerConfig, registry *Registry, aggregator *Aggregator, psk string, logger *slog.Logger) *Server {
+	s := &Server{
+		cfg:        cfg,
+		registry:   registry,
+		aggregator: aggregator,
+		mux:        http.NewServeMux(),
+		logger:     logger,
+		psk:        psk,
+	}
+	s.routes()
+	return s
+}
+
+// Handler returns the root HTTP handler.
+func (s *Server) Handler() http.Handler { return s.mux }
+
+func (s *Server) getPSK() string {
+	s.pskMu.RLock()
+	defer s.pskMu.RUnlock()
+	return s.psk
+}
+
+func (s *Server) requirePSK(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			addonutil.WriteJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing authorization header"})
+			return
+		}
+		if strings.TrimPrefix(auth, "Bearer ") != s.getPSK() {
+			addonutil.WriteJSON(w, http.StatusForbidden, map[string]string{"error": "invalid pre-shared key"})
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) routes() {
+	s.mux.HandleFunc("GET /health", s.handleHealth)
+	s.mux.HandleFunc("GET /api/deploy-info", s.handleDeployInfo)
+	s.mux.HandleFunc("POST /api/agents/register", s.requirePSK(s.handleAgentRegister))
+	s.mux.HandleFunc("GET /api/agents", s.handleAgentList)
+	s.mux.HandleFunc("DELETE /api/agents/{id}", s.handleAgentDelete)
+	s.mux.HandleFunc("POST /api/telemetry/ingest", s.requirePSK(s.handleTelemetryIngest))
+	s.mux.HandleFunc("GET /api/telemetry/{agentID}", s.handleTelemetryGet)
+	s.mux.HandleFunc("GET /api/pools", s.handlePools)
+	s.mux.HandleFunc("GET /api/datasets", s.handleDatasets)
+	s.mux.HandleFunc("GET /api/snapshots", s.handleSnapshots)
+	s.mux.HandleFunc("POST /api/rotate-psk", s.handleRotatePSK)
+}
+
+// resolveAgentID returns the agent_id from the query string, falling back to
+// the first online agent in the registry.
+func (s *Server) resolveAgentID(r *http.Request) string {
+	if id := r.URL.Query().Get("agent_id"); id != "" {
+		return id
+	}
+	for _, v := range s.registry.ListViews() {
+		if v.Status == "online" {
+			return v.AgentEntry.ID
+		}
+	}
+	return ""
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleDeployInfo(w http.ResponseWriter, r *http.Request) {
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{
+		"hub_url": fmt.Sprintf("http://%s:%d", r.Host, s.cfg.Listen.Port),
+		"hub_psk": s.getPSK(),
+	})
+}
+
+type agentRegisterRequest struct {
+	AgentID       string `json:"agent_id"`
+	Hostname      string `json:"hostname"`
+	Arch          string `json:"arch"`
+	AdvertiseAddr string `json:"advertise_addr"`
+	Version       string `json:"version"`
+}
+
+func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
+	var req agentRegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if req.AgentID == "" {
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_id required"})
+		return
+	}
+
+	entry := AgentEntry{
+		ID:       req.AgentID,
+		Hostname: req.Hostname,
+		Arch:     req.Arch,
+		Address:  req.AdvertiseAddr,
+		Version:  req.Version,
+	}
+	if err := s.registry.Register(entry); err != nil {
+		s.logger.Error("failed to register agent", "agent_id", req.AgentID, "error", err)
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "registration failed"})
+		return
+	}
+
+	s.logger.Info("agent registered", "agent_id", req.AgentID, "hostname", req.Hostname)
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "registered"})
+}
+
+func (s *Server) handleAgentList(w http.ResponseWriter, _ *http.Request) {
+	addonutil.WriteJSON(w, http.StatusOK, s.registry.ListViews())
+}
+
+func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !s.registry.Delete(id) {
+		addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+type telemetryIngestRequest struct {
+	AgentID string          `json:"agent_id"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+func (s *Server) handleTelemetryIngest(w http.ResponseWriter, r *http.Request) {
+	var req telemetryIngestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid telemetry"})
+		return
+	}
+	s.registry.Touch(req.AgentID)
+	s.aggregator.Ingest(req.AgentID, req.Payload)
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
+}
+
+func (s *Server) handleTelemetryGet(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agentID")
+	data := s.aggregator.Latest(agentID)
+	if data == nil {
+		addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "no telemetry for agent"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+// serveAgentField extracts a named field from the aggregator cache for the
+// resolved agent and writes it as JSON. Falls back to an empty JSON array.
+func (s *Server) serveAgentField(w http.ResponseWriter, r *http.Request, field string) {
+	agentID := s.resolveAgentID(r)
+	if agentID != "" {
+		if data := s.aggregator.LatestField(agentID, field); data != nil && string(data) != "null" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(data)
+			return
+		}
+	}
+	// No cached data — return empty array so the table renders cleanly.
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte("[]"))
+}
+
+func (s *Server) handlePools(w http.ResponseWriter, r *http.Request) {
+	s.serveAgentField(w, r, "pools")
+}
+
+func (s *Server) handleDatasets(w http.ResponseWriter, r *http.Request) {
+	s.serveAgentField(w, r, "datasets")
+}
+
+func (s *Server) handleSnapshots(w http.ResponseWriter, r *http.Request) {
+	s.serveAgentField(w, r, "snapshots")
+}
+
+func (s *Server) handleRotatePSK(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Confirm string `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Confirm != "ROTATE" {
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "type ROTATE to confirm"})
+		return
+	}
+
+	newPSK, err := generateRandom()
+	if err != nil {
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "PSK generation failed"})
+		return
+	}
+	if err := PersistPSK(s.cfg.Data.RegistryPath, newPSK); err != nil {
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save PSK"})
+		return
+	}
+
+	s.pskMu.Lock()
+	s.psk = newPSK
+	s.pskMu.Unlock()
+
+	s.logger.Info("PSK rotated")
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "rotated", "hub_psk": newPSK})
+}

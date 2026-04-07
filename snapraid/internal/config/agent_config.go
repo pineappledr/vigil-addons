@@ -38,8 +38,8 @@ type AgentListen struct {
 }
 
 type AgentHub struct {
-	URL   string `yaml:"url"`
-	Token string `yaml:"token"`
+	URL string `yaml:"url"`
+	PSK string `yaml:"psk"`
 }
 
 type AgentIdentity struct {
@@ -81,19 +81,23 @@ func DefaultAgentConfig() AgentConfig {
 		Hub:      AgentHub{URL: "http://snapraid-hub:9300"},
 		SnapRAID: SnapRAIDPaths{ConfigPath: "/etc/snapraid.conf"},
 		Scheduler: SchedulerConfig{
-			MaintenanceCron: "0 3 * * *",
-			ScrubCron:       "0 4 * * 0",
-			StatusCron:      "*/30 * * * *",
+			MaintenanceCron: "0 2 * * *",
+			ScrubCron:       "0 6 1 * *",
+			StatusCron:      "0 */6 * * *",
 		},
 		Thresholds: Thresholds{
-			MaxDeleted:           50,
-			MaxUpdated:           -1,
+			MaxDeleted:           250,
+			MaxUpdated:           3000,
 			AddDelRatio:          -1.0,
 			SmartFailProbability: 50,
 		},
 		Scrub: ScrubConfig{
-			Plan:          "8",
-			OlderThanDays: 10,
+			Plan:             "8",
+			OlderThanDays:    10,
+			AutoFixBadBlocks: true,
+		},
+		Sync: SyncConfig{
+			PreHash: true,
 		},
 		Logging: LogConfig{
 			Level:      "info",
@@ -135,7 +139,7 @@ type envOverride struct {
 var agentEnvOverrides = []envOverride{
 	{"VIGIL_SNAPRAID_AGENT_LISTEN_PORT", func(c *AgentConfig, v string) { setInt(v, &c.Listen.Port) }},
 	{"VIGIL_SNAPRAID_AGENT_HUB_URL", func(c *AgentConfig, v string) { c.Hub.URL = v }},
-	{"VIGIL_SNAPRAID_AGENT_HUB_TOKEN", func(c *AgentConfig, v string) { c.Hub.Token = v }},
+	{"VIGIL_SNAPRAID_AGENT_HUB_PSK", func(c *AgentConfig, v string) { c.Hub.PSK = v }},
 	{"VIGIL_SNAPRAID_AGENT_ID", func(c *AgentConfig, v string) { c.Identity.AgentID = v }},
 	{"VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR", func(c *AgentConfig, v string) { c.Identity.AdvertiseAddr = v }},
 	{"VIGIL_SNAPRAID_AGENT_SNAPRAID_BINARY_PATH", func(c *AgentConfig, v string) { c.SnapRAID.BinaryPath = v }},

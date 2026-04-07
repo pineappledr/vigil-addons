@@ -47,6 +47,14 @@ func main() {
 		logger.Info("loaded rotated hub token from disk")
 	}
 
+	// Load or generate the agent PSK.
+	psk, err := hub.LoadOrGeneratePSK(cfg.Data.RegistryPath)
+	if err != nil {
+		logger.Error("failed to load or generate hub PSK", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("hub PSK ready", "psk_path", hub.PSKPath(cfg.Data.RegistryPath))
+
 	config.LogHubConfig(logger, cfg)
 
 	registry, err := hub.NewRegistry(cfg.Data.RegistryPath)
@@ -66,7 +74,7 @@ func main() {
 	aggregator := hub.NewAggregator(registry, upstreamCh, logger)
 	router := hub.NewCommandRouter(registry, logger)
 
-	srv := hub.NewServer(cfg, registry, aggregator, router, logger)
+	srv := hub.NewServer(cfg, registry, aggregator, router, psk, logger)
 
 	addr := fmt.Sprintf(":%d", cfg.Listen.Port)
 	httpServer := &http.Server{

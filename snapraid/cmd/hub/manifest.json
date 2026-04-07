@@ -369,7 +369,7 @@
               "named_volumes": ["agent-data"],
               "environment": {
                 "VIGIL_SNAPRAID_AGENT_HUB_URL": { "source": "prefill", "key": "hub_url", "label": "Hub URL", "hint": "The URL where agents can reach the SnapRAID Hub" },
-                "VIGIL_SNAPRAID_AGENT_HUB_TOKEN": { "source": "prefill", "key": "hub_token", "label": "Hub Token", "hint": "Token for agent registration with the Hub", "secret": true, "rotate_action": "rotate-token" },
+                "VIGIL_SNAPRAID_AGENT_HUB_PSK": { "source": "prefill", "key": "hub_psk", "label": "Hub PSK", "hint": "Pre-shared key for agent authentication with the Hub", "secret": true, "rotate_action": "rotate-psk" },
                 "VIGIL_SNAPRAID_AGENT_ID": { "source": "user_input", "label": "Agent ID", "placeholder": "snapraid-agent-01" },
                 "VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR": { "source": "user_input", "label": "Advertise Address", "placeholder": "http://192.168.1.100:9400", "hint": "URL where the Hub can reach this agent (host LAN IP + port). Required for Docker deployments." },
                 "VIGIL_SNAPRAID_AGENT_LISTEN_PORT": { "source": "literal", "value": "9400" },

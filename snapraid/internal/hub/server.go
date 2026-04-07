@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/pineappledr/vigil-addons/shared/addonutil"
@@ -20,10 +22,12 @@ type Server struct {
 	router     *CommandRouter
 	mux        *http.ServeMux
 	logger     *slog.Logger
+	pskMu      sync.RWMutex
+	psk        string
 }
 
 // NewServer creates the Hub server with all dependencies.
-func NewServer(cfg *config.HubConfig, registry *Registry, aggregator *Aggregator, router *CommandRouter, logger *slog.Logger) *Server {
+func NewServer(cfg *config.HubConfig, registry *Registry, aggregator *Aggregator, router *CommandRouter, psk string, logger *slog.Logger) *Server {
 	s := &Server{
 		cfg:        cfg,
 		registry:   registry,
@@ -31,6 +35,7 @@ func NewServer(cfg *config.HubConfig, registry *Registry, aggregator *Aggregator
 		router:     router,
 		mux:        http.NewServeMux(),
 		logger:     logger,
+		psk:        psk,
 	}
 	s.routes()
 	return s
@@ -66,13 +71,36 @@ func decodeJSON[T any](w http.ResponseWriter, r *http.Request, errMsg string) (T
 	return v, true
 }
 
+// getPSK returns the current PSK under the read lock.
+func (s *Server) getPSK() string {
+	s.pskMu.RLock()
+	defer s.pskMu.RUnlock()
+	return s.psk
+}
+
+// requirePSK is middleware that validates the Authorization: Bearer <psk> header.
+func (s *Server) requirePSK(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			addonutil.WriteJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing or invalid authorization header"})
+			return
+		}
+		if strings.TrimPrefix(auth, "Bearer ") != s.getPSK() {
+			addonutil.WriteJSON(w, http.StatusForbidden, map[string]string{"error": "invalid pre-shared key"})
+			return
+		}
+		next(w, r)
+	}
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/deploy-info", s.handleDeployInfo)
-	s.mux.HandleFunc("POST /api/agents/register", s.handleAgentRegister)
+	s.mux.HandleFunc("POST /api/agents/register", s.requirePSK(s.handleAgentRegister))
 	s.mux.HandleFunc("GET /api/agents", s.handleAgentList)
 	s.mux.HandleFunc("POST /api/command", s.handleCommand)
-	s.mux.HandleFunc("POST /api/telemetry/ingest", s.handleTelemetryIngest)
+	s.mux.HandleFunc("POST /api/telemetry/ingest", s.requirePSK(s.handleTelemetryIngest))
 	s.mux.HandleFunc("POST /api/config/{agentID}", s.handleConfigForward)
 	s.mux.HandleFunc("POST /api/config", s.handleConfigFromBody)
 	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
@@ -83,10 +111,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/disk_status", s.handleTelemetryField)
 	s.mux.HandleFunc("GET /api/active_job", s.handleTelemetryField)
 	s.mux.HandleFunc("GET /api/disk_storage", s.handleTelemetryField)
-	s.mux.HandleFunc("POST /api/logs/ingest", s.handleLogIngest)
+	s.mux.HandleFunc("POST /api/logs/ingest", s.requirePSK(s.handleLogIngest))
 	s.mux.HandleFunc("GET /api/jobs/active", s.handleActiveJobs)
 	s.mux.HandleFunc("DELETE /api/jobs/{id}", s.handleCancelJob)
-	s.mux.HandleFunc("POST /api/rotate-token", s.handleRotateToken)
+	s.mux.HandleFunc("POST /api/rotate-psk", s.handleRotatePSK)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -97,8 +125,51 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // prefills into the agent docker-compose template.
 func (s *Server) handleDeployInfo(w http.ResponseWriter, r *http.Request) {
 	addonutil.WriteJSON(w, http.StatusOK, map[string]string{
-		"hub_url":   fmt.Sprintf("http://%s:%d", r.Host, s.cfg.Listen.Port),
-		"hub_token": s.cfg.Vigil.Token,
+		"hub_url": fmt.Sprintf("http://%s:%d", r.Host, s.cfg.Listen.Port),
+		"hub_psk": s.getPSK(),
+	})
+}
+
+func (s *Server) handleRotatePSK(w http.ResponseWriter, r *http.Request) {
+	type rotateRequest struct {
+		Data    struct{ Confirm string `json:"confirm"` } `json:"data"`
+		Confirm string                                    `json:"confirm"`
+	}
+	req, ok := decodeJSON[rotateRequest](w, r, "invalid request")
+	if !ok {
+		return
+	}
+
+	confirm := req.Data.Confirm
+	if confirm == "" {
+		confirm = req.Confirm
+	}
+	if confirm != "ROTATE" {
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "type ROTATE to confirm"})
+		return
+	}
+
+	newPSK, err := generateRandom()
+	if err != nil {
+		s.logger.Error("failed to generate new PSK", "error", err)
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "PSK generation failed"})
+		return
+	}
+
+	if err := PersistPSK(s.cfg.Data.RegistryPath, newPSK); err != nil {
+		s.logger.Error("failed to persist new PSK", "error", err)
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save PSK"})
+		return
+	}
+
+	s.pskMu.Lock()
+	s.psk = newPSK
+	s.pskMu.Unlock()
+
+	s.logger.Info("hub PSK rotated successfully")
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{
+		"status":  "rotated",
+		"hub_psk": newPSK,
 	})
 }
 
@@ -295,48 +366,6 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	writeRawJSON(w, body)
 }
 
-func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
-	// The Vigil proxy sends form data as {"data": {"confirm": "ROTATE"}}
-	type rotateRequest struct {
-		Data struct {
-			Confirm string `json:"confirm"`
-		} `json:"data"`
-		Confirm string `json:"confirm"` // direct call (not via proxy)
-	}
-	req, ok := decodeJSON[rotateRequest](w, r, "invalid request")
-	if !ok {
-		return
-	}
-
-	confirm := req.Data.Confirm
-	if confirm == "" {
-		confirm = req.Confirm
-	}
-	if confirm != "ROTATE" {
-		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "type ROTATE to confirm"})
-		return
-	}
-
-	newToken, err := GenerateToken()
-	if err != nil {
-		s.logger.Error("failed to generate new token", "error", err)
-		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "token generation failed"})
-		return
-	}
-
-	if err := PersistToken(s.cfg.Data.RegistryPath, newToken); err != nil {
-		s.logger.Error("failed to persist new token", "error", err)
-		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save token"})
-		return
-	}
-
-	s.cfg.Vigil.Token = newToken
-	s.logger.Info("hub token rotated successfully")
-	addonutil.WriteJSON(w, http.StatusOK, map[string]string{
-		"status":    "rotated",
-		"hub_token": newToken,
-	})
-}
 
 // handleProxyToAgent forwards a GET request to the first online agent,
 // preserving the request path and query string. Used for /api/jobs/history

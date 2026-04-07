@@ -1,12 +1,16 @@
 package manager
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pineappledr/vigil-addons/shared/addonutil"
 	"github.com/pineappledr/vigil-addons/zfs-manager/internal/config"
@@ -72,7 +76,20 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/pools", s.handlePools)
 	s.mux.HandleFunc("GET /api/datasets", s.handleDatasets)
 	s.mux.HandleFunc("GET /api/snapshots", s.handleSnapshots)
+	s.mux.HandleFunc("GET /api/presets", s.handlePresets)
 	s.mux.HandleFunc("POST /api/rotate-psk", s.handleRotatePSK)
+
+	// Phase 2 — command proxy (routes to agent)
+	s.mux.HandleFunc("POST /api/datasets", s.proxyToAgent)
+	s.mux.HandleFunc("PUT /api/datasets", s.proxyToAgent)
+	s.mux.HandleFunc("DELETE /api/datasets", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/snapshots", s.proxyToAgent)
+	s.mux.HandleFunc("DELETE /api/snapshots", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/snapshots/rollback", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/scrub/start", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/scrub/pause", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/scrub/cancel", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/preview", s.proxyToAgent)
 }
 
 // resolveAgentID returns the agent_id from the query string, falling back to
@@ -202,6 +219,71 @@ func (s *Server) handleDatasets(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSnapshots(w http.ResponseWriter, r *http.Request) {
 	s.serveAgentField(w, r, "snapshots")
+}
+
+func (s *Server) handlePresets(w http.ResponseWriter, _ *http.Request) {
+	// Return dataset presets for the UI wizard.
+	presets := map[string]map[string]string{
+		"general": {"name": "General Purpose", "record_size": "128K", "compression": "lz4", "atime": "off", "sync": "standard"},
+		"media":   {"name": "Media Storage", "record_size": "1M", "compression": "lz4", "atime": "off", "sync": "disabled"},
+		"vm":      {"name": "VM/App Storage", "record_size": "64K", "compression": "lz4", "atime": "off", "sync": "standard"},
+		"db":      {"name": "Database", "record_size": "16K", "compression": "lz4", "atime": "off", "sync": "always"},
+	}
+	addonutil.WriteJSON(w, http.StatusOK, presets)
+}
+
+// proxyToAgent forwards a request to the resolved agent's HTTP API.
+// The agent is selected via the ?agent_id= query parameter (or first online agent).
+func (s *Server) proxyToAgent(w http.ResponseWriter, r *http.Request) {
+	agentID := s.resolveAgentID(r)
+	if agentID == "" {
+		addonutil.WriteError(w, http.StatusBadGateway, "no agent available")
+		return
+	}
+
+	entry := s.registry.Get(agentID)
+	if entry == nil {
+		addonutil.WriteError(w, http.StatusNotFound, "agent not found: "+agentID)
+		return
+	}
+	if entry.Address == "" {
+		addonutil.WriteError(w, http.StatusBadGateway, "agent has no advertise address")
+		return
+	}
+
+	// Build the upstream URL: agent_address + original path
+	targetURL := strings.TrimRight(entry.Address, "/") + r.URL.Path
+
+	// Read the original body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		addonutil.WriteError(w, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	proxyReq, err := http.NewRequestWithContext(ctx, r.Method, targetURL, bytes.NewReader(body))
+	if err != nil {
+		addonutil.WriteError(w, http.StatusInternalServerError, "failed to create proxy request")
+		return
+	}
+	proxyReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(proxyReq)
+	if err != nil {
+		s.logger.Error("agent proxy failed", "agent_id", agentID, "url", targetURL, "error", err)
+		addonutil.WriteError(w, http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	// Forward the agent's response back to the caller
+	respBody, _ := io.ReadAll(resp.Body)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	w.Write(respBody)
 }
 
 func (s *Server) handleRotatePSK(w http.ResponseWriter, r *http.Request) {

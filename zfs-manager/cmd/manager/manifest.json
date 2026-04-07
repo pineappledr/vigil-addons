@@ -1,6 +1,6 @@
 {
   "name": "ZFS Manager",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ZFS pool, dataset, and snapshot management for homelab servers",
   "author": "Vigil Add-ons",
   "docker_image": "ghcr.io/pineappledr/vigil-addons-zfs-manager:latest",
@@ -47,7 +47,75 @@
             "sortable": true,
             "default_sort": { "key": "name", "direction": "asc" },
             "expandable": true,
-            "expand_key": "vdevs"
+            "expand_key": "vdevs",
+            "row_actions": [
+              {
+                "id": "start-scrub",
+                "label": "Start Scrub",
+                "icon": "refresh-cw",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/scrub/start",
+                  "body_map": { "pool": "row.name" },
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "scrub", "scrub_op": "start" },
+                    "body_map": { "pool": "row.name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Start Scrub",
+                  "message": "Start a scrub on pool {row.name}?",
+                  "show_command": true,
+                  "button_label": "Start Scrub"
+                }
+              },
+              {
+                "id": "pause-scrub",
+                "label": "Pause Scrub",
+                "icon": "pause",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/scrub/pause",
+                  "body_map": { "pool": "row.name" },
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "scrub", "scrub_op": "pause" },
+                    "body_map": { "pool": "row.name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Pause Scrub",
+                  "message": "Pause the running scrub on pool {row.name}?",
+                  "show_command": true,
+                  "button_label": "Pause"
+                }
+              },
+              {
+                "id": "cancel-scrub",
+                "label": "Cancel Scrub",
+                "icon": "x-circle",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/scrub/cancel",
+                  "body_map": { "pool": "row.name" },
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "scrub", "scrub_op": "cancel" },
+                    "body_map": { "pool": "row.name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Cancel Scrub",
+                  "message": "Cancel the running scrub on pool {row.name}?",
+                  "show_command": true,
+                  "button_label": "Cancel Scrub"
+                }
+              }
+            ]
           }
         }
       ]
@@ -86,7 +154,234 @@
             ],
             "sortable": true,
             "filterable": true,
-            "default_sort": { "key": "name", "direction": "asc" }
+            "default_sort": { "key": "name", "direction": "asc" },
+            "row_actions": [
+              {
+                "id": "edit-dataset",
+                "label": "Edit Properties",
+                "icon": "edit",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "PUT",
+                  "endpoint": "/api/datasets",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "set_properties" },
+                    "body_map": { "name": "row.name" }
+                  }
+                },
+                "form": {
+                  "title": "Edit Dataset Properties — {row.name}",
+                  "show_command": true,
+                  "fields": [
+                    { "key": "name", "type": "hidden", "value_from": "row.name" },
+                    {
+                      "key": "properties.compression",
+                      "label": "Compression",
+                      "type": "select",
+                      "options": [
+                        { "value": "lz4", "label": "LZ4 (recommended)" },
+                        { "value": "zstd", "label": "ZSTD" },
+                        { "value": "gzip", "label": "GZIP" },
+                        { "value": "off", "label": "Off" }
+                      ],
+                      "value_from": "row.compress"
+                    },
+                    {
+                      "key": "properties.recordsize",
+                      "label": "Record Size",
+                      "type": "select",
+                      "options": [
+                        { "value": "4K", "label": "4K" },
+                        { "value": "8K", "label": "8K" },
+                        { "value": "16K", "label": "16K (Database)" },
+                        { "value": "32K", "label": "32K" },
+                        { "value": "64K", "label": "64K (VM/App)" },
+                        { "value": "128K", "label": "128K (General)" },
+                        { "value": "256K", "label": "256K" },
+                        { "value": "512K", "label": "512K" },
+                        { "value": "1M", "label": "1M (Media)" }
+                      ],
+                      "hint": "Changing record size only affects new data, not existing blocks"
+                    },
+                    {
+                      "key": "properties.atime",
+                      "label": "Access Time (atime)",
+                      "type": "select",
+                      "options": [
+                        { "value": "off", "label": "Off (recommended)" },
+                        { "value": "on", "label": "On" }
+                      ],
+                      "value_from": "row.atime"
+                    },
+                    {
+                      "key": "properties.sync",
+                      "label": "Sync",
+                      "type": "select",
+                      "options": [
+                        { "value": "standard", "label": "Standard" },
+                        { "value": "always", "label": "Always (safest)" },
+                        { "value": "disabled", "label": "Disabled (fastest)" }
+                      ],
+                      "value_from": "row.sync"
+                    },
+                    {
+                      "key": "properties.quota",
+                      "label": "Quota",
+                      "type": "text",
+                      "placeholder": "e.g. 100G, 1T, or none",
+                      "hint": "Maximum space this dataset can consume. Use 'none' to remove."
+                    },
+                    {
+                      "key": "properties.reservation",
+                      "label": "Reservation",
+                      "type": "text",
+                      "placeholder": "e.g. 50G, or none",
+                      "hint": "Guaranteed minimum space for this dataset. Use 'none' to remove."
+                    }
+                  ],
+                  "button_label": "Apply Changes"
+                }
+              },
+              {
+                "id": "take-snapshot",
+                "label": "Take Snapshot",
+                "icon": "camera",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/snapshots",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "create_snapshot" },
+                    "body_map": { "dataset": "row.name" }
+                  }
+                },
+                "form": {
+                  "title": "Take Snapshot of {row.name}",
+                  "show_command": true,
+                  "fields": [
+                    { "key": "dataset", "type": "hidden", "value_from": "row.name" },
+                    {
+                      "key": "name",
+                      "label": "Snapshot Name",
+                      "type": "text",
+                      "placeholder": "manual-2026-04-07-120000 (auto-generated if empty)",
+                      "hint": "Leave blank for auto-generated timestamp name"
+                    },
+                    {
+                      "key": "recursive",
+                      "label": "Recursive",
+                      "type": "checkbox",
+                      "hint": "Also snapshot all child datasets"
+                    }
+                  ],
+                  "button_label": "Take Snapshot"
+                }
+              },
+              {
+                "id": "delete-dataset",
+                "label": "Delete Dataset",
+                "icon": "trash-2",
+                "safety_tier": "red",
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/datasets",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "destroy_dataset" },
+                    "body_map": { "name": "row.name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Delete Dataset",
+                  "message": "This will permanently destroy the dataset {row.name} and all its data. This action cannot be undone.",
+                  "show_command": true,
+                  "require_type_confirm": true,
+                  "confirm_value": "{row.name}",
+                  "confirm_label": "Type the full dataset name to confirm",
+                  "confirm_key": "confirm",
+                  "button_label": "Delete Dataset",
+                  "button_variant": "danger",
+                  "extra_fields": [
+                    { "key": "name", "type": "hidden", "value_from": "row.name" },
+                    {
+                      "key": "recursive",
+                      "label": "Recursive (include children and snapshots)",
+                      "type": "checkbox"
+                    }
+                  ]
+                }
+              }
+            ],
+            "toolbar_actions": [
+              {
+                "id": "create-dataset",
+                "label": "Create Dataset",
+                "icon": "folder-plus",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/datasets",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "create_dataset" }
+                  }
+                },
+                "form": {
+                  "title": "Create Dataset",
+                  "show_command": true,
+                  "fields": [
+                    {
+                      "key": "parent",
+                      "label": "Parent Dataset",
+                      "type": "select",
+                      "options_from": "/api/datasets",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "name",
+                      "label": "Dataset Name",
+                      "type": "text",
+                      "placeholder": "my-dataset",
+                      "required": true,
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+                      "hint": "Only letters, numbers, dots, hyphens, underscores. No spaces."
+                    },
+                    {
+                      "key": "preset",
+                      "label": "Preset",
+                      "type": "select",
+                      "options": [
+                        { "value": "",        "label": "— No Preset (manual) —" },
+                        { "value": "general", "label": "General Purpose — good for most files and documents" },
+                        { "value": "media",   "label": "Media Storage — optimized for large video/music files" },
+                        { "value": "vm",      "label": "VM/App Storage — balanced for virtual machines and containers" },
+                        { "value": "db",      "label": "Database — tuned for databases that need data safety" }
+                      ],
+                      "hint": "Presets auto-configure record size, compression, atime, and sync"
+                    },
+                    {
+                      "key": "quota",
+                      "label": "Quota (optional)",
+                      "type": "text",
+                      "placeholder": "e.g. 100G, 1T",
+                      "hint": "Maximum space this dataset can consume"
+                    },
+                    {
+                      "key": "reservation",
+                      "label": "Reservation (optional)",
+                      "type": "text",
+                      "placeholder": "e.g. 50G",
+                      "hint": "Guaranteed minimum space for this dataset"
+                    }
+                  ],
+                  "button_label": "Create Dataset"
+                }
+              }
+            ]
           }
         }
       ]
@@ -121,7 +416,122 @@
             ],
             "sortable": true,
             "filterable": true,
-            "default_sort": { "key": "creation", "direction": "desc" }
+            "default_sort": { "key": "creation", "direction": "desc" },
+            "row_actions": [
+              {
+                "id": "rollback-snapshot",
+                "label": "Rollback",
+                "icon": "rotate-ccw",
+                "safety_tier": "red",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/snapshots/rollback",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "rollback" },
+                    "body_map": { "name": "row.full_name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Rollback to Snapshot",
+                  "message": "This will revert {row.dataset} to how it looked when snapshot {row.snap_name} was taken. Any data written after this snapshot will be permanently lost.",
+                  "show_command": true,
+                  "require_type_confirm": true,
+                  "confirm_value": "{row.dataset}",
+                  "confirm_label": "Type the dataset name to confirm",
+                  "confirm_key": "confirm",
+                  "button_label": "Rollback",
+                  "button_variant": "danger",
+                  "extra_fields": [
+                    { "key": "name", "type": "hidden", "value_from": "row.full_name" },
+                    {
+                      "key": "depth",
+                      "label": "Rollback Depth",
+                      "type": "select",
+                      "options": [
+                        { "value": "latest",       "label": "Just this snapshot (most recent only)" },
+                        { "value": "intermediate", "label": "This and newer snapshots (destroys intermediate snapshots)" },
+                        { "value": "all",          "label": "Everything after this (destroys all newer snapshots and bookmarks)" }
+                      ],
+                      "required": true
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "delete-snapshot",
+                "label": "Delete",
+                "icon": "trash-2",
+                "safety_tier": "red",
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/snapshots",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "destroy_snapshot" },
+                    "body_map": { "name": "row.full_name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Delete Snapshot",
+                  "message": "Permanently delete snapshot {row.full_name}? This cannot be undone.",
+                  "show_command": true,
+                  "require_type_confirm": true,
+                  "confirm_value": "{row.full_name}",
+                  "confirm_label": "Type the full snapshot name to confirm",
+                  "confirm_key": "confirm",
+                  "button_label": "Delete Snapshot",
+                  "button_variant": "danger",
+                  "extra_fields": [
+                    { "key": "name", "type": "hidden", "value_from": "row.full_name" }
+                  ]
+                }
+              }
+            ],
+            "toolbar_actions": [
+              {
+                "id": "take-snapshot",
+                "label": "Take Snapshot",
+                "icon": "camera",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/snapshots",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "create_snapshot" }
+                  }
+                },
+                "form": {
+                  "title": "Take Snapshot",
+                  "show_command": true,
+                  "fields": [
+                    {
+                      "key": "dataset",
+                      "label": "Dataset",
+                      "type": "select",
+                      "options_from": "/api/datasets",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "name",
+                      "label": "Snapshot Name",
+                      "type": "text",
+                      "placeholder": "auto-generated if empty",
+                      "hint": "Leave blank for auto-generated timestamp name (e.g. manual-2026-04-07-120000)"
+                    },
+                    {
+                      "key": "recursive",
+                      "label": "Recursive (include child datasets)",
+                      "type": "checkbox"
+                    }
+                  ],
+                  "button_label": "Take Snapshot"
+                }
+              }
+            ]
           }
         }
       ]

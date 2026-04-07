@@ -8,6 +8,7 @@ burnin-hub
 burnin-agent
 snapraid-hub
 snapraid-agent
+zfs-manager
 agent
 hub
 

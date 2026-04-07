@@ -4,13 +4,13 @@
 *.dll
 *.so
 *.dylib
-burnin-hub
-burnin-agent
-snapraid-hub
-snapraid-agent
-zfs-manager
+# Built binaries (not source dirs)
 agent
 hub
+manager
+!**/cmd/agent/
+!**/cmd/hub/
+!**/cmd/manager/
 
 # Build output
 burn-in/dist/

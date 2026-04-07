@@ -1,6 +1,6 @@
 {
   "name": "ZFS Manager",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "ZFS pool, dataset, and snapshot management for homelab servers",
   "author": "Vigil Add-ons",
   "docker_image": "ghcr.io/pineappledr/vigil-addons-zfs-manager:latest",
@@ -529,6 +529,342 @@
                     }
                   ],
                   "button_label": "Take Snapshot"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "scheduled-tasks",
+      "title": "Scheduled Tasks",
+      "icon": "clock",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 30, "label": "30 Seconds" },
+            { "value": 60, "label": "1 Minute" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "task-list",
+          "title": "Scheduled Tasks",
+          "config": {
+            "source": "/api/tasks",
+            "columns": [
+              { "key": "id",        "label": "ID",        "sortable": true },
+              { "key": "task_type", "label": "Type",      "sortable": true, "badge": {
+                "snapshot": "info",
+                "scrub":    "warning"
+              }},
+              { "key": "target",    "label": "Target",    "sortable": true },
+              { "key": "schedule",  "label": "Schedule",  "sortable": false },
+              { "key": "prefix",    "label": "Prefix",    "sortable": false },
+              { "key": "retention", "label": "Retention",  "sortable": true, "suffix": " snapshots" },
+              { "key": "recursive", "label": "Recursive", "sortable": false, "format": "boolean" },
+              { "key": "enabled",   "label": "Enabled",   "sortable": true, "badge": {
+                "true":  "success",
+                "false": "muted"
+              }},
+              { "key": "next_run",  "label": "Next Run",  "sortable": true, "format": "timestamp" }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "id", "direction": "asc" },
+            "row_actions": [
+              {
+                "id": "edit-task",
+                "label": "Edit",
+                "icon": "edit",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "PUT",
+                  "endpoint": "/api/tasks/{row.id}"
+                },
+                "form": {
+                  "title": "Edit Scheduled Task #{row.id}",
+                  "fields": [
+                    {
+                      "key": "target",
+                      "label": "Target",
+                      "type": "text",
+                      "value_from": "row.target",
+                      "required": true,
+                      "hint": "Dataset name (for snapshots) or pool name (for scrubs)"
+                    },
+                    {
+                      "key": "schedule",
+                      "label": "Schedule",
+                      "type": "select",
+                      "options": [
+                        { "value": "0 * * * *",     "label": "Every hour" },
+                        { "value": "0 */6 * * *",   "label": "Every 6 hours" },
+                        { "value": "0 0 * * *",     "label": "Daily at midnight" },
+                        { "value": "0 0 * * 0",     "label": "Weekly on Sunday" },
+                        { "value": "0 0 1 * *",     "label": "Monthly (1st)" },
+                        { "value": "0 0 1,15 * *",  "label": "Bi-weekly (1st & 15th)" }
+                      ],
+                      "allow_custom": true,
+                      "custom_label": "Custom (cron expression)",
+                      "value_from": "row.schedule",
+                      "required": true,
+                      "hint": "Standard 5-field cron expression (minute hour day month weekday)"
+                    },
+                    {
+                      "key": "prefix",
+                      "label": "Naming Prefix",
+                      "type": "text",
+                      "value_from": "row.prefix",
+                      "hint": "Snapshots will be named: prefix-2026-04-07-120000"
+                    },
+                    {
+                      "key": "retention",
+                      "label": "Retention (snapshots to keep)",
+                      "type": "number",
+                      "value_from": "row.retention",
+                      "hint": "0 = unlimited. Older snapshots matching this prefix are automatically deleted."
+                    },
+                    {
+                      "key": "recursive",
+                      "label": "Recursive",
+                      "type": "checkbox",
+                      "value_from": "row.recursive"
+                    },
+                    {
+                      "key": "enabled",
+                      "label": "Enabled",
+                      "type": "checkbox",
+                      "value_from": "row.enabled"
+                    }
+                  ],
+                  "button_label": "Save Changes"
+                }
+              },
+              {
+                "id": "delete-task",
+                "label": "Delete",
+                "icon": "trash-2",
+                "safety_tier": "red",
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/tasks/{row.id}"
+                },
+                "confirm": {
+                  "title": "Delete Scheduled Task",
+                  "message": "Delete the {row.task_type} task for {row.target}? Existing snapshots will not be removed.",
+                  "button_label": "Delete Task",
+                  "button_variant": "danger"
+                }
+              }
+            ],
+            "toolbar_actions": [
+              {
+                "id": "create-snapshot-task",
+                "label": "Add Snapshot Task",
+                "icon": "camera",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/tasks"
+                },
+                "form": {
+                  "title": "Create Periodic Snapshot Task",
+                  "fields": [
+                    { "key": "task_type", "type": "hidden", "value": "snapshot" },
+                    {
+                      "key": "target",
+                      "label": "Dataset",
+                      "type": "select",
+                      "options_from": "/api/datasets",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "schedule",
+                      "label": "Schedule",
+                      "type": "select",
+                      "options": [
+                        { "value": "0 * * * *",     "label": "Every hour" },
+                        { "value": "0 */6 * * *",   "label": "Every 6 hours" },
+                        { "value": "0 0 * * *",     "label": "Daily at midnight" },
+                        { "value": "0 0 * * 0",     "label": "Weekly on Sunday" },
+                        { "value": "0 0 1 * *",     "label": "Monthly (1st)" }
+                      ],
+                      "allow_custom": true,
+                      "custom_label": "Custom (cron expression)",
+                      "required": true,
+                      "hint": "Standard 5-field cron expression"
+                    },
+                    {
+                      "key": "prefix",
+                      "label": "Naming Prefix",
+                      "type": "text",
+                      "placeholder": "auto",
+                      "hint": "Snapshots named: prefix-2026-04-07-120000"
+                    },
+                    {
+                      "key": "retention",
+                      "label": "Retention",
+                      "type": "select",
+                      "options": [
+                        { "value": "0",  "label": "Unlimited (no auto-delete)" },
+                        { "value": "24", "label": "Keep last 24 snapshots" },
+                        { "value": "7",  "label": "Keep last 7 snapshots" },
+                        { "value": "4",  "label": "Keep last 4 snapshots" },
+                        { "value": "12", "label": "Keep last 12 snapshots" }
+                      ],
+                      "allow_custom": true,
+                      "custom_label": "Custom count",
+                      "hint": "Older snapshots matching this prefix are automatically deleted"
+                    },
+                    {
+                      "key": "recursive",
+                      "label": "Recursive (include child datasets)",
+                      "type": "checkbox"
+                    }
+                  ],
+                  "button_label": "Create Task"
+                }
+              },
+              {
+                "id": "create-scrub-task",
+                "label": "Add Scrub Task",
+                "icon": "refresh-cw",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/tasks"
+                },
+                "form": {
+                  "title": "Create Scheduled Scrub Task",
+                  "fields": [
+                    { "key": "task_type", "type": "hidden", "value": "scrub" },
+                    {
+                      "key": "target",
+                      "label": "Pool",
+                      "type": "select",
+                      "options_from": "/api/pools",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "schedule",
+                      "label": "Schedule",
+                      "type": "select",
+                      "options": [
+                        { "value": "0 2 * * 0",     "label": "Weekly (Sunday 2 AM)" },
+                        { "value": "0 2 1,15 * *",  "label": "Bi-weekly (1st & 15th, 2 AM)" },
+                        { "value": "0 2 1 * *",     "label": "Monthly (1st, 2 AM)" }
+                      ],
+                      "allow_custom": true,
+                      "custom_label": "Custom (cron expression)",
+                      "required": true,
+                      "hint": "Standard 5-field cron expression"
+                    }
+                  ],
+                  "button_label": "Create Task"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "job-history",
+          "title": "Job History",
+          "config": {
+            "source": "/api/jobs",
+            "columns": [
+              { "key": "id",          "label": "ID",        "sortable": true },
+              { "key": "job_type",    "label": "Type",      "sortable": true, "badge": {
+                "snapshot": "info",
+                "scrub":    "warning"
+              }},
+              { "key": "trigger",     "label": "Trigger",   "sortable": true },
+              { "key": "started_at",  "label": "Started",   "sortable": true, "format": "timestamp" },
+              { "key": "finished_at", "label": "Finished",  "sortable": true, "format": "timestamp" },
+              { "key": "status",      "label": "Status",    "sortable": true, "badge": {
+                "success": "success",
+                "error":   "danger",
+                "running": "warning"
+              }},
+              { "key": "message",     "label": "Message",   "sortable": false }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "started_at", "direction": "desc" }
+          }
+        }
+      ]
+    },
+    {
+      "id": "retention",
+      "title": "Retention",
+      "icon": "pie-chart",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 60, "label": "1 Minute" },
+            { "value": 300, "label": "5 Minutes" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "retention-stats",
+          "title": "Snapshot Retention by Dataset",
+          "config": {
+            "source": "/api/retention",
+            "columns": [
+              { "key": "dataset",         "label": "Dataset",           "sortable": true },
+              { "key": "snapshot_count",  "label": "Snapshots",        "sortable": true },
+              { "key": "total_used",      "label": "Space Used",       "sortable": true, "format": "bytes" },
+              { "key": "oldest_snapshot", "label": "Oldest Snapshot",  "sortable": true, "format": "timestamp" },
+              { "key": "newest_snapshot", "label": "Newest Snapshot",  "sortable": true, "format": "timestamp" }
+            ],
+            "sortable": true,
+            "filterable": true,
+            "default_sort": { "key": "snapshot_count", "direction": "desc" },
+            "row_actions": [
+              {
+                "id": "cleanup-snapshots",
+                "label": "Cleanup Old Snapshots",
+                "icon": "trash",
+                "safety_tier": "red",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/retention/cleanup"
+                },
+                "confirm": {
+                  "title": "Cleanup Old Snapshots",
+                  "message": "Delete all snapshots older than the specified number of days for dataset {row.dataset}.",
+                  "show_command": false,
+                  "require_type_confirm": true,
+                  "confirm_value": "{row.dataset}",
+                  "confirm_label": "Type the dataset name to confirm",
+                  "confirm_key": "confirm",
+                  "button_label": "Delete Old Snapshots",
+                  "button_variant": "danger",
+                  "extra_fields": [
+                    { "key": "dataset", "type": "hidden", "value_from": "row.dataset" },
+                    {
+                      "key": "older_than_days",
+                      "label": "Delete snapshots older than (days)",
+                      "type": "number",
+                      "placeholder": "30",
+                      "required": true,
+                      "hint": "All snapshots for this dataset created more than this many days ago will be deleted"
+                    }
+                  ]
                 }
               }
             ]

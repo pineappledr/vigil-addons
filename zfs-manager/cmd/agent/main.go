@@ -11,12 +11,15 @@ import (
 
 	"github.com/pineappledr/vigil-addons/zfs-manager/internal/agent"
 	"github.com/pineappledr/vigil-addons/zfs-manager/internal/config"
+	agentdb "github.com/pineappledr/vigil-addons/zfs-manager/internal/db"
+	"github.com/pineappledr/vigil-addons/zfs-manager/internal/scheduler"
 )
 
 var version = "dev"
 
 func main() {
 	configPath := flag.String("config", "config.agent.yaml", "path to agent configuration file")
+	dbPath := flag.String("db", "/data/agent.db", "path to agent SQLite database")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -33,8 +36,19 @@ func main() {
 
 	config.LogAgentConfig(logger, cfg)
 
+	// Open SQLite database for scheduled tasks and job history.
+	db, err := agentdb.Open(*dbPath)
+	if err != nil {
+		logger.Error("failed to open database", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
 	appCtx, appCancel := context.WithCancel(context.Background())
 	defer appCancel()
+
+	// Start daily prune of old job history (30 day retention).
+	agentdb.StartPruneLoop(appCtx, db, 30*24*time.Hour, logger)
 
 	engine := agent.NewEngine(cfg.ZFS.ZpoolPath, cfg.ZFS.ZfsPath, logger)
 
@@ -49,7 +63,15 @@ func main() {
 	// Start periodic telemetry collection (every 60s).
 	go collector.StartCollectionLoop(appCtx, 60*time.Second)
 
-	srv := agent.NewServer(cfg, engine, collector, logger)
+	// Start the cron scheduler for periodic snapshot and scrub tasks.
+	sched := scheduler.New(engine, collector, db, logger)
+	if err := sched.Start(appCtx); err != nil {
+		logger.Error("failed to start scheduler", "error", err)
+		os.Exit(1)
+	}
+	defer sched.Stop()
+
+	srv := agent.NewServer(cfg, engine, collector, db, sched, logger)
 
 	// Self-register with the Hub (retries in background).
 	if cfg.Hub.URL != "" {

@@ -90,6 +90,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/scrub/pause", s.proxyToAgent)
 	s.mux.HandleFunc("POST /api/scrub/cancel", s.proxyToAgent)
 	s.mux.HandleFunc("POST /api/preview", s.proxyToAgent)
+
+	// Phase 3 — scheduled tasks proxy (routes to agent)
+	s.mux.HandleFunc("GET /api/tasks", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/tasks", s.proxyToAgent)
+	s.mux.HandleFunc("PUT /api/tasks/{id}", s.proxyToAgent)
+	s.mux.HandleFunc("DELETE /api/tasks/{id}", s.proxyToAgent)
+	s.mux.HandleFunc("GET /api/tasks/{id}/history", s.proxyToAgent)
+	s.mux.HandleFunc("GET /api/jobs", s.proxyToAgent)
+	s.mux.HandleFunc("GET /api/retention", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/retention/cleanup", s.proxyToAgent)
 }
 
 // resolveAgentID returns the agent_id from the query string, falling back to

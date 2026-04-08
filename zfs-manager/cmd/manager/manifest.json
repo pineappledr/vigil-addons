@@ -1,6 +1,6 @@
 {
   "name": "ZFS Manager",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "ZFS pool, dataset, and snapshot management for homelab servers",
   "author": "Vigil Add-ons",
   "docker_image": "ghcr.io/pineappledr/vigil-addons-zfs-manager:latest",
@@ -532,6 +532,287 @@
                 }
               }
             ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "devices",
+      "title": "Devices",
+      "icon": "hard-drive",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 30, "label": "30 Seconds" },
+            { "value": 60, "label": "1 Minute" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "pool-devices",
+          "title": "Pool Devices",
+          "description": "Devices in your ZFS pools. Use row actions to manage individual devices.",
+          "config": {
+            "source": "/api/pools",
+            "columns": [
+              { "key": "name",   "label": "Pool",   "sortable": true },
+              { "key": "health", "label": "Health",  "sortable": true, "badge": {
+                "ONLINE":   "success",
+                "DEGRADED": "warning",
+                "FAULTED":  "danger",
+                "OFFLINE":  "muted",
+                "UNAVAIL":  "danger"
+              }},
+              { "key": "size",  "label": "Size",  "sortable": true, "format": "bytes" },
+              { "key": "alloc", "label": "Used",   "sortable": true, "format": "bytes" },
+              { "key": "free",  "label": "Free",   "sortable": true, "format": "bytes" }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "name", "direction": "asc" },
+            "expandable": true,
+            "expand_key": "vdevs",
+            "row_actions": [
+              {
+                "id": "clear-errors",
+                "label": "Clear Errors",
+                "icon": "eraser",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/pool/clear",
+                  "body_map": { "pool": "row.name" },
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "clear_errors" },
+                    "body_map": { "pool": "row.name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Clear Error Counters",
+                  "message": "Reset all error counters (READ/WRITE/CKSUM) for pool {row.name}?",
+                  "show_command": true,
+                  "button_label": "Clear Errors"
+                }
+              }
+            ],
+            "toolbar_actions": [
+              {
+                "id": "replace-device",
+                "label": "Replace Device",
+                "icon": "refresh-cw",
+                "safety_tier": "red",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/pool/replace",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "replace_device" }
+                  }
+                },
+                "form": {
+                  "title": "Replace Device",
+                  "show_command": true,
+                  "fields": [
+                    {
+                      "key": "pool",
+                      "label": "Pool",
+                      "type": "select",
+                      "options_from": "/api/pools",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true,
+                      "hint": "The pool containing the device to replace"
+                    },
+                    {
+                      "key": "old_device",
+                      "label": "Device to Replace",
+                      "type": "text",
+                      "required": true,
+                      "placeholder": "e.g. sda, /dev/disk/by-id/...",
+                      "hint": "The failed or degraded device name as shown in pool status"
+                    },
+                    {
+                      "key": "new_device",
+                      "label": "Replacement Device",
+                      "type": "select",
+                      "options_from": "/api/disks",
+                      "option_value": "path",
+                      "option_label": "name",
+                      "option_detail": "model",
+                      "required": true,
+                      "hint": "Select an unused disk to replace the failed device"
+                    }
+                  ],
+                  "confirm": {
+                    "require_type_confirm": true,
+                    "confirm_label": "Type the pool name to confirm",
+                    "confirm_key": "confirm"
+                  },
+                  "button_label": "Replace Device",
+                  "button_variant": "danger"
+                }
+              },
+              {
+                "id": "add-vdev",
+                "label": "Expand Pool",
+                "icon": "plus-circle",
+                "safety_tier": "red",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/pool/add-vdev",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "add_vdev" }
+                  }
+                },
+                "form": {
+                  "title": "Add Vdev to Pool",
+                  "show_command": true,
+                  "fields": [
+                    {
+                      "key": "pool",
+                      "label": "Pool",
+                      "type": "select",
+                      "options_from": "/api/pools",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "vdev_type",
+                      "label": "Vdev Type",
+                      "type": "select",
+                      "options": [
+                        { "value": "mirror", "label": "Mirror — 2+ drives, safest, lose 50% capacity" },
+                        { "value": "raidz1", "label": "RAIDZ1 — 3+ drives, survive 1 failure, lose 1 drive capacity" },
+                        { "value": "raidz2", "label": "RAIDZ2 — 4+ drives, survive 2 failures, lose 2 drives capacity" },
+                        { "value": "raidz3", "label": "RAIDZ3 — 5+ drives, survive 3 failures, lose 3 drives capacity" },
+                        { "value": "stripe", "label": "Stripe — NO redundancy (not recommended)" }
+                      ],
+                      "required": true,
+                      "hint": "Should match the existing vdev type in your pool for best results"
+                    },
+                    {
+                      "key": "devices",
+                      "label": "Devices",
+                      "type": "multi-select",
+                      "options_from": "/api/disks",
+                      "option_value": "path",
+                      "option_label": "name",
+                      "option_detail": "model",
+                      "required": true,
+                      "hint": "Select the drives for the new vdev"
+                    }
+                  ],
+                  "confirm": {
+                    "require_type_confirm": true,
+                    "confirm_label": "Type the pool name to confirm expansion",
+                    "confirm_key": "confirm"
+                  },
+                  "button_label": "Add Vdev",
+                  "button_variant": "danger"
+                }
+              },
+              {
+                "id": "offline-device",
+                "label": "Offline Device",
+                "icon": "power-off",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/devices/offline",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "offline_device" }
+                  }
+                },
+                "form": {
+                  "title": "Offline Device",
+                  "show_command": true,
+                  "fields": [
+                    {
+                      "key": "pool",
+                      "label": "Pool",
+                      "type": "select",
+                      "options_from": "/api/pools",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "device",
+                      "label": "Device",
+                      "type": "text",
+                      "required": true,
+                      "placeholder": "e.g. sda",
+                      "hint": "The device name as shown in pool topology. This will reduce redundancy while offline."
+                    }
+                  ],
+                  "button_label": "Offline Device"
+                }
+              },
+              {
+                "id": "online-device",
+                "label": "Online Device",
+                "icon": "power",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/devices/online",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "online_device" }
+                  }
+                },
+                "form": {
+                  "title": "Online Device",
+                  "show_command": true,
+                  "fields": [
+                    {
+                      "key": "pool",
+                      "label": "Pool",
+                      "type": "select",
+                      "options_from": "/api/pools",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "device",
+                      "label": "Device",
+                      "type": "text",
+                      "required": true,
+                      "placeholder": "e.g. sda",
+                      "hint": "Bring a previously offlined device back into the pool"
+                    }
+                  ],
+                  "button_label": "Online Device"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "available-disks",
+          "title": "Available Disks",
+          "description": "Disks not currently used by any ZFS pool. These can be used for device replacement or pool expansion.",
+          "config": {
+            "source": "/api/disks",
+            "columns": [
+              { "key": "name",   "label": "Name",   "sortable": true },
+              { "key": "path",   "label": "Path",   "sortable": false },
+              { "key": "size",   "label": "Size",   "sortable": true, "format": "bytes" },
+              { "key": "model",  "label": "Model",  "sortable": true },
+              { "key": "serial", "label": "Serial", "sortable": true },
+              { "key": "type",   "label": "Type",   "sortable": true }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "name", "direction": "asc" }
           }
         }
       ]

@@ -91,6 +91,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/scrub/cancel", s.proxyToAgent)
 	s.mux.HandleFunc("POST /api/preview", s.proxyToAgent)
 
+	// Phase 4 — disk & pool operations proxy (routes to agent)
+	s.mux.HandleFunc("GET /api/disks", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/pool/replace", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/pool/add-vdev", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/devices/offline", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/devices/online", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/pool/clear", s.proxyToAgent)
+
 	// Phase 3 — scheduled tasks proxy (routes to agent)
 	s.mux.HandleFunc("GET /api/tasks", s.proxyToAgent)
 	s.mux.HandleFunc("POST /api/tasks", s.proxyToAgent)

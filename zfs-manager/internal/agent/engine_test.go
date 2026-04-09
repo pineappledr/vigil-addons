@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestBuildReplaceCommand(t *testing.T) {
 	got := BuildReplaceCommand("zpool", "tank", "sda", "/dev/sdb")
@@ -125,6 +128,117 @@ func TestBuildDestroyDatasetCommand(t *testing.T) {
 	want = "zfs destroy -r tank/data"
 	if got != want {
 		t.Errorf("recursive: got %q, want %q", got, want)
+	}
+}
+
+// --- Phase 4: Preview warning helpers ---
+
+func TestCheckVdevTypeMatch_Matches(t *testing.T) {
+	existing := []VdevInfo{
+		{Name: "mirror-0", Type: "mirror"},
+		{Name: "mirror-1", Type: "mirror"},
+	}
+	if w := CheckVdevTypeMatch(existing, "mirror"); len(w) != 0 {
+		t.Errorf("expected no warnings when types match, got %v", w)
+	}
+}
+
+func TestCheckVdevTypeMatch_Mismatch(t *testing.T) {
+	existing := []VdevInfo{{Name: "mirror-0", Type: "mirror"}}
+	w := CheckVdevTypeMatch(existing, "raidz1")
+	if len(w) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(w), w)
+	}
+	if !strings.Contains(w[0], "mirror") || !strings.Contains(w[0], "raidz1") {
+		t.Errorf("warning should mention existing and proposed types, got %q", w[0])
+	}
+}
+
+func TestCheckVdevTypeMatch_StripeNormalized(t *testing.T) {
+	// "stripe" from the UI maps to "disk" internally — a pool of single-disk
+	// vdevs should match a "stripe" proposal and produce no warnings.
+	existing := []VdevInfo{{Name: "sda", Type: "disk"}}
+	if w := CheckVdevTypeMatch(existing, "stripe"); len(w) != 0 {
+		t.Errorf("stripe proposal against disk-type pool: got %v, want no warnings", w)
+	}
+	if w := CheckVdevTypeMatch(existing, ""); len(w) != 0 {
+		t.Errorf("empty proposal (stripe default) against disk-type pool: got %v, want no warnings", w)
+	}
+}
+
+func TestCheckVdevTypeMatch_IgnoresSpecialVdevs(t *testing.T) {
+	// Cache, log, spare, and special vdevs legitimately coexist with any
+	// data vdev type and should not count toward the match check.
+	existing := []VdevInfo{
+		{Name: "mirror-0", Type: "mirror"},
+		{Name: "cache", Type: "cache"},
+		{Name: "logs", Type: "log"},
+		{Name: "spares", Type: "spare"},
+	}
+	if w := CheckVdevTypeMatch(existing, "mirror"); len(w) != 0 {
+		t.Errorf("mirror against mirror+cache+log+spare: got %v, want no warnings", w)
+	}
+}
+
+func TestCheckVdevTypeMatch_EmptyPool(t *testing.T) {
+	// A pool with no data vdevs (e.g. couldn't parse status) should not
+	// generate a warning — we don't know what's there.
+	if w := CheckVdevTypeMatch(nil, "mirror"); len(w) != 0 {
+		t.Errorf("empty pool: got %v, want no warnings", w)
+	}
+}
+
+func TestCheckReplaceSize_LargerOK(t *testing.T) {
+	if w := CheckReplaceSize(1_000_000_000, 2_000_000_000, "sda", "sdb"); len(w) != 0 {
+		t.Errorf("larger replacement should not warn, got %v", w)
+	}
+}
+
+func TestCheckReplaceSize_EqualOK(t *testing.T) {
+	if w := CheckReplaceSize(1_000_000_000, 1_000_000_000, "sda", "sdb"); len(w) != 0 {
+		t.Errorf("equal replacement should not warn, got %v", w)
+	}
+}
+
+func TestCheckReplaceSize_SmallerWarns(t *testing.T) {
+	w := CheckReplaceSize(2*1024*1024*1024*1024, 1*1024*1024*1024*1024, "sda", "sdb")
+	if len(w) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(w), w)
+	}
+	if !strings.Contains(w[0], "sda") || !strings.Contains(w[0], "sdb") {
+		t.Errorf("warning should name both devices, got %q", w[0])
+	}
+	if !strings.Contains(w[0], "TiB") {
+		t.Errorf("warning should render human sizes, got %q", w[0])
+	}
+}
+
+func TestCheckReplaceSize_UnknownSizeSkipped(t *testing.T) {
+	// Either side being zero means lsblk couldn't resolve it — skip
+	// the check rather than emit a misleading warning.
+	if w := CheckReplaceSize(0, 1_000_000_000, "sda", "sdb"); len(w) != 0 {
+		t.Errorf("unknown old size: got %v, want no warnings", w)
+	}
+	if w := CheckReplaceSize(1_000_000_000, 0, "sda", "sdb"); len(w) != 0 {
+		t.Errorf("unknown new size: got %v, want no warnings", w)
+	}
+}
+
+func TestHumanBytes(t *testing.T) {
+	tests := []struct {
+		in   uint64
+		want string
+	}{
+		{512, "512 B"},
+		{2048, "2.00 KiB"},
+		{2 * 1024 * 1024, "2.00 MiB"},
+		{1_500_000_000, "1.40 GiB"},
+		{2 * 1024 * 1024 * 1024 * 1024, "2.00 TiB"},
+	}
+	for _, tt := range tests {
+		if got := humanBytes(tt.in); got != tt.want {
+			t.Errorf("humanBytes(%d) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }
 

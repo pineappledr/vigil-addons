@@ -523,7 +523,10 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var cmd string
+	var (
+		cmd      string
+		warnings []string
+	)
 	switch req.Action {
 	case "create_dataset":
 		props := make(map[string]string)
@@ -581,9 +584,11 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 
 	case "replace_device":
 		cmd = BuildReplaceCommand(s.engine.zpoolPath, req.Pool, req.OldDevice, req.NewDevice)
+		warnings = append(warnings, s.previewReplaceWarnings(r.Context(), req)...)
 
 	case "add_vdev":
 		cmd = BuildAddVdevCommand(s.engine.zpoolPath, req.Pool, req.VdevType, req.Devices)
+		warnings = append(warnings, s.previewAddVdevWarnings(r.Context(), req)...)
 
 	case "offline_device":
 		cmd = BuildOfflineCommand(s.engine.zpoolPath, req.Pool, req.Device)
@@ -599,7 +604,53 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"command": cmd})
+	resp := previewResponse{Command: cmd, Warnings: warnings}
+	addonutil.WriteJSON(w, http.StatusOK, resp)
+}
+
+// previewResponse is the JSON shape returned by /api/preview. Warnings is
+// omitted when empty to keep the wire format identical to previous versions
+// for callers that don't care about warnings.
+type previewResponse struct {
+	Command  string   `json:"command"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// previewReplaceWarnings collects non-fatal warnings for a replace_device
+// preview: mainly the "replacement drive is smaller than the original" check.
+// Warnings are best-effort — any lookup failure is logged and skipped.
+func (s *Server) previewReplaceWarnings(ctx context.Context, req previewRequest) []string {
+	if req.OldDevice == "" || req.NewDevice == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	oldSize := s.engine.DeviceSize(ctx, req.OldDevice)
+	newSize := s.engine.DeviceSize(ctx, req.NewDevice)
+	return CheckReplaceSize(oldSize, newSize, req.OldDevice, req.NewDevice)
+}
+
+// previewAddVdevWarnings collects non-fatal warnings for an add_vdev preview:
+// mainly the "proposed vdev type doesn't match existing pool topology" check.
+func (s *Server) previewAddVdevWarnings(ctx context.Context, req previewRequest) []string {
+	if req.Pool == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	pools, err := s.engine.ListPools(ctx)
+	if err != nil {
+		s.logger.Debug("preview add_vdev: list pools failed", "error", err)
+		return nil
+	}
+	for _, p := range pools {
+		if p.Name == req.Pool {
+			return CheckVdevTypeMatch(p.Vdevs, req.VdevType)
+		}
+	}
+	return nil
 }
 
 // --- Phase 4: Disk & Pool Operations ---

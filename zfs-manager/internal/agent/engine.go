@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -574,6 +575,141 @@ func BuildClearCommand(zpoolPath, pool, device string) string {
 		cmd += " " + device
 	}
 	return cmd
+}
+
+// --- Phase 4: Preview Warnings ---
+
+// normalizeVdevType maps user-facing type strings into the internal form used
+// by parseVdevTopology (which reports single-disk vdevs as "disk").
+func normalizeVdevType(t string) string {
+	t = strings.ToLower(strings.TrimSpace(t))
+	if t == "" || t == "stripe" {
+		return "disk"
+	}
+	return t
+}
+
+// displayVdevType renders an internal vdev type in user-facing form.
+func displayVdevType(t string) string {
+	if t == "disk" {
+		return "stripe"
+	}
+	return t
+}
+
+// CheckVdevTypeMatch compares a proposed vdev type against the data vdev types
+// already present in a pool and returns human-readable warnings when the
+// proposed type doesn't match. Special vdevs (cache, log, spare, special) are
+// ignored because they are legitimately mixed with data vdevs.
+//
+// Returns nil (no warnings) when the pool has no data vdevs, when the proposed
+// type matches at least one existing data vdev, or when existing data vdevs
+// are already mixed (user is on their own in that case).
+func CheckVdevTypeMatch(existing []VdevInfo, proposed string) []string {
+	normalized := normalizeVdevType(proposed)
+
+	seen := make(map[string]bool)
+	for _, v := range existing {
+		switch v.Type {
+		case "cache", "log", "spare", "special":
+			continue
+		}
+		seen[v.Type] = true
+	}
+
+	if len(seen) == 0 {
+		return nil
+	}
+	if seen[normalized] {
+		return nil
+	}
+
+	existingTypes := make([]string, 0, len(seen))
+	for t := range seen {
+		existingTypes = append(existingTypes, displayVdevType(t))
+	}
+	sort.Strings(existingTypes)
+
+	return []string{
+		fmt.Sprintf(
+			"This pool currently uses %s vdev(s), but you're adding a %s vdev. Mixing vdev types is unusual and not recommended — losing any single vdev destroys the entire pool, so a weaker vdev reduces the whole pool's redundancy.",
+			strings.Join(existingTypes, "/"),
+			displayVdevType(normalized),
+		),
+	}
+}
+
+// CheckReplaceSize warns when the replacement device is smaller than the
+// device being replaced. ZFS will refuse the replace in that case, so this
+// surfaces the problem up-front before the user confirms.
+//
+// Accepts oldSize == 0 as "unknown" and skips the check — it's better to
+// stay silent than to emit a misleading warning when lsblk couldn't resolve
+// the device (e.g. a by-id path that no longer exists).
+func CheckReplaceSize(oldSize, newSize uint64, oldDevice, newDevice string) []string {
+	if oldSize == 0 || newSize == 0 {
+		return nil
+	}
+	if newSize >= oldSize {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf(
+			"Replacement device %s is smaller than %s (%s vs %s). ZFS will refuse this replace. Use a device of equal or larger size.",
+			newDevice, oldDevice,
+			humanBytes(newSize), humanBytes(oldSize),
+		),
+	}
+}
+
+// humanBytes renders a byte count as a short human-readable string.
+func humanBytes(n uint64) string {
+	const (
+		KiB = 1024
+		MiB = 1024 * KiB
+		GiB = 1024 * MiB
+		TiB = 1024 * GiB
+		PiB = 1024 * TiB
+	)
+	switch {
+	case n >= PiB:
+		return fmt.Sprintf("%.2f PiB", float64(n)/float64(PiB))
+	case n >= TiB:
+		return fmt.Sprintf("%.2f TiB", float64(n)/float64(TiB))
+	case n >= GiB:
+		return fmt.Sprintf("%.2f GiB", float64(n)/float64(GiB))
+	case n >= MiB:
+		return fmt.Sprintf("%.2f MiB", float64(n)/float64(MiB))
+	case n >= KiB:
+		return fmt.Sprintf("%.2f KiB", float64(n)/float64(KiB))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+// DeviceSize returns the raw byte size of a block device. Accepts short names
+// ("sda") or absolute paths ("/dev/sda", "/dev/disk/by-id/..."). Returns 0
+// without an error when lsblk fails to resolve the device — callers use that
+// as "unknown" rather than treating it as fatal, since warnings must be
+// best-effort.
+func (e *Engine) DeviceSize(ctx context.Context, device string) uint64 {
+	if device == "" {
+		return 0
+	}
+	path := device
+	if !strings.HasPrefix(path, "/") {
+		path = "/dev/" + path
+	}
+	out, err := e.run(ctx, "lsblk", "-bndo", "SIZE", path)
+	if err != nil {
+		e.logger.Debug("lsblk size lookup failed", "device", device, "error", err)
+		return 0
+	}
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return 0
+	}
+	return parseUint64(fields[0])
 }
 
 // --- Helpers ---

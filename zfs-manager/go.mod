@@ -1,6 +1,6 @@
 module github.com/pineappledr/vigil-addons/zfs-manager
 
-go 1.26.1
+go 1.26.2
 
 replace (
 	github.com/pineappledr/vigil-addons/shared/addonutil => ../shared/addonutil

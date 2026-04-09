@@ -20,7 +20,7 @@ env:
   REGISTRY: ghcr.io
   MANAGER_IMAGE: ghcr.io/pineappledr/vigil-addons-zfs-manager
   AGENT_IMAGE: ghcr.io/pineappledr/vigil-addons-zfs-agent
-  GO_VERSION: '1.26.1'
+  GO_VERSION: '1.26.2'
   WORKDIR: zfs-manager
 
 jobs:

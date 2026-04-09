@@ -1,6 +1,6 @@
 module github.com/pineappledr/vigil-addons/snapraid
 
-go 1.26.1
+go 1.26.2
 
 require (
 	github.com/pineappledr/vigil-addons/shared/addonutil v0.0.0

@@ -20,7 +20,7 @@ env:
   REGISTRY: ghcr.io
   HUB_IMAGE: ghcr.io/pineappledr/vigil-addons-snapraid-hub
   AGENT_IMAGE: ghcr.io/pineappledr/vigil-addons-snapraid-agent
-  GO_VERSION: '1.26.1'
+  GO_VERSION: '1.26.2'
   WORKDIR: snapraid
 
 jobs:

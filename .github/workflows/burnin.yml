@@ -21,7 +21,7 @@ env:
   HUB_IMAGE: ghcr.io/pineappledr/vigil-addons-burnin-hub
   AGENT_IMAGE: ghcr.io/pineappledr/vigil-addons-burnin-agent
   AGENT_IMAGE_DEBIAN: ghcr.io/pineappledr/vigil-addons-burnin-agent-debian
-  GO_VERSION: '1.26.1'
+  GO_VERSION: '1.26.2'
   WORKDIR: burn-in
 
 jobs:

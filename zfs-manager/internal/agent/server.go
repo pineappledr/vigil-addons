@@ -717,6 +717,17 @@ func (s *Server) handleReplaceDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.collector != nil {
+		now := time.Now().UTC()
+		s.collector.EmitEvent(AgentEvent{
+			ID:        fmt.Sprintf("replace-%s-%d", req.Pool, now.UnixNano()),
+			Type:      "drive_replacement_started",
+			Severity:  "warning",
+			Message:   fmt.Sprintf("Drive replacement started: %s → %s on pool %s", req.OldDevice, req.NewDevice, req.Pool),
+			Timestamp: now.Format(time.RFC3339),
+		})
+	}
+
 	go s.refreshAndFlush()
 	addonutil.WriteJSON(w, http.StatusOK, result)
 }

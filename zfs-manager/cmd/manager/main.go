@@ -67,7 +67,7 @@ func main() {
 	}
 
 	upstreamCh := make(chan []byte, 256)
-	aggregator := manager.NewAggregator(upstreamCh, logger)
+	aggregator := manager.NewAggregator(registry, upstreamCh, logger)
 	srv := manager.NewServer(cfg, registry, aggregator, psk, logger)
 
 	addr := fmt.Sprintf(":%d", cfg.Listen.Port)

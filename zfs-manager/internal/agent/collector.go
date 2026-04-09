@@ -17,6 +17,19 @@ type TelemetryPayload struct {
 	Datasets     []DatasetInfo  `json:"datasets"`
 	Snapshots    []SnapshotInfo `json:"snapshots"`
 	Capabilities Capabilities   `json:"capabilities"`
+	LastEvent    *AgentEvent    `json:"last_event,omitempty"`
+}
+
+// AgentEvent is a single agent-side event surfaced to the hub for upstream
+// notification dispatch. The hub deduplicates by ID, so the agent can keep
+// the same event in subsequent telemetry frames without producing duplicate
+// notifications.
+type AgentEvent struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Severity  string `json:"severity"`
+	Message   string `json:"message"`
+	Timestamp string `json:"timestamp"`
 }
 
 // Collector periodically gathers ZFS state and caches it for telemetry.
@@ -28,6 +41,7 @@ type Collector struct {
 	pools     []PoolInfo
 	datasets  []DatasetInfo
 	snapshots []SnapshotInfo
+	lastEvent *AgentEvent
 	logger    *slog.Logger
 
 	// flushCh signals the hub forwarder to send an immediate telemetry frame.
@@ -56,6 +70,17 @@ func (c *Collector) RequestFlush() {
 	case c.flushCh <- struct{}{}:
 	default:
 	}
+}
+
+// EmitEvent stores a one-off agent event for inclusion in the next telemetry
+// frame and immediately requests a flush so the hub sees it without waiting
+// for the next periodic tick. The event remains in subsequent payloads — the
+// hub deduplicates by ID, so callers don't need to clear it.
+func (c *Collector) EmitEvent(event AgentEvent) {
+	c.mu.Lock()
+	c.lastEvent = &event
+	c.mu.Unlock()
+	c.RequestFlush()
 }
 
 // Refresh queries all ZFS state and updates the cache.
@@ -135,6 +160,7 @@ func (c *Collector) Build() *TelemetryPayload {
 		Datasets:     datasets,
 		Snapshots:    snapshots,
 		Capabilities: c.engine.Capabilities(),
+		LastEvent:    c.lastEvent,
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -13,11 +14,24 @@ import (
 	"time"
 )
 
+// ErrCapabilityUnavailable is returned by Engine methods when the host is
+// missing an optional binary the operation depends on (e.g. ledctl for the
+// drive-bay LED identification feature).
+var ErrCapabilityUnavailable = errors.New("capability not available on this host")
+
 // Engine wraps ZFS CLI commands.
 type Engine struct {
-	zpoolPath string
-	zfsPath   string
-	logger    *slog.Logger
+	zpoolPath  string
+	zfsPath    string
+	ledctlPath string
+	logger     *slog.Logger
+}
+
+// Capabilities reports optional features the engine can perform based on which
+// host binaries were found at startup. The set is fixed for the engine's
+// lifetime — restart the agent if the host gains a new tool.
+type Capabilities struct {
+	LEDIdentify bool `json:"led_identify"`
 }
 
 // NewEngine creates an Engine with the given binary paths.
@@ -29,7 +43,23 @@ func NewEngine(zpoolPath, zfsPath string, logger *slog.Logger) *Engine {
 	if zfsPath == "" {
 		zfsPath = "zfs"
 	}
-	return &Engine{zpoolPath: zpoolPath, zfsPath: zfsPath, logger: logger}
+	// Optional: ledctl powers the drive-bay LED identification feature. It is
+	// not present on every host (no enclosure, no SES backplane, container
+	// without /sys access), so a missing binary is not an error.
+	ledctlPath, _ := exec.LookPath("ledctl")
+	return &Engine{
+		zpoolPath:  zpoolPath,
+		zfsPath:    zfsPath,
+		ledctlPath: ledctlPath,
+		logger:     logger,
+	}
+}
+
+// Capabilities returns the optional-feature flags probed at engine creation.
+func (e *Engine) Capabilities() Capabilities {
+	return Capabilities{
+		LEDIdentify: e.ledctlPath != "",
+	}
 }
 
 // --- Read Operations (telemetry) ---
@@ -546,6 +576,25 @@ func (e *Engine) ClearErrors(ctx context.Context, pool, device string) (*Command
 	return result, nil
 }
 
+// IdentifyDevice toggles the drive-bay identification LED for a device using
+// ledctl. mode is "locate" (LED on) or "off" (LED back to normal).
+// Returns ErrCapabilityUnavailable if ledctl was not found at engine startup.
+func (e *Engine) IdentifyDevice(ctx context.Context, device, mode string) (*CommandResult, error) {
+	if e.ledctlPath == "" {
+		return nil, ErrCapabilityUnavailable
+	}
+	arg := buildLedctlArg(device, mode)
+	cmd := e.ledctlPath + " " + arg
+	out, err := e.run(ctx, e.ledctlPath, arg)
+	result := &CommandResult{Command: cmd, Output: out}
+	if err != nil {
+		result.ExitCode = exitCode(err)
+		result.Error = err.Error()
+		return result, err
+	}
+	return result, nil
+}
+
 // --- Phase 4: Command Preview Builders ---
 
 func BuildReplaceCommand(zpoolPath, pool, oldDevice, newDevice string) string {
@@ -575,6 +624,27 @@ func BuildClearCommand(zpoolPath, pool, device string) string {
 		cmd += " " + device
 	}
 	return cmd
+}
+
+// BuildIdentifyCommand returns the ledctl invocation that toggles a drive-bay
+// identification LED. mode is "locate" (light the bay) or "off" (return the
+// bay to normal). Device names without a leading "/" are prefixed with /dev/.
+func BuildIdentifyCommand(ledctlPath, device, mode string) string {
+	return ledctlPath + " " + buildLedctlArg(device, mode)
+}
+
+// buildLedctlArg renders the ledctl single-argument form ("locate=/dev/sda" or
+// "normal=/dev/sda") used by both BuildIdentifyCommand and IdentifyDevice.
+func buildLedctlArg(device, mode string) string {
+	verb := "locate"
+	if mode == "off" {
+		verb = "normal"
+	}
+	path := device
+	if !strings.HasPrefix(path, "/") {
+		path = "/dev/" + path
+	}
+	return verb + "=" + path
 }
 
 // --- Phase 4: Preview Warnings ---

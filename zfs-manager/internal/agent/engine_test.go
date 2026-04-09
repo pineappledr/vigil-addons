@@ -1,9 +1,17 @@
 package agent
 
 import (
+	"context"
+	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 )
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 func TestBuildReplaceCommand(t *testing.T) {
 	got := BuildReplaceCommand("zpool", "tank", "sda", "/dev/sdb")
@@ -66,6 +74,57 @@ func TestBuildClearCommand_Device(t *testing.T) {
 	want := "zpool clear tank sda"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestBuildIdentifyCommand_Locate(t *testing.T) {
+	got := BuildIdentifyCommand("ledctl", "sda", "locate")
+	want := "ledctl locate=/dev/sda"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestBuildIdentifyCommand_Off(t *testing.T) {
+	got := BuildIdentifyCommand("ledctl", "sda", "off")
+	want := "ledctl normal=/dev/sda"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestBuildIdentifyCommand_AbsolutePath(t *testing.T) {
+	// Devices that already include a full path should be passed through
+	// unchanged — don't double-prefix /dev/.
+	got := BuildIdentifyCommand("/usr/sbin/ledctl", "/dev/disk/by-id/wwn-0x5000", "locate")
+	want := "/usr/sbin/ledctl locate=/dev/disk/by-id/wwn-0x5000"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestEngineCapabilities_NoLedctl(t *testing.T) {
+	e := &Engine{ledctlPath: ""}
+	if got := e.Capabilities().LEDIdentify; got {
+		t.Errorf("LEDIdentify = %v, want false when ledctl missing", got)
+	}
+}
+
+func TestEngineCapabilities_LedctlPresent(t *testing.T) {
+	e := &Engine{ledctlPath: "/usr/sbin/ledctl"}
+	if got := e.Capabilities().LEDIdentify; !got {
+		t.Errorf("LEDIdentify = %v, want true when ledctl path is set", got)
+	}
+}
+
+func TestIdentifyDevice_CapabilityUnavailable(t *testing.T) {
+	// Engine with no ledctl path must surface ErrCapabilityUnavailable
+	// before attempting any exec, so this is safe to call without a host
+	// binary.
+	e := &Engine{ledctlPath: "", logger: discardLogger()}
+	_, err := e.IdentifyDevice(context.Background(), "sda", "locate")
+	if !errors.Is(err, ErrCapabilityUnavailable) {
+		t.Errorf("err = %v, want ErrCapabilityUnavailable", err)
 	}
 }
 

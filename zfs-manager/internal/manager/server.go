@@ -99,6 +99,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/pool/add-vdev", s.proxyToAgent)
 	s.mux.HandleFunc("POST /api/devices/offline", s.proxyToAgent)
 	s.mux.HandleFunc("POST /api/devices/online", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/devices/identify", s.proxyToAgent)
 	s.mux.HandleFunc("POST /api/pool/clear", s.proxyToAgent)
 
 	// Phase 3 — scheduled tasks proxy (routes to agent)

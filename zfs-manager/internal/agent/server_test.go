@@ -494,6 +494,29 @@ func TestClearErrors_MissingPool(t *testing.T) {
 	}
 }
 
+func TestIdentifyDevice_MissingDevice(t *testing.T) {
+	srv, _, _ := testSetup(t)
+
+	rr := doRequest(t, srv.mux, "POST", "/api/devices/identify", map[string]any{
+		"mode": "locate",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+func TestIdentifyDevice_InvalidMode(t *testing.T) {
+	srv, _, _ := testSetup(t)
+
+	rr := doRequest(t, srv.mux, "POST", "/api/devices/identify", map[string]any{
+		"device": "sda",
+		"mode":   "blink",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
 func itoa(n int64) string {
 	return fmt.Sprintf("%d", n)
 }

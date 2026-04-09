@@ -792,6 +792,48 @@
                   ],
                   "button_label": "Online Device"
                 }
+              },
+              {
+                "id": "identify-device",
+                "label": "Identify Drive (LED)",
+                "icon": "lightbulb",
+                "safety_tier": "green",
+                "capability": "led_identify",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/devices/identify",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "identify_device" }
+                  }
+                },
+                "form": {
+                  "title": "Identify Drive Bay LED",
+                  "show_command": true,
+                  "description": "Use ledctl to blink the drive bay LED so you can locate the physical drive in the chassis. Requires an SES-capable backplane and ledctl on the agent host.",
+                  "fields": [
+                    {
+                      "key": "device",
+                      "label": "Device",
+                      "type": "text",
+                      "required": true,
+                      "placeholder": "e.g. sda",
+                      "hint": "The device name as shown in pool topology — short name or absolute path"
+                    },
+                    {
+                      "key": "mode",
+                      "label": "Action",
+                      "type": "select",
+                      "options": [
+                        { "value": "locate", "label": "Locate — turn the drive bay LED on" },
+                        { "value": "off",    "label": "Off — return the drive bay LED to normal" }
+                      ],
+                      "default": "locate",
+                      "required": true
+                    }
+                  ],
+                  "button_label": "Identify"
+                }
               }
             ]
           }

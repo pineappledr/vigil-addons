@@ -10,12 +10,13 @@ import (
 
 // TelemetryPayload is the full telemetry frame transmitted to the Hub.
 type TelemetryPayload struct {
-	AgentID   string         `json:"agent_id"`
-	Hostname  string         `json:"hostname"`
-	Timestamp time.Time      `json:"timestamp"`
-	Pools     []PoolInfo     `json:"pools"`
-	Datasets  []DatasetInfo  `json:"datasets"`
-	Snapshots []SnapshotInfo `json:"snapshots"`
+	AgentID      string         `json:"agent_id"`
+	Hostname     string         `json:"hostname"`
+	Timestamp    time.Time      `json:"timestamp"`
+	Pools        []PoolInfo     `json:"pools"`
+	Datasets     []DatasetInfo  `json:"datasets"`
+	Snapshots    []SnapshotInfo `json:"snapshots"`
+	Capabilities Capabilities   `json:"capabilities"`
 }
 
 // Collector periodically gathers ZFS state and caches it for telemetry.
@@ -127,12 +128,13 @@ func (c *Collector) Build() *TelemetryPayload {
 	}
 
 	return &TelemetryPayload{
-		AgentID:   c.agentID,
-		Hostname:  c.hostname,
-		Timestamp: time.Now().UTC(),
-		Pools:     pools,
-		Datasets:  datasets,
-		Snapshots: snapshots,
+		AgentID:      c.agentID,
+		Hostname:     c.hostname,
+		Timestamp:    time.Now().UTC(),
+		Pools:        pools,
+		Datasets:     datasets,
+		Snapshots:    snapshots,
+		Capabilities: c.engine.Capabilities(),
 	}
 }
 

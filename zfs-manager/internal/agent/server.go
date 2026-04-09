@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -81,6 +82,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/pool/add-vdev", s.handleAddVdev)
 	s.mux.HandleFunc("POST /api/devices/offline", s.handleOfflineDevice)
 	s.mux.HandleFunc("POST /api/devices/online", s.handleOnlineDevice)
+	s.mux.HandleFunc("POST /api/devices/identify", s.handleIdentifyDevice)
 	s.mux.HandleFunc("POST /api/pool/clear", s.handleClearErrors)
 
 	// Phase 3 — Scheduled Tasks
@@ -514,6 +516,7 @@ type previewRequest struct {
 	Device    string   `json:"device,omitempty"`
 	VdevType  string   `json:"vdev_type,omitempty"`
 	Devices   []string `json:"devices,omitempty"`
+	Mode      string   `json:"mode,omitempty"`
 }
 
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
@@ -598,6 +601,16 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 
 	case "clear_errors":
 		cmd = BuildClearCommand(s.engine.zpoolPath, req.Pool, req.Device)
+
+	case "identify_device":
+		ledctlPath := s.engine.ledctlPath
+		if ledctlPath == "" {
+			ledctlPath = "ledctl"
+		}
+		cmd = BuildIdentifyCommand(ledctlPath, req.Device, req.Mode)
+		if s.engine.ledctlPath == "" {
+			warnings = append(warnings, "ledctl was not found on this host — drive-bay LED identification is unavailable. Install ledmon (the ledctl package) on the agent host to enable this action.")
+		}
 
 	default:
 		addonutil.WriteError(w, http.StatusBadRequest, "unknown action: "+req.Action)
@@ -802,6 +815,48 @@ func (s *Server) handleOnlineDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go s.refreshAndFlush()
+	addonutil.WriteJSON(w, http.StatusOK, result)
+}
+
+type identifyDeviceRequest struct {
+	Device string `json:"device"`
+	Mode   string `json:"mode,omitempty"` // "locate" (default) or "off"
+}
+
+func (s *Server) handleIdentifyDevice(w http.ResponseWriter, r *http.Request) {
+	var req identifyDeviceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		addonutil.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Device == "" {
+		addonutil.WriteError(w, http.StatusBadRequest, "device is required")
+		return
+	}
+	if req.Mode == "" {
+		req.Mode = "locate"
+	}
+	if req.Mode != "locate" && req.Mode != "off" {
+		addonutil.WriteError(w, http.StatusBadRequest, "mode must be 'locate' or 'off'")
+		return
+	}
+
+	s.logger.Info("identifying device", "device", req.Device, "mode", req.Mode)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	result, err := s.engine.IdentifyDevice(ctx, req.Device, req.Mode)
+	if err != nil {
+		if errors.Is(err, ErrCapabilityUnavailable) {
+			addonutil.WriteError(w, http.StatusNotImplemented, "ledctl is not installed on this agent host — drive-bay LED identification is unavailable")
+			return
+		}
+		s.logger.Error("identify device failed", "device", req.Device, "error", err)
+		addonutil.WriteJSON(w, http.StatusInternalServerError, result)
+		return
+	}
+
 	addonutil.WriteJSON(w, http.StatusOK, result)
 }
 

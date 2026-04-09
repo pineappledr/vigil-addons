@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -291,8 +293,8 @@ func (s *Server) proxyToAgent(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	// #nosec G107 -- targetURL is built from a PSK-authenticated agent registry
-	// entry whose scheme is restricted to http/https above.
+	// #nosec G107 G704 -- targetURL is built from a PSK-authenticated agent
+	// registry entry whose scheme is restricted to http/https above.
 	proxyReq, err := http.NewRequestWithContext(ctx, r.Method, targetURL, bytes.NewReader(body))
 	if err != nil {
 		addonutil.WriteError(w, http.StatusInternalServerError, "failed to create proxy request")
@@ -300,7 +302,7 @@ func (s *Server) proxyToAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	proxyReq.Header.Set("Content-Type", "application/json")
 
-	// #nosec G107 -- see targetURL construction above.
+	// #nosec G107 G704 -- see targetURL construction above.
 	resp, err := http.DefaultClient.Do(proxyReq)
 	if err != nil {
 		s.logger.Error("agent proxy failed", "agent_id", agentID, "url", targetURL, "error", err)

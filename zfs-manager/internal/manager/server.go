@@ -269,8 +269,17 @@ func (s *Server) proxyToAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build the upstream URL: agent_address + original path
-	targetURL := strings.TrimRight(entry.Address, "/") + r.URL.Path
+	// Build the upstream URL: parse the agent's advertised address and enforce
+	// an http/https scheme allowlist before appending the original path. The
+	// address is set by PSK-authenticated agents via handleAgentRegister, but
+	// we still validate the scheme as defense in depth against SSRF gadgets.
+	base, err := url.Parse(strings.TrimRight(entry.Address, "/"))
+	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
+		addonutil.WriteError(w, http.StatusBadGateway, "agent has invalid advertise address")
+		return
+	}
+	base.Path = path.Join(base.Path, r.URL.Path)
+	targetURL := base.String()
 
 	// Read the original body
 	body, err := io.ReadAll(r.Body)
@@ -282,6 +291,8 @@ func (s *Server) proxyToAgent(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
+	// #nosec G107 -- targetURL is built from a PSK-authenticated agent registry
+	// entry whose scheme is restricted to http/https above.
 	proxyReq, err := http.NewRequestWithContext(ctx, r.Method, targetURL, bytes.NewReader(body))
 	if err != nil {
 		addonutil.WriteError(w, http.StatusInternalServerError, "failed to create proxy request")
@@ -289,6 +300,7 @@ func (s *Server) proxyToAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	proxyReq.Header.Set("Content-Type", "application/json")
 
+	// #nosec G107 -- see targetURL construction above.
 	resp, err := http.DefaultClient.Do(proxyReq)
 	if err != nil {
 		s.logger.Error("agent proxy failed", "agent_id", agentID, "url", targetURL, "error", err)

@@ -4,13 +4,10 @@
 *.dll
 *.so
 *.dylib
-# Built binaries (not source dirs)
-agent
-hub
-manager
-!**/cmd/agent/
-!**/cmd/hub/
-!**/cmd/manager/
+# Built binaries at addon roots (anchored so internal/agent, cmd/agent, etc. are not matched)
+/*/agent
+/*/hub
+/*/manager
 
 # Build output
 burn-in/dist/

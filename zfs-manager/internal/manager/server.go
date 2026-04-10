@@ -111,6 +111,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/jobs", s.proxyToAgent)
 	s.mux.HandleFunc("GET /api/retention", s.proxyToAgent)
 	s.mux.HandleFunc("POST /api/retention/cleanup", s.proxyToAgent)
+
+	// Phase 5 — replication proxy (routes to agent)
+	s.mux.HandleFunc("GET /api/replication/tasks", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/replication/tasks", s.proxyToAgent)
+	s.mux.HandleFunc("PUT /api/replication/tasks/{id}", s.proxyToAgent)
+	s.mux.HandleFunc("DELETE /api/replication/tasks/{id}", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/replication/tasks/{id}/run", s.proxyToAgent)
+	s.mux.HandleFunc("GET /api/replication/tasks/{id}/history", s.proxyToAgent)
 }
 
 // resolveAgentID returns the agent_id from the query string, falling back to

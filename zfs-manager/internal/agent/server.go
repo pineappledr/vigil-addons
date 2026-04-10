@@ -94,6 +94,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/jobs", s.handleJobHistory)
 	s.mux.HandleFunc("GET /api/retention", s.handleRetentionStats)
 	s.mux.HandleFunc("POST /api/retention/cleanup", s.handleRetentionCleanup)
+
+	// Phase 5 — Local Replication
+	s.mux.HandleFunc("GET /api/replication/tasks", s.handleListReplicationTasks)
+	s.mux.HandleFunc("POST /api/replication/tasks", s.handleCreateReplicationTask)
+	s.mux.HandleFunc("PUT /api/replication/tasks/{id}", s.handleUpdateReplicationTask)
+	s.mux.HandleFunc("DELETE /api/replication/tasks/{id}", s.handleDeleteReplicationTask)
+	s.mux.HandleFunc("POST /api/replication/tasks/{id}/run", s.handleRunReplicationTask)
+	s.mux.HandleFunc("GET /api/replication/tasks/{id}/history", s.handleReplicationTaskHistory)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -517,6 +525,9 @@ type previewRequest struct {
 	VdevType  string   `json:"vdev_type,omitempty"`
 	Devices   []string `json:"devices,omitempty"`
 	Mode      string   `json:"mode,omitempty"`
+	// Phase 5 fields
+	DestTarget string `json:"dest_target,omitempty"`
+	BaseSnap   string `json:"base_snap,omitempty"`
 }
 
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
@@ -610,6 +621,16 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		cmd = BuildIdentifyCommand(ledctlPath, req.Device, req.Mode)
 		if s.engine.ledctlPath == "" {
 			warnings = append(warnings, "ledctl was not found on this host — drive-bay LED identification is unavailable. Install ledmon (the ledctl package) on the agent host to enable this action.")
+		}
+
+	case "replication":
+		snap := req.Dataset + "@" + req.Name
+		if req.Name == "" {
+			snap = req.Dataset + "@" + "repl-" + time.Now().UTC().Format("2006-01-02-150405")
+		}
+		cmd = BuildReplicationPipelineCommand(s.engine.zfsPath, snap, req.BaseSnap, req.DestTarget)
+		if req.Dataset == req.DestTarget {
+			warnings = append(warnings, "Source and destination datasets are the same — replication would overwrite itself.")
 		}
 
 	default:

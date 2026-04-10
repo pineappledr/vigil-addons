@@ -128,6 +128,8 @@ func (s *Scheduler) executeTask(ctx context.Context, task agentdb.ScheduledTask)
 		err = s.runSnapshotTask(ctx, task)
 	case "scrub":
 		err = s.runScrubTask(ctx, task)
+	case "replication":
+		err = s.runReplicationTask(ctx, task)
 	default:
 		err = fmt.Errorf("unknown task type: %s", task.TaskType)
 	}
@@ -135,6 +137,21 @@ func (s *Scheduler) executeTask(ctx context.Context, task agentdb.ScheduledTask)
 	if err != nil {
 		s.logger.Error("scheduled task failed", "task_id", task.ID, "error", err)
 		agentdb.CompleteJob(s.db, jobID, "error", err.Error())
+
+		// Emit failure event for replication tasks.
+		if task.TaskType == "replication" {
+			dest := ""
+			if task.DestTarget != nil {
+				dest = *task.DestTarget
+			}
+			s.collector.EmitEvent(agent.AgentEvent{
+				ID:        fmt.Sprintf("repl-fail-%d-%d", task.ID, time.Now().UnixMilli()),
+				Type:      "replication_failed",
+				Severity:  "critical",
+				Message:   fmt.Sprintf("replication %s → %s failed: %s", task.Target, dest, err),
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+			})
+		}
 		return
 	}
 
@@ -175,6 +192,113 @@ func (s *Scheduler) runScrubTask(ctx context.Context, task agentdb.ScheduledTask
 
 	s.logger.Info("scrub started", "pool", task.Target)
 	go s.collector.RequestFlush()
+	return nil
+}
+
+// runReplicationTask performs a local zfs send|receive between two datasets.
+// Flow: resolve common snapshot → create fresh source snapshot → send|receive → update bookkeeping → retention.
+func (s *Scheduler) runReplicationTask(ctx context.Context, task agentdb.ScheduledTask) error {
+	if task.DestTarget == nil || *task.DestTarget == "" {
+		return fmt.Errorf("replication task %d has no dest_target", task.ID)
+	}
+	destTarget := *task.DestTarget
+
+	// 1. Create a fresh snapshot on the source so we always have something to send.
+	snapName := task.Prefix + "-" + time.Now().UTC().Format("2006-01-02-150405")
+	if _, err := s.engine.CreateSnapshot(ctx, task.Target, snapName, task.Recursive); err != nil {
+		return fmt.Errorf("create source snapshot %s@%s: %w", task.Target, snapName, err)
+	}
+	newSnap := task.Target + "@" + snapName
+	s.logger.Info("replication: source snapshot created", "snap", newSnap)
+
+	// 2. Resolve the common snapshot for incremental send.
+	srcSnaps, err := s.engine.ListSnapshotsForDataset(ctx, task.Target)
+	if err != nil {
+		return fmt.Errorf("list source snapshots: %w", err)
+	}
+	dstSnaps, _ := s.engine.ListSnapshotsForDataset(ctx, destTarget)
+
+	baseSnap := agent.FindCommonSnapshot(srcSnaps, dstSnaps)
+	if baseSnap != "" {
+		s.logger.Info("replication: incremental send", "base", baseSnap, "snap", newSnap)
+	} else {
+		s.logger.Info("replication: full send (no common snapshot)", "snap", newSnap)
+	}
+
+	// 3. Run the send|receive pipeline.
+	result, err := s.engine.SendReceiveLocal(ctx, newSnap, baseSnap, destTarget)
+	if err != nil {
+		return fmt.Errorf("send|receive: %w", err)
+	}
+
+	msg := fmt.Sprintf("replicated %s → %s (%s)",
+		task.Target, destTarget, result.Duration.Round(time.Second))
+	s.logger.Info("replication: completed",
+		"snap", newSnap, "incremental", result.Incremental,
+		"duration", result.Duration.Round(time.Second))
+
+	// Emit success event for upstream notifications.
+	s.collector.EmitEvent(agent.AgentEvent{
+		ID:        fmt.Sprintf("repl-%s-%d", task.Target, time.Now().UnixMilli()),
+		Type:      "replication_succeeded",
+		Severity:  "info",
+		Message:   msg,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	// 4. Update last_sent_snap bookkeeping.
+	if err := agentdb.UpdateLastSentSnap(s.db, task.ID, newSnap); err != nil {
+		s.logger.Error("replication: update last_sent_snap failed", "error", err)
+	}
+
+	// 5. Apply retention on source.
+	if task.Retention > 0 {
+		if err := s.applyRetention(ctx, task); err != nil {
+			s.logger.Error("replication: source retention failed", "error", err)
+		}
+	}
+
+	// 6. Apply retention on destination.
+	if task.Retention > 0 {
+		if err := s.applyRetentionOnDataset(ctx, destTarget, task.Prefix, task.Retention); err != nil {
+			s.logger.Error("replication: dest retention failed", "error", err)
+		}
+	}
+
+	go s.collector.RequestFlush()
+	return nil
+}
+
+// applyRetentionOnDataset is a generalized retention helper that works on any
+// dataset — used for the destination side of replication where the dataset
+// differs from task.Target.
+func (s *Scheduler) applyRetentionOnDataset(ctx context.Context, dataset, prefix string, retention int) error {
+	snapshots, err := s.engine.ListSnapshotsForDataset(ctx, dataset)
+	if err != nil {
+		return fmt.Errorf("list snapshots for retention on %s: %w", dataset, err)
+	}
+
+	var matching []agent.SnapshotInfo
+	for _, snap := range snapshots {
+		if strings.HasPrefix(snap.SnapName, prefix+"-") {
+			matching = append(matching, snap)
+		}
+	}
+
+	if len(matching) <= retention {
+		return nil
+	}
+
+	// Already sorted by creation ascending from ListSnapshotsForDataset.
+	toDelete := matching[:len(matching)-retention]
+	for _, snap := range toDelete {
+		result, err := s.engine.DestroySnapshot(ctx, snap.FullName)
+		if err != nil {
+			s.logger.Error("retention delete failed", "snapshot", snap.FullName, "error", err, "output", result.Output)
+			continue
+		}
+		s.logger.Info("retention: deleted snapshot", "snapshot", snap.FullName)
+	}
 	return nil
 }
 

@@ -44,16 +44,19 @@ func testSetup(t *testing.T) (*Server, *mockScheduler, *sql.DB) {
 	}
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS scheduled_tasks (
-			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			task_type   TEXT    NOT NULL,
-			target      TEXT    NOT NULL,
-			schedule    TEXT    NOT NULL,
-			recursive   BOOLEAN NOT NULL DEFAULT 0,
-			enabled     BOOLEAN NOT NULL DEFAULT 1,
-			prefix      TEXT    NOT NULL DEFAULT 'auto',
-			retention   INTEGER NOT NULL DEFAULT 0,
-			created_at  DATETIME NOT NULL DEFAULT (datetime('now')),
-			updated_at  DATETIME NOT NULL DEFAULT (datetime('now'))
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_type        TEXT    NOT NULL,
+			target           TEXT    NOT NULL,
+			schedule         TEXT    NOT NULL,
+			recursive        BOOLEAN NOT NULL DEFAULT 0,
+			enabled          BOOLEAN NOT NULL DEFAULT 1,
+			prefix           TEXT    NOT NULL DEFAULT 'auto',
+			retention        INTEGER NOT NULL DEFAULT 0,
+			created_at       DATETIME NOT NULL DEFAULT (datetime('now')),
+			updated_at       DATETIME NOT NULL DEFAULT (datetime('now')),
+			dest_target      TEXT,
+			replication_mode TEXT,
+			last_sent_snap   TEXT
 		);
 		CREATE TABLE IF NOT EXISTS job_history (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,

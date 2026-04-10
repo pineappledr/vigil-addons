@@ -47,16 +47,20 @@ func Open(dbPath string) (*sql.DB, error) {
 func migrate(db *sql.DB) error {
 	const schema = `
 	CREATE TABLE IF NOT EXISTS scheduled_tasks (
-		id          INTEGER PRIMARY KEY AUTOINCREMENT,
-		task_type   TEXT    NOT NULL,  -- 'snapshot' or 'scrub'
-		target      TEXT    NOT NULL,  -- dataset or pool name
-		schedule    TEXT    NOT NULL,  -- cron expression (5-field)
-		recursive   BOOLEAN NOT NULL DEFAULT 0,
-		enabled     BOOLEAN NOT NULL DEFAULT 1,
-		prefix      TEXT    NOT NULL DEFAULT 'auto',
-		retention   INTEGER NOT NULL DEFAULT 0,  -- max snapshots to keep (0 = unlimited)
-		created_at  DATETIME NOT NULL DEFAULT (datetime('now')),
-		updated_at  DATETIME NOT NULL DEFAULT (datetime('now'))
+		id               INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_type        TEXT    NOT NULL,  -- 'snapshot', 'scrub', or 'replication'
+		target           TEXT    NOT NULL,  -- dataset or pool name
+		schedule         TEXT    NOT NULL,  -- cron expression (5-field)
+		recursive        BOOLEAN NOT NULL DEFAULT 0,
+		enabled          BOOLEAN NOT NULL DEFAULT 1,
+		prefix           TEXT    NOT NULL DEFAULT 'auto',
+		retention        INTEGER NOT NULL DEFAULT 0,  -- max snapshots to keep (0 = unlimited)
+		created_at       DATETIME NOT NULL DEFAULT (datetime('now')),
+		updated_at       DATETIME NOT NULL DEFAULT (datetime('now')),
+		-- Phase 5: replication columns (nullable)
+		dest_target      TEXT,
+		replication_mode TEXT,
+		last_sent_snap   TEXT
 	);
 
 	CREATE TABLE IF NOT EXISTS job_history (
@@ -71,13 +75,26 @@ func migrate(db *sql.DB) error {
 		FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id) ON DELETE SET NULL
 	);
 	`
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Additive migration for existing databases that lack the replication columns.
+	for _, stmt := range []string{
+		`ALTER TABLE scheduled_tasks ADD COLUMN dest_target     TEXT`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN replication_mode TEXT`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN last_sent_snap  TEXT`,
+	} {
+		// Ignore "duplicate column" errors — idempotent.
+		_, _ = db.Exec(stmt)
+	}
+
+	return nil
 }
 
 // --- Scheduled Tasks ---
 
-// ScheduledTask represents a periodic snapshot or scrub task.
+// ScheduledTask represents a periodic snapshot, scrub, or replication task.
 type ScheduledTask struct {
 	ID        int64  `json:"id"`
 	TaskType  string `json:"task_type"`
@@ -89,15 +106,21 @@ type ScheduledTask struct {
 	Retention int    `json:"retention"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
+
+	// Replication-specific fields (nullable — only set when task_type='replication').
+	DestTarget      *string `json:"dest_target,omitempty"`
+	ReplicationMode *string `json:"replication_mode,omitempty"` // "local"
+	LastSentSnap    *string `json:"last_sent_snap,omitempty"`
 }
 
 // InsertTask creates a new scheduled task.
 func InsertTask(db *sql.DB, t ScheduledTask) (int64, error) {
 	now := time.Now().UTC().Format(timeFmt)
 	res, err := db.Exec(
-		`INSERT INTO scheduled_tasks (task_type, target, schedule, recursive, enabled, prefix, retention, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.TaskType, t.Target, t.Schedule, t.Recursive, t.Enabled, t.Prefix, t.Retention, now, now,
+		`INSERT INTO scheduled_tasks (task_type, target, schedule, recursive, enabled, prefix, retention, dest_target, replication_mode, last_sent_snap, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.TaskType, t.Target, t.Schedule, t.Recursive, t.Enabled, t.Prefix, t.Retention,
+		t.DestTarget, t.ReplicationMode, t.LastSentSnap, now, now,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert task: %w", err)
@@ -109,13 +132,21 @@ func InsertTask(db *sql.DB, t ScheduledTask) (int64, error) {
 func UpdateTask(db *sql.DB, t ScheduledTask) error {
 	now := time.Now().UTC().Format(timeFmt)
 	_, err := db.Exec(
-		`UPDATE scheduled_tasks SET target = ?, schedule = ?, recursive = ?, enabled = ?, prefix = ?, retention = ?, updated_at = ? WHERE id = ?`,
-		t.Target, t.Schedule, t.Recursive, t.Enabled, t.Prefix, t.Retention, now, t.ID,
+		`UPDATE scheduled_tasks SET target = ?, schedule = ?, recursive = ?, enabled = ?, prefix = ?, retention = ?,
+		 dest_target = ?, replication_mode = ?, last_sent_snap = ?, updated_at = ? WHERE id = ?`,
+		t.Target, t.Schedule, t.Recursive, t.Enabled, t.Prefix, t.Retention,
+		t.DestTarget, t.ReplicationMode, t.LastSentSnap, now, t.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update task %d: %w", t.ID, err)
 	}
 	return nil
+}
+
+// UpdateLastSentSnap updates only the last_sent_snap column for a replication task.
+func UpdateLastSentSnap(db *sql.DB, taskID int64, snap string) error {
+	_, err := db.Exec(`UPDATE scheduled_tasks SET last_sent_snap = ? WHERE id = ?`, snap, taskID)
+	return err
 }
 
 // DeleteTask removes a scheduled task.
@@ -127,63 +158,75 @@ func DeleteTask(db *sql.DB, id int64) error {
 	return nil
 }
 
+const taskColumns = `id, task_type, target, schedule, recursive, enabled, prefix, retention, created_at, updated_at, COALESCE(dest_target,''), COALESCE(replication_mode,''), COALESCE(last_sent_snap,'')`
+
 // GetTask returns a single task by ID.
 func GetTask(db *sql.DB, id int64) (*ScheduledTask, error) {
-	row := db.QueryRow(
-		`SELECT id, task_type, target, schedule, recursive, enabled, prefix, retention, created_at, updated_at FROM scheduled_tasks WHERE id = ?`, id,
-	)
+	row := db.QueryRow(`SELECT `+taskColumns+` FROM scheduled_tasks WHERE id = ?`, id)
 	return scanTask(row)
 }
 
 // ListTasks returns all scheduled tasks.
 func ListTasks(db *sql.DB) ([]ScheduledTask, error) {
-	rows, err := db.Query(
-		`SELECT id, task_type, target, schedule, recursive, enabled, prefix, retention, created_at, updated_at FROM scheduled_tasks ORDER BY id`,
-	)
+	rows, err := db.Query(`SELECT ` + taskColumns + ` FROM scheduled_tasks ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("query tasks: %w", err)
 	}
 	defer rows.Close()
-
-	var tasks []ScheduledTask
-	for rows.Next() {
-		var t ScheduledTask
-		if err := rows.Scan(&t.ID, &t.TaskType, &t.Target, &t.Schedule, &t.Recursive, &t.Enabled, &t.Prefix, &t.Retention, &t.CreatedAt, &t.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan task: %w", err)
-		}
-		tasks = append(tasks, t)
-	}
-	return tasks, rows.Err()
+	return scanTasks(rows)
 }
 
 // ListEnabledTasks returns all enabled scheduled tasks.
 func ListEnabledTasks(db *sql.DB) ([]ScheduledTask, error) {
-	rows, err := db.Query(
-		`SELECT id, task_type, target, schedule, recursive, enabled, prefix, retention, created_at, updated_at FROM scheduled_tasks WHERE enabled = 1 ORDER BY id`,
-	)
+	rows, err := db.Query(`SELECT ` + taskColumns + ` FROM scheduled_tasks WHERE enabled = 1 ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("query enabled tasks: %w", err)
 	}
 	defer rows.Close()
-
-	var tasks []ScheduledTask
-	for rows.Next() {
-		var t ScheduledTask
-		if err := rows.Scan(&t.ID, &t.TaskType, &t.Target, &t.Schedule, &t.Recursive, &t.Enabled, &t.Prefix, &t.Retention, &t.CreatedAt, &t.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan task: %w", err)
-		}
-		tasks = append(tasks, t)
-	}
-	return tasks, rows.Err()
+	return scanTasks(rows)
 }
 
 func scanTask(row *sql.Row) (*ScheduledTask, error) {
-	var t ScheduledTask
-	if err := row.Scan(&t.ID, &t.TaskType, &t.Target, &t.Schedule, &t.Recursive, &t.Enabled, &t.Prefix, &t.Retention, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	t, err := scanTaskFields(func(dest ...any) error { return row.Scan(dest...) })
+	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("scan task: %w", err)
+	}
+	return t, nil
+}
+
+func scanTasks(rows *sql.Rows) ([]ScheduledTask, error) {
+	var tasks []ScheduledTask
+	for rows.Next() {
+		t, err := scanTaskFields(rows.Scan)
+		if err != nil {
+			return nil, fmt.Errorf("scan task: %w", err)
+		}
+		tasks = append(tasks, *t)
+	}
+	return tasks, rows.Err()
+}
+
+func scanTaskFields(scan func(dest ...any) error) (*ScheduledTask, error) {
+	var t ScheduledTask
+	var destTarget, replMode, lastSnap string
+	if err := scan(
+		&t.ID, &t.TaskType, &t.Target, &t.Schedule, &t.Recursive, &t.Enabled,
+		&t.Prefix, &t.Retention, &t.CreatedAt, &t.UpdatedAt,
+		&destTarget, &replMode, &lastSnap,
+	); err != nil {
+		return nil, err
+	}
+	if destTarget != "" {
+		t.DestTarget = &destTarget
+	}
+	if replMode != "" {
+		t.ReplicationMode = &replMode
+	}
+	if lastSnap != "" {
+		t.LastSentSnap = &lastSnap
 	}
 	return &t, nil
 }

@@ -61,6 +61,7 @@ func main() {
 	agentdb.StartPruneLoop(appCtx, db, 30*24*time.Hour, logger)
 
 	eng := engine.NewEngine(cfg.SnapRAID.BinaryPath, cfg.SnapRAID.ConfigPath, logger)
+	eng.SetTimeouts(cfg.Timeouts)
 
 	hostname, _ := os.Hostname()
 

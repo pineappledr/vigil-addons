@@ -20,11 +20,17 @@ var (
 	ErrNoActiveJob  = errors.New("no active snapraid operation to abort")
 )
 
+// TimeoutResolver returns the timeout duration for a given snapraid command.
+type TimeoutResolver interface {
+	ForCommand(cmd string) time.Duration
+}
+
 // Engine wraps the snapraid binary and enforces single-command concurrency.
 type Engine struct {
 	binaryPath string
 	configPath string
 	logger     *slog.Logger
+	timeouts   TimeoutResolver
 	mu         sync.Mutex
 
 	cancelMu sync.Mutex
@@ -41,6 +47,19 @@ func NewEngine(binaryPath, configPath string, logger *slog.Logger) *Engine {
 		configPath: configPath,
 		logger:     logger,
 	}
+}
+
+// SetTimeouts configures per-command timeout overrides.
+func (e *Engine) SetTimeouts(t TimeoutResolver) {
+	e.timeouts = t
+}
+
+// resolveTimeout returns the configured timeout for a command, or the provided fallback.
+func (e *Engine) resolveTimeout(cmd string, fallback time.Duration) time.Duration {
+	if e.timeouts != nil {
+		return e.timeouts.ForCommand(cmd)
+	}
+	return fallback
 }
 
 // Version returns the snapraid version string by running `snapraid --version`.
@@ -115,7 +134,7 @@ func (e *Engine) setCancel(fn context.CancelFunc) {
 
 // runCommand executes the snapraid binary with the given arguments under mutex protection.
 // It prepends --conf <configPath> automatically.
-// All commands are bounded by timeouts to prevent indefinite hangs from frozen disks or deadlocked processes.
+// All commands are bounded by configurable timeouts to prevent indefinite hangs from frozen disks or deadlocked processes.
 func (e *Engine) runCommand(ctx context.Context, args ...string) (*commandResult, error) {
 	if !e.mu.TryLock() {
 		return nil, ErrEngineLocked
@@ -125,21 +144,8 @@ func (e *Engine) runCommand(ctx context.Context, args ...string) (*commandResult
 	cmdCtx, cancel := context.WithCancel(ctx)
 
 	// Apply operation-specific timeouts to prevent deadlocking the scheduler.
-	// Quick operations (status, diff, smart, touch): 60 seconds.
-	// Scrub: 8 hours. Other long operations (sync, fix): 60 minutes.
 	if len(args) > 0 {
-		var timeout time.Duration
-		cmd := args[0]
-		switch cmd {
-		case "status", "diff", "smart", "touch":
-			timeout = 60 * time.Second
-		case "scrub":
-			timeout = 8 * time.Hour
-		case "sync", "fix":
-			timeout = 60 * time.Minute
-		default:
-			timeout = 5 * time.Minute // Generic fallback
-		}
+		timeout := e.resolveTimeout(args[0], 10*time.Minute)
 		var timeoutCancel context.CancelFunc
 		cmdCtx, timeoutCancel = context.WithTimeout(cmdCtx, timeout)
 		defer timeoutCancel()
@@ -227,7 +233,7 @@ func progressLineFunc(progress chan<- int) lineFunc {
 
 // runCommandStreaming executes the snapraid binary and calls onLine for each stdout line in real-time.
 // It is used by sync/scrub for progress tracking.
-// All streaming commands are bounded by a 60-minute timeout to prevent indefinite hangs.
+// All streaming commands are bounded by configurable timeouts to prevent indefinite hangs.
 func (e *Engine) runCommandStreaming(ctx context.Context, onLine lineFunc, args ...string) (*commandResult, error) {
 	if !e.mu.TryLock() {
 		return nil, ErrEngineLocked
@@ -237,18 +243,8 @@ func (e *Engine) runCommandStreaming(ctx context.Context, onLine lineFunc, args 
 	cmdCtx, cancel := context.WithCancel(ctx)
 
 	// Apply operation-specific timeouts to prevent deadlocking the scheduler.
-	// Scrub: 8 hours. Other streaming operations (sync, fix): 60 minutes.
 	if len(args) > 0 {
-		var timeout time.Duration
-		cmd := args[0]
-		switch cmd {
-		case "scrub":
-			timeout = 8 * time.Hour
-		case "sync", "fix":
-			timeout = 60 * time.Minute
-		default:
-			timeout = 10 * time.Minute // Generic fallback
-		}
+		timeout := e.resolveTimeout(args[0], 10*time.Minute)
 		var timeoutCancel context.CancelFunc
 		cmdCtx, timeoutCancel = context.WithTimeout(cmdCtx, timeout)
 		defer timeoutCancel()

@@ -96,6 +96,19 @@ scrub:
   # whenever a scrub detects bad blocks. Use with caution.
   auto_fix_bad_blocks: true
 
+# ── Command Timeouts ────────────────────────────────────────────────
+# Per-command timeout in minutes. Increase these for very large arrays
+# where operations take longer than the defaults.
+timeouts:
+  touch: 5        # touch, default 5 min
+  status: 5       # status, default 5 min
+  diff: 5         # diff, default 5 min
+  smart: 5        # smart, default 5 min
+  sync: 60        # sync, default 60 min
+  scrub: 480      # scrub, default 480 min (8 hours)
+  fix: 60         # fix, default 60 min
+  default: 10     # fallback for any other command
+
 # ── Sync Settings ───────────────────────────────────────────────────
 sync:
   # Enable --pre-hash on automated syncs.

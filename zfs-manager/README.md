@@ -54,13 +54,12 @@ Because agents will eventually execute destructive operations, every agent reque
 
 ## Dashboard
 
-**Phase 1 (current)** provides read-only visibility:
-
 | Page | Description |
 |------|-------------|
 | **Pools** | Pool health (ONLINE/DEGRADED/FAULTED), size, used/free, fragmentation %, dedup ratio, last scrub date, vdev topology tree |
 | **Datasets** | All ZFS filesystems — used, available, referenced, mountpoint, compression, record size, atime, sync |
 | **Snapshots** | All snapshots across all datasets — creation date, used space, referenced size. Sortable by date. |
+| **Replication** | Local `zfs send | receive` replication tasks — create, schedule, run manually, view history. Supports full and incremental sends with automatic common-snapshot resolution. |
 | **Agents** | Registered agents, online/offline status, last-seen timestamp, deploy-wizard to add new agents |
 
 All data pages have an **agent selector** — pick which host to view.
@@ -232,6 +231,12 @@ See [config.manager.example.yaml](config.manager.example.yaml) and [config.agent
 | `GET` | `/api/datasets` | None | Dataset data for selected agent (`?agent_id=`) |
 | `GET` | `/api/snapshots` | None | Snapshot data for selected agent (`?agent_id=`) |
 | `POST` | `/api/rotate-psk` | None | Rotate the PSK (body: `{"confirm":"ROTATE"}`) |
+| `GET` | `/api/replication/tasks` | None | List replication tasks (proxied to agent) |
+| `POST` | `/api/replication/tasks` | None | Create a replication task (proxied to agent) |
+| `PUT` | `/api/replication/tasks/{id}` | None | Update a replication task (proxied to agent) |
+| `DELETE` | `/api/replication/tasks/{id}` | None | Delete a replication task (proxied to agent) |
+| `POST` | `/api/replication/tasks/{id}/run` | None | Manually trigger a replication task (proxied to agent) |
+| `GET` | `/api/replication/tasks/{id}/history` | None | Replication task run history (proxied to agent) |
 
 ### Agent Endpoints
 
@@ -242,6 +247,12 @@ See [config.manager.example.yaml](config.manager.example.yaml) and [config.agent
 | `GET` | `/api/pools` | Pool list |
 | `GET` | `/api/datasets` | Dataset list |
 | `GET` | `/api/snapshots` | Snapshot list |
+| `GET` | `/api/replication/tasks` | List all replication tasks |
+| `POST` | `/api/replication/tasks` | Create a replication task |
+| `PUT` | `/api/replication/tasks/{id}` | Update a replication task |
+| `DELETE` | `/api/replication/tasks/{id}` | Delete a replication task |
+| `POST` | `/api/replication/tasks/{id}/run` | Manually trigger a replication run |
+| `GET` | `/api/replication/tasks/{id}/history` | Replication run history |
 
 ---
 

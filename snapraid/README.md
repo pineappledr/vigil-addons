@@ -119,14 +119,17 @@ services:
     restart: unless-stopped
     ports:
       - "9300:9300"
-    command: ["-config", "/etc/snapraid-hub/config.hub.yaml"]
+    environment:
+      VIGIL_URL: http://vigil-server:9080
+      VIGIL_TOKEN: your-addon-token-here
     volumes:
       - hub-data:/data
-      - ./config.hub.yaml:/etc/snapraid-hub/config.hub.yaml:ro
 
 volumes:
   hub-data:
 ```
+
+> **Tip:** You can also use a YAML config file instead of environment variables. Mount `config.hub.yaml` and pass `-config /etc/snapraid-hub/config.hub.yaml`. See [config.hub.example.yaml](config.hub.example.yaml) for all options.
 
 #### Agent (via Deploy Wizard)
 
@@ -280,6 +283,18 @@ All configuration values can be overridden via environment variables. The Agent 
 | `VIGIL_SNAPRAID_HUB_` | Hub |
 | `VIGIL_SNAPRAID_AGENT_` | Agent |
 
+The Vigil connection uses the **uniform** `VIGIL_URL` and `VIGIL_TOKEN` environment variables (shared across all Vigil add-ons). These override the YAML `vigil.server_url` and `vigil.token` fields respectively.
+
+#### Hub Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VIGIL_SNAPRAID_HUB_LISTEN_PORT` | `9300` | Port the Hub listens on |
+| `VIGIL_URL` | `http://vigil.local:9080` | Vigil server URL |
+| `VIGIL_TOKEN` | — | Add-on registration token from Vigil UI |
+| `VIGIL_SNAPRAID_HUB_DATA_REGISTRY_PATH` | `/data/agents.json` | Agent registry file path |
+| `VIGIL_SNAPRAID_HUB_LOGGING_LEVEL` | `info` | Log level (debug, info, warn, error) |
+
 #### Agent Environment Variables
 
 | Variable | Default | Description |
@@ -304,6 +319,14 @@ All configuration values can be overridden via environment variables. The Agent 
 | `VIGIL_SNAPRAID_AGENT_HOOKS_POST_SYNC` | — | Post-sync hook command |
 | `VIGIL_SNAPRAID_AGENT_DOCKER_PAUSE_CONTAINERS` | — | Comma-separated containers to pause during sync |
 | `VIGIL_SNAPRAID_AGENT_DOCKER_STOP_CONTAINERS` | — | Comma-separated containers to stop during sync |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_TOUCH` | `5` | Timeout in minutes for touch command |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_STATUS` | `5` | Timeout in minutes for status command |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_DIFF` | `5` | Timeout in minutes for diff command |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_SMART` | `5` | Timeout in minutes for smart command |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_SYNC` | `60` | Timeout in minutes for sync command |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_SCRUB` | `480` | Timeout in minutes for scrub command (8 hours) |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_FIX` | `60` | Timeout in minutes for fix command |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_DEFAULT` | `10` | Fallback timeout in minutes for any other command |
 
 Example:
 

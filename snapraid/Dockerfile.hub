@@ -10,7 +10,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     -o /snapraid-hub ./cmd/hub
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates tzdata
 COPY --from=builder /snapraid-hub /usr/local/bin/snapraid-hub
 EXPOSE 9300
 ENTRYPOINT ["snapraid-hub"]

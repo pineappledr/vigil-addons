@@ -10,7 +10,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     -o /burnin-hub ./cmd/hub
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates tzdata
 COPY --from=builder /burnin-hub /usr/local/bin/burnin-hub
 EXPOSE 9100
 ENTRYPOINT ["burnin-hub"]

@@ -10,7 +10,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     -o /zfs-agent ./cmd/agent
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates tzdata
 RUN mkdir -p /data
 COPY --from=builder /zfs-agent /usr/local/bin/zfs-agent
 VOLUME ["/data"]

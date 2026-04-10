@@ -64,10 +64,16 @@ func applyHubEnvOverrides(cfg *HubConfig) {
 			cfg.Listen.Port = port
 		}
 	}
-	if v := os.Getenv("VIGIL_SNAPRAID_HUB_VIGIL_SERVER_URL"); v != "" {
+	if v := os.Getenv("VIGIL_SNAPRAID_HUB_VIGIL_SERVER_URL"); v != "" { // legacy
 		cfg.Vigil.ServerURL = v
 	}
-	if v := os.Getenv("VIGIL_SNAPRAID_HUB_VIGIL_TOKEN"); v != "" {
+	if v := os.Getenv("VIGIL_URL"); v != "" {
+		cfg.Vigil.ServerURL = v
+	}
+	if v := os.Getenv("VIGIL_SNAPRAID_HUB_VIGIL_TOKEN"); v != "" { // legacy
+		cfg.Vigil.Token = v
+	}
+	if v := os.Getenv("VIGIL_TOKEN"); v != "" {
 		cfg.Vigil.Token = v
 	}
 	if v := os.Getenv("VIGIL_SNAPRAID_HUB_DATA_REGISTRY_PATH"); v != "" {

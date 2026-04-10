@@ -84,8 +84,8 @@ services:
     ports:
       - "9500:9500"
     environment:
-      VIGIL_ZFS_MANAGER_VIGIL_SERVER_URL: http://vigil:9080
-      VIGIL_ZFS_MANAGER_VIGIL_TOKEN: your-addon-token-here
+      VIGIL_URL: http://vigil:9080
+      VIGIL_TOKEN: your-addon-token-here
     volumes:
       - zfs-manager-data:/data
 
@@ -191,8 +191,8 @@ All values can be set via environment variables (prefix: `VIGIL_ZFS_MANAGER_`) o
 | Environment Variable | YAML Key | Default | Description |
 |---|---|---|---|
 | `VIGIL_ZFS_MANAGER_LISTEN_PORT` | `listen.port` | `9500` | HTTP port the manager listens on |
-| `VIGIL_ZFS_MANAGER_VIGIL_SERVER_URL` | `vigil.server_url` | `http://vigil.local:9080` | Vigil server URL |
-| `VIGIL_ZFS_MANAGER_VIGIL_TOKEN` | `vigil.token` | — | Add-on registration token from Vigil UI |
+| `VIGIL_URL` | `vigil.server_url` | `http://vigil.local:9080` | Vigil server URL |
+| `VIGIL_TOKEN` | `vigil.token` | — | Add-on registration token from Vigil UI |
 | `VIGIL_ZFS_MANAGER_DATA_REGISTRY_PATH` | `data.registry_path` | `/data/agents.json` | Agent registry file path |
 | `VIGIL_ZFS_MANAGER_LOGGING_LEVEL` | `logging.level` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 

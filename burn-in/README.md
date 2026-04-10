@@ -229,7 +229,7 @@ apk add smartmontools e2fsprogs e2fsprogs-extra util-linux gptfdisk
 4. Fill in:
    - **Name**: `Burn-In`
    - **Docker Image**: `ghcr.io/pineappledr/vigil-addons-burnin-hub`
-5. Note the auto-populated **Server URL**, **Public Key**, and **Token** — these are your `VIGIL_URL`, `VIGIL_SERVER_PUBKEY`, and `VIGIL_AGENT_TOKEN` values.
+5. Note the auto-populated **Server URL**, **Public Key**, and **Token** — these are your `VIGIL_URL`, `VIGIL_SERVER_PUBKEY`, and `VIGIL_TOKEN` values.
 6. Click **Copy docker compose** to get a pre-filled `docker-compose.yml`.
 
 ### Step 2: Deploy the Hub
@@ -246,7 +246,7 @@ services:
       - "9100:9100"
     environment:
       VIGIL_URL: "http://vigil-server:9080"            # from the Add Add-on dialog
-      VIGIL_AGENT_TOKEN: "your-vigil-addon-token"       # from the Add Add-on dialog
+      VIGIL_TOKEN: "your-vigil-addon-token"       # from the Add Add-on dialog
       VIGIL_SERVER_PUBKEY: "your-server-public-key"     # from the Add Add-on dialog
       BURNIN_HUB_ADVERTISE_URL: "http://add-ons-external:9100"  # externally-reachable Hub URL
       BURNIN_HUB_DATA_DIR: "/data"
@@ -372,7 +372,7 @@ Create the environment file with your configuration:
 sudo mkdir -p /etc/burnin
 sudo tee /etc/burnin/hub.env > /dev/null <<'EOF'
 VIGIL_URL=http://YOUR_VIGIL_SERVER:9080
-VIGIL_AGENT_TOKEN=your-vigil-addon-token
+VIGIL_TOKEN=your-vigil-addon-token
 VIGIL_SERVER_PUBKEY=your-server-public-key
 BURNIN_HUB_LISTEN=:9100
 BURNIN_HUB_ADVERTISE_URL=http://THIS_HOST_IP:9100
@@ -485,7 +485,7 @@ For quick testing or development, you can run the binaries directly:
 ```bash
 # Hub
 export VIGIL_URL="http://vigil-server:9080"
-export VIGIL_AGENT_TOKEN="your-token"
+export VIGIL_TOKEN="your-token"
 export VIGIL_SERVER_PUBKEY="your-server-public-key"
 export BURNIN_HUB_ADVERTISE_URL="http://addon-host:9100"
 burnin-hub
@@ -511,7 +511,7 @@ All configuration uses environment variables. Vigil-related variables use the `V
 |----------|---------|----------|-------------|
 | `BURNIN_CONFIG_FILE` | | no | Path to a JSON config file |
 | `VIGIL_URL` | `http://localhost:8080` | no | Vigil server URL |
-| `VIGIL_AGENT_TOKEN` | | no | Bearer token for Vigil registration (from the Vigil "Add Add-on" dialog) |
+| `VIGIL_TOKEN` | | no | Bearer token for Vigil registration (from the Vigil "Add Add-on" dialog) |
 | `VIGIL_SERVER_PUBKEY` | | no | Path to Vigil server Ed25519 public key (see [Getting the Server Public Key](#getting-the-server-public-key)) |
 | `BURNIN_HUB_LISTEN` | `:9100` | no | Hub listen address |
 | `BURNIN_HUB_ADVERTISE_URL` | | no | Externally-reachable Hub URL (used by the deploy wizard to pre-fill agent config) |
@@ -600,7 +600,7 @@ All configuration uses environment variables. Vigil-related variables use the `V
 
 | Layer | Mechanism |
 |-------|-----------|
-| **Vigil ↔ Hub** | Bearer token (`VIGIL_AGENT_TOKEN`) over WebSocket |
+| **Vigil ↔ Hub** | Bearer token (`VIGIL_TOKEN`) over WebSocket |
 | **Hub ↔ Agent** | Pre-shared key (`BURNIN_HUB_AGENT_PSK`) via `Authorization: Bearer` header |
 | **Command integrity** | Ed25519 signature verification on execute payloads. The signature covers all fields except `signature` itself, re-marshaled deterministically. |
 | **Drive safety** | Every operation checks that the target device is not mounted and not part of an active ZFS pool before proceeding. Conflict detection prevents two jobs from targeting the same drive simultaneously. |

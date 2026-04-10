@@ -64,7 +64,8 @@ func LoadHubConfig() (*HubConfig, error) {
 
 	// Environment variables override file values.
 	envStr("VIGIL_URL", &cfg.Vigil.URL)
-	envStr("VIGIL_AGENT_TOKEN", &cfg.Vigil.AgentToken)
+	envStr("VIGIL_AGENT_TOKEN", &cfg.Vigil.AgentToken) // legacy
+	envStr("VIGIL_TOKEN", &cfg.Vigil.AgentToken)
 	envStr("VIGIL_SERVER_PUBKEY", &cfg.Vigil.ServerPubkey)
 	envStr("BURNIN_HUB_LISTEN", &cfg.Hub.Listen)
 	envStr("BURNIN_HUB_ADVERTISE_URL", &cfg.Hub.AdvertiseURL)

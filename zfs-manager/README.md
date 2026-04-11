@@ -60,6 +60,7 @@ Because agents will eventually execute destructive operations, every agent reque
 | **Datasets** | All ZFS filesystems — used, available, referenced, mountpoint, compression, record size, atime, sync |
 | **Snapshots** | All snapshots across all datasets — creation date, used space, referenced size. Sortable by date. |
 | **Replication** | Local `zfs send | receive` replication tasks — create, schedule, run manually, view history. Supports full and incremental sends with automatic common-snapshot resolution. |
+| **Logs** | Live log viewer with real-time streaming from each agent. Select an agent to view its log output. |
 | **Agents** | Registered agents, online/offline status, last-seen timestamp, deploy-wizard to add new agents |
 
 All data pages have an **agent selector** — pick which host to view.
@@ -169,7 +170,7 @@ services:
       VIGIL_URL: http://vigil:9080
       VIGIL_TOKEN: your-addon-token-here
       VIGIL_SERVER_PUBKEY: your-server-public-key
-      VIGIL_ZFS_MANAGER_DATA_REGISTRY_PATH: "/data"
+      VIGIL_ZFS_MANAGER_DATA_REGISTRY_PATH: "/data/agents.json"
       TZ: ${TZ:-UTC}
     volumes:
       - zfs-manager-data:/data

@@ -87,8 +87,8 @@ func (e *Engine) SendReceiveLocal(ctx context.Context, snap, baseSnap, destTarge
 
 	recvArgs := []string{"receive", "-F", destTarget}
 
-	sendCmd := exec.CommandContext(ctx, e.zfsPath, sendArgs...)
-	recvCmd := exec.CommandContext(ctx, e.zfsPath, recvArgs...)
+	sendCmd := exec.CommandContext(ctx, e.zfsPath, sendArgs...) // #nosec G204 — zfsPath is set at startup from config
+	recvCmd := exec.CommandContext(ctx, e.zfsPath, recvArgs...) // #nosec G204 — zfsPath is set at startup from config
 
 	// Wire send stdout → counting reader → recv stdin.
 	pr, pw := io.Pipe()

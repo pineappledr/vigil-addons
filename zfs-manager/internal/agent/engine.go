@@ -793,7 +793,7 @@ func (e *Engine) runZFS(ctx context.Context, args ...string) (string, error) {
 }
 
 func (e *Engine) run(ctx context.Context, bin string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := exec.CommandContext(ctx, bin, args...) // #nosec G204 — bin is set at startup from config, not user input
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

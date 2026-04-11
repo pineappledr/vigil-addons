@@ -30,7 +30,7 @@ The Hub is lightweight and stateless aside from a JSON-persisted Agent registry.
 
 The Hub connects to the Vigil Server using the same two-phase pattern as all Vigil add-ons:
 
-1. **Registration** — On startup, the Hub sends `POST /api/addons/connect` with its embedded manifest and the one-time registration token (generated in the Vigil UI "Add Add-on" dialog). The server responds with an `addon_id`.
+1. **Registration** — On startup, the Hub sends `POST /api/addons/connect` with its embedded manifest and the one-time registration token (generated in the Vigil UI "New Add-on" dialog). The server responds with an `addon_id`.
 2. **Telemetry** — The Hub opens a persistent WebSocket to `/api/addons/ws?addon_id=N` and forwards aggregated Agent telemetry upstream. Heartbeats are sent every 30 seconds. The connection auto-reconnects with exponential backoff on failure.
 
 If no `vigil.token` is configured, the Hub runs in standalone mode without upstream connectivity.
@@ -114,7 +114,7 @@ Deploy the Hub on any host that can reach both the Vigil Server and your Agent(s
 ```yaml
 services:
   snapraid-hub:
-    container_name: Snapraid-Hub
+    container_name: snapraid-hub
     image: ghcr.io/pineappledr/vigil-addons-snapraid-hub:latest
     restart: unless-stopped
     ports:
@@ -122,6 +122,9 @@ services:
     environment:
       VIGIL_URL: http://vigil-server:9080
       VIGIL_TOKEN: your-addon-token-here
+      VIGIL_SERVER_PUBKEY: your-server-public-key
+      VIGIL_SNAPRAID_HUB_DATA_REGISTRY_PATH: "/data"
+      TZ: ${TZ:-UTC}
     volumes:
       - hub-data:/data
 
@@ -292,6 +295,7 @@ The Vigil connection uses the **uniform** `VIGIL_URL` and `VIGIL_TOKEN` environm
 | `VIGIL_SNAPRAID_HUB_LISTEN_PORT` | `9300` | Port the Hub listens on |
 | `VIGIL_URL` | `http://vigil.local:9080` | Vigil server URL |
 | `VIGIL_TOKEN` | — | Add-on registration token from Vigil UI |
+| `VIGIL_SERVER_PUBKEY` | — | Base64-encoded Ed25519 public key for command signature verification |
 | `VIGIL_SNAPRAID_HUB_DATA_REGISTRY_PATH` | `/data/agents.json` | Agent registry file path |
 | `VIGIL_SNAPRAID_HUB_LOGGING_LEVEL` | `info` | Log level (debug, info, warn, error) |
 
@@ -605,6 +609,16 @@ The PSK survives Hub restarts (loaded from disk on startup). On first boot, if n
 
 Notifications are dispatched through the Vigil Server's notification system. Configure your notification channels (Discord webhook, Telegram bot, email, etc.) in the Vigil Server settings. The SnapRAID Hub automatically forwards all events upstream — no additional configuration is needed on the Hub or Agent side.
 
+## Security Model
+
+| Layer | Mechanism |
+|-------|-----------|
+| **Vigil ↔ Hub** | Bearer token (`VIGIL_TOKEN`) over WebSocket |
+| **Hub ↔ Agent** | Pre-shared key (PSK) via `Authorization: Bearer` header |
+| **Command integrity** | Ed25519 signature verification on commands routed through the Hub. The Vigil server signs commands with its private key; the Hub verifies using `VIGIL_SERVER_PUBKEY`. |
+
+> **Note:** If `VIGIL_SERVER_PUBKEY` is not configured, signature verification is disabled. This is acceptable for development but **not recommended for production**.
+
 ## API Reference
 
 ### Agent Endpoints
@@ -645,7 +659,7 @@ The `.content` file is bind-mounted directly into the container. SnapRAID writes
 The Hub retries registration with exponential backoff (2s to 60s). Check:
 
 1. `vigil.server_url` in `config.hub.yaml` points to the correct Vigil Server HTTP address (e.g., `http://192.168.1.10:9080`).
-2. `vigil.token` matches a token generated in the Vigil UI "Add Add-on" dialog. Tokens expire after 1 hour.
+2. `vigil.token` matches a token generated in the Vigil UI "New Add-on" dialog. Tokens expire after 1 hour.
 3. The token must be bound to an add-on in the Vigil UI before the Hub can connect. If you see `"Token not yet bound"` errors, complete the registration form in the Vigil UI first.
 4. If the Hub starts without a token (`vigil.token: ""`), it runs in standalone mode and logs a warning.
 

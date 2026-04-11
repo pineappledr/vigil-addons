@@ -26,7 +26,6 @@ type VigilConfig struct {
 
 type HubServer struct {
 	Listen            string        `json:"listen"`
-	AdvertiseURL      string        `json:"advertise_url"`
 	HeartbeatInterval time.Duration `json:"heartbeat_interval"`
 	AgentPSK          string        `json:"agent_psk"`
 	DataDir           string        `json:"data_dir"`
@@ -68,7 +67,6 @@ func LoadHubConfig() (*HubConfig, error) {
 	envStr("VIGIL_TOKEN", &cfg.Vigil.AgentToken)
 	envStr("VIGIL_SERVER_PUBKEY", &cfg.Vigil.ServerPubkey)
 	envStr("BURNIN_HUB_LISTEN", &cfg.Hub.Listen)
-	envStr("BURNIN_HUB_ADVERTISE_URL", &cfg.Hub.AdvertiseURL)
 	envStr("BURNIN_HUB_AGENT_PSK", &cfg.Hub.AgentPSK)
 	envStr("BURNIN_HUB_DATA_DIR", &cfg.Hub.DataDir)
 	envInt("BURNIN_ALERTS_TEMP_WARNING_C", &cfg.Alerts.TempWarningC)

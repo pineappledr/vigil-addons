@@ -224,8 +224,8 @@ apk add smartmontools e2fsprogs e2fsprogs-extra util-linux gptfdisk
 ### Step 1: Register the Add-on in Vigil
 
 1. Open the Vigil dashboard and navigate to **Add-ons**.
-2. Click **Add Add-on**.
-3. Select the **Docker** tab.
+2. Click **New Add-on**.
+3. Select the **Burn-In Hub** preset (or choose **Docker** and fill in manually).
 4. Fill in:
    - **Name**: `Burn-In`
    - **Docker Image**: `ghcr.io/pineappledr/vigil-addons-burnin-hub`
@@ -245,10 +245,9 @@ services:
     ports:
       - "9100:9100"
     environment:
-      VIGIL_URL: "http://vigil-server:9080"            # from the Add Add-on dialog
-      VIGIL_TOKEN: "your-vigil-addon-token"       # from the Add Add-on dialog
-      VIGIL_SERVER_PUBKEY: "your-server-public-key"     # from the Add Add-on dialog
-      BURNIN_HUB_ADVERTISE_URL: "http://add-ons-external:9100"  # externally-reachable Hub URL
+      VIGIL_URL: "http://vigil-server:9080"            # from the New Add-on dialog
+      VIGIL_TOKEN: "your-vigil-addon-token"             # from the New Add-on dialog
+      VIGIL_SERVER_PUBKEY: "your-server-public-key"     # from the New Add-on dialog
       BURNIN_HUB_DATA_DIR: "/data"
       TZ: ${TZ:-UTC}
     volumes:
@@ -262,7 +261,7 @@ volumes:
 docker compose up -d
 ```
 
-Go back to the Vigil dialog, enter the **Add-on URL** (e.g., `http://add-ons-external:9100`), and click **Register Add-on**. This binds the token to the add-on entry. The Hub will automatically connect, submit its manifest, and appear as **online** in the Add-ons list.
+Go back to the Vigil dialog, enter the **Add-on URL** (e.g., `http://add-ons-external:9100`), and click **Register**. This binds the token to the add-on entry. The Hub will automatically connect, submit its manifest, and appear as **online** in the Add-ons list.
 
 > **Note:** The Hub retries registration with exponential backoff. You can deploy it before or after clicking "Register Add-on" — it will connect as soon as the token is bound.
 
@@ -375,7 +374,6 @@ VIGIL_URL=http://YOUR_VIGIL_SERVER:9080
 VIGIL_TOKEN=your-vigil-addon-token
 VIGIL_SERVER_PUBKEY=your-server-public-key
 BURNIN_HUB_LISTEN=:9100
-BURNIN_HUB_ADVERTISE_URL=http://THIS_HOST_IP:9100
 BURNIN_HUB_DATA_DIR=/var/lib/burnin-hub
 EOF
 ```
@@ -487,7 +485,6 @@ For quick testing or development, you can run the binaries directly:
 export VIGIL_URL="http://vigil-server:9080"
 export VIGIL_TOKEN="your-token"
 export VIGIL_SERVER_PUBKEY="your-server-public-key"
-export BURNIN_HUB_ADVERTISE_URL="http://addon-host:9100"
 burnin-hub
 ```
 
@@ -512,9 +509,8 @@ All configuration uses environment variables. Vigil-related variables use the `V
 | `BURNIN_CONFIG_FILE` | | no | Path to a JSON config file |
 | `VIGIL_URL` | `http://localhost:8080` | no | Vigil server URL |
 | `VIGIL_TOKEN` | | no | Bearer token for Vigil registration (from the Vigil "Add Add-on" dialog) |
-| `VIGIL_SERVER_PUBKEY` | | no | Path to Vigil server Ed25519 public key (see [Getting the Server Public Key](#getting-the-server-public-key)) |
+| `VIGIL_SERVER_PUBKEY` | | no | Base64-encoded Ed25519 public key for command signature verification (see [Getting the Server Public Key](#getting-the-server-public-key)) |
 | `BURNIN_HUB_LISTEN` | `:9100` | no | Hub listen address |
-| `BURNIN_HUB_ADVERTISE_URL` | | no | Externally-reachable Hub URL (used by the deploy wizard to pre-fill agent config) |
 | `BURNIN_HUB_AGENT_PSK` | *(auto-generated)* | no | Pre-shared key for agent authentication. If not set, the Hub generates a random 32-byte key on first startup and persists it to `{data_dir}/hub.psk`. |
 | `BURNIN_HUB_DATA_DIR` | `/var/lib/vigil-hub` | no | Directory for persistent data (agent registry) |
 | `BURNIN_HUB_HEARTBEAT_INTERVAL` | `30s` | no | Heartbeat interval to Vigil (Go duration) |

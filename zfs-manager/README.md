@@ -70,7 +70,7 @@ All data pages have an **agent selector** — pick which host to view.
 
 ### 1. Register in Vigil
 
-Go to the Vigil dashboard → **Add-ons** → **Add Add-on**. Copy the token.
+Go to the Vigil dashboard → **Add-ons** → **New Add-on**. Copy the token.
 
 ### 2. Deploy the Manager
 
@@ -85,6 +85,9 @@ services:
     environment:
       VIGIL_URL: http://vigil:9080
       VIGIL_TOKEN: your-addon-token-here
+      VIGIL_SERVER_PUBKEY: your-server-public-key
+      VIGIL_ZFS_MANAGER_DATA_REGISTRY_PATH: "/data"
+      TZ: ${TZ:-UTC}
     volumes:
       - zfs-manager-data:/data
 
@@ -192,6 +195,7 @@ All values can be set via environment variables (prefix: `VIGIL_ZFS_MANAGER_`) o
 | `VIGIL_ZFS_MANAGER_LISTEN_PORT` | `listen.port` | `9500` | HTTP port the manager listens on |
 | `VIGIL_URL` | `vigil.server_url` | `http://vigil.local:9080` | Vigil server URL |
 | `VIGIL_TOKEN` | `vigil.token` | — | Add-on registration token from Vigil UI |
+| `VIGIL_SERVER_PUBKEY` | `vigil.server_pubkey` | — | Base64-encoded Ed25519 public key for command signature verification |
 | `VIGIL_ZFS_MANAGER_DATA_REGISTRY_PATH` | `data.registry_path` | `/data/agents.json` | Agent registry file path |
 | `VIGIL_ZFS_MANAGER_LOGGING_LEVEL` | `logging.level` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 
@@ -258,11 +262,13 @@ See [config.manager.example.yaml](config.manager.example.yaml) and [config.agent
 
 ## Security Model
 
-| Threat | Mitigation |
-|--------|-----------|
-| Rogue process on LAN sending commands | PSK required on all agent-to-manager requests |
-| PSK exposure in logs | PSK is redacted in all log output |
-| PSK compromise | Rotate via `POST /api/rotate-psk`, redeploy agents with new PSK via deploy-wizard |
-| Agent image without glibc on glibc host | Use the `-debian` image on Proxmox/Ubuntu/Debian |
+| Layer | Mechanism |
+|-------|-----------|
+| **Vigil ↔ Manager** | Bearer token (`VIGIL_TOKEN`) over WebSocket |
+| **Manager ↔ Agent** | Pre-shared key (PSK) via `Authorization: Bearer` header |
+| **Command integrity** | Ed25519 signature verification on write operations (POST/PUT/DELETE). The Vigil server signs commands with its private key; the Manager verifies using `VIGIL_SERVER_PUBKEY`. |
+| **PSK exposure** | PSK is redacted in all log output |
+| **PSK compromise** | Rotate via `POST /api/rotate-psk`, redeploy agents with new PSK via deploy-wizard |
+| **Agent image compatibility** | Use the `-debian` image on Proxmox/Ubuntu/Debian (glibc hosts) |
 
-> The current threat model is network-local. The PSK prevents unauthorized processes on the LAN from sending commands, not nation-state attackers. Future phases will add per-operation confirmation dialogs.
+> **Note:** If `VIGIL_SERVER_PUBKEY` is not configured, signature verification is disabled. This is acceptable for development but **not recommended for production**.

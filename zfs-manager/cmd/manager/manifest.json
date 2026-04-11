@@ -1262,6 +1262,24 @@
           }
         }
       ]
+    },
+    {
+      "id": "logs",
+      "title": "Logs",
+      "icon": "scroll-text",
+      "page_config": {
+        "agent_selector": true
+      },
+      "components": [
+        {
+          "id": "live_log_viewer",
+          "type": "log-viewer",
+          "title": "Live Output",
+          "config": {
+            "auto_scroll": true
+          }
+        }
+      ]
     }
   ]
 }

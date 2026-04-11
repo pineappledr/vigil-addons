@@ -20,24 +20,26 @@ import (
 
 // Server is the manager HTTP server.
 type Server struct {
-	cfg        *config.ManagerConfig
-	registry   *Registry
-	aggregator *Aggregator
-	mux        *http.ServeMux
-	logger     *slog.Logger
-	pskMu      sync.RWMutex
-	psk        string
+	cfg         *config.ManagerConfig
+	registry    *Registry
+	aggregator  *Aggregator
+	sigVerifier *addonutil.SignatureVerifier
+	mux         *http.ServeMux
+	logger      *slog.Logger
+	pskMu       sync.RWMutex
+	psk         string
 }
 
 // NewServer creates the manager HTTP server.
-func NewServer(cfg *config.ManagerConfig, registry *Registry, aggregator *Aggregator, psk string, logger *slog.Logger) *Server {
+func NewServer(cfg *config.ManagerConfig, registry *Registry, aggregator *Aggregator, psk string, sigVerifier *addonutil.SignatureVerifier, logger *slog.Logger) *Server {
 	s := &Server{
-		cfg:        cfg,
-		registry:   registry,
-		aggregator: aggregator,
-		mux:        http.NewServeMux(),
-		logger:     logger,
-		psk:        psk,
+		cfg:         cfg,
+		registry:    registry,
+		aggregator:  aggregator,
+		sigVerifier: sigVerifier,
+		mux:         http.NewServeMux(),
+		logger:      logger,
+		psk:         psk,
 	}
 	s.routes()
 	return s
@@ -81,43 +83,47 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/presets", s.handlePresets)
 	s.mux.HandleFunc("POST /api/rotate-psk", s.handleRotatePSK)
 
+	// signedProxy wraps proxyToAgent with Ed25519 signature verification
+	// for write operations (POST/PUT/DELETE) when a server pubkey is configured.
+	signedProxy := s.requireSignature(s.proxyToAgent)
+
 	// Phase 2 — command proxy (routes to agent)
-	s.mux.HandleFunc("POST /api/datasets", s.proxyToAgent)
-	s.mux.HandleFunc("PUT /api/datasets", s.proxyToAgent)
-	s.mux.HandleFunc("DELETE /api/datasets", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/snapshots", s.proxyToAgent)
-	s.mux.HandleFunc("DELETE /api/snapshots", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/snapshots/rollback", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/scrub/start", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/scrub/pause", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/scrub/cancel", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/preview", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/datasets", signedProxy)
+	s.mux.HandleFunc("PUT /api/datasets", signedProxy)
+	s.mux.HandleFunc("DELETE /api/datasets", signedProxy)
+	s.mux.HandleFunc("POST /api/snapshots", signedProxy)
+	s.mux.HandleFunc("DELETE /api/snapshots", signedProxy)
+	s.mux.HandleFunc("POST /api/snapshots/rollback", signedProxy)
+	s.mux.HandleFunc("POST /api/scrub/start", signedProxy)
+	s.mux.HandleFunc("POST /api/scrub/pause", signedProxy)
+	s.mux.HandleFunc("POST /api/scrub/cancel", signedProxy)
+	s.mux.HandleFunc("POST /api/preview", s.proxyToAgent) // read-only preview, no signature needed
 
 	// Phase 4 — disk & pool operations proxy (routes to agent)
 	s.mux.HandleFunc("GET /api/disks", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/pool/replace", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/pool/add-vdev", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/devices/offline", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/devices/online", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/devices/identify", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/pool/clear", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/pool/replace", signedProxy)
+	s.mux.HandleFunc("POST /api/pool/add-vdev", signedProxy)
+	s.mux.HandleFunc("POST /api/devices/offline", signedProxy)
+	s.mux.HandleFunc("POST /api/devices/online", signedProxy)
+	s.mux.HandleFunc("POST /api/devices/identify", signedProxy)
+	s.mux.HandleFunc("POST /api/pool/clear", signedProxy)
 
 	// Phase 3 — scheduled tasks proxy (routes to agent)
 	s.mux.HandleFunc("GET /api/tasks", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/tasks", s.proxyToAgent)
-	s.mux.HandleFunc("PUT /api/tasks/{id}", s.proxyToAgent)
-	s.mux.HandleFunc("DELETE /api/tasks/{id}", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/tasks", signedProxy)
+	s.mux.HandleFunc("PUT /api/tasks/{id}", signedProxy)
+	s.mux.HandleFunc("DELETE /api/tasks/{id}", signedProxy)
 	s.mux.HandleFunc("GET /api/tasks/{id}/history", s.proxyToAgent)
 	s.mux.HandleFunc("GET /api/jobs", s.proxyToAgent)
 	s.mux.HandleFunc("GET /api/retention", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/retention/cleanup", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/retention/cleanup", signedProxy)
 
 	// Phase 5 — replication proxy (routes to agent)
 	s.mux.HandleFunc("GET /api/replication/tasks", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/replication/tasks", s.proxyToAgent)
-	s.mux.HandleFunc("PUT /api/replication/tasks/{id}", s.proxyToAgent)
-	s.mux.HandleFunc("DELETE /api/replication/tasks/{id}", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/replication/tasks/{id}/run", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/replication/tasks", signedProxy)
+	s.mux.HandleFunc("PUT /api/replication/tasks/{id}", signedProxy)
+	s.mux.HandleFunc("DELETE /api/replication/tasks/{id}", signedProxy)
+	s.mux.HandleFunc("POST /api/replication/tasks/{id}/run", signedProxy)
 	s.mux.HandleFunc("GET /api/replication/tasks/{id}/history", s.proxyToAgent)
 }
 
@@ -259,6 +265,40 @@ func (s *Server) handlePresets(w http.ResponseWriter, _ *http.Request) {
 		"db":      {"name": "Database", "record_size": "16K", "compression": "lz4", "atime": "off", "sync": "always"},
 	}
 	addonutil.WriteJSON(w, http.StatusOK, presets)
+}
+
+// requireSignature wraps a handler with Ed25519 signature verification
+// for write operations when a server public key is configured.
+// GET requests are passed through without verification.
+func (s *Server) requireSignature(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.sigVerifier.Enabled() || r.Method == http.MethodGet {
+			next(w, r)
+			return
+		}
+
+		// Read the body to verify signature, then restore it for the proxy.
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			addonutil.WriteError(w, http.StatusBadRequest, "failed to read request body")
+			return
+		}
+
+		if err := s.sigVerifier.VerifyJSON(body); err != nil {
+			s.logger.Warn("command signature verification failed",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"error", err,
+			)
+			addonutil.WriteError(w, http.StatusUnauthorized, "invalid signature")
+			return
+		}
+		s.logger.Info("command signature verified", "path", r.URL.Path)
+
+		// Restore the body so proxyToAgent can read it.
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		next(w, r)
+	}
 }
 
 // proxyToAgent forwards a request to the resolved agent's HTTP API.

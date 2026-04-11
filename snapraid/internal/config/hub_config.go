@@ -20,8 +20,9 @@ type HubListen struct {
 }
 
 type HubVigil struct {
-	ServerURL string `yaml:"server_url"`
-	Token     string `yaml:"token"`
+	ServerURL    string `yaml:"server_url"`
+	Token        string `yaml:"token"`
+	ServerPubkey string `yaml:"server_pubkey"`
 }
 
 type HubData struct {
@@ -75,6 +76,9 @@ func applyHubEnvOverrides(cfg *HubConfig) {
 	}
 	if v := os.Getenv("VIGIL_TOKEN"); v != "" {
 		cfg.Vigil.Token = v
+	}
+	if v := os.Getenv("VIGIL_SERVER_PUBKEY"); v != "" {
+		cfg.Vigil.ServerPubkey = v
 	}
 	if v := os.Getenv("VIGIL_SNAPRAID_HUB_DATA_REGISTRY_PATH"); v != "" {
 		cfg.Data.RegistryPath = v

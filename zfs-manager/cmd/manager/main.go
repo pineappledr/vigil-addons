@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pineappledr/vigil-addons/shared/addonutil"
 	"github.com/pineappledr/vigil-addons/shared/vigilclient"
 	"github.com/pineappledr/vigil-addons/zfs-manager/internal/config"
 	"github.com/pineappledr/vigil-addons/zfs-manager/internal/manager"
@@ -66,9 +67,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize Ed25519 signature verifier for command authentication.
+	sigVerifier, err := addonutil.NewSignatureVerifier(cfg.Vigil.ServerPubkey)
+	if err != nil {
+		logger.Error("failed to parse server public key", "error", err)
+		os.Exit(1)
+	}
+	if sigVerifier.Enabled() {
+		logger.Info("ed25519 command signature verification enabled")
+	} else {
+		logger.Warn("no server_pubkey configured, command signature verification disabled")
+	}
+
 	upstreamCh := make(chan []byte, 256)
 	aggregator := manager.NewAggregator(registry, upstreamCh, logger)
-	srv := manager.NewServer(cfg, registry, aggregator, psk, logger)
+	srv := manager.NewServer(cfg, registry, aggregator, psk, sigVerifier, logger)
 
 	addr := fmt.Sprintf(":%d", cfg.Listen.Port)
 	httpServer := &http.Server{

@@ -16,26 +16,28 @@ import (
 
 // Server is the Hub HTTP server exposing registry, command, and telemetry endpoints.
 type Server struct {
-	cfg        *config.HubConfig
-	registry   *Registry
-	aggregator *Aggregator
-	router     *CommandRouter
-	mux        *http.ServeMux
-	logger     *slog.Logger
-	pskMu      sync.RWMutex
-	psk        string
+	cfg         *config.HubConfig
+	registry    *Registry
+	aggregator  *Aggregator
+	router      *CommandRouter
+	sigVerifier *addonutil.SignatureVerifier
+	mux         *http.ServeMux
+	logger      *slog.Logger
+	pskMu       sync.RWMutex
+	psk         string
 }
 
 // NewServer creates the Hub server with all dependencies.
-func NewServer(cfg *config.HubConfig, registry *Registry, aggregator *Aggregator, router *CommandRouter, psk string, logger *slog.Logger) *Server {
+func NewServer(cfg *config.HubConfig, registry *Registry, aggregator *Aggregator, router *CommandRouter, psk string, sigVerifier *addonutil.SignatureVerifier, logger *slog.Logger) *Server {
 	s := &Server{
-		cfg:        cfg,
-		registry:   registry,
-		aggregator: aggregator,
-		router:     router,
-		mux:        http.NewServeMux(),
-		logger:     logger,
-		psk:        psk,
+		cfg:         cfg,
+		registry:    registry,
+		aggregator:  aggregator,
+		router:      router,
+		sigVerifier: sigVerifier,
+		mux:         http.NewServeMux(),
+		logger:      logger,
+		psk:         psk,
 	}
 	s.routes()
 	return s
@@ -225,6 +227,23 @@ func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
+	// Read the raw body so we can verify the signature before parsing.
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read request body"})
+		return
+	}
+
+	// Verify Ed25519 signature if a server public key is configured.
+	if s.sigVerifier.Enabled() {
+		if err := s.sigVerifier.VerifyJSON(body); err != nil {
+			s.logger.Warn("command signature verification failed", "error", err)
+			addonutil.WriteJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid signature"})
+			return
+		}
+		s.logger.Info("command signature verified")
+	}
+
 	// Accept both {"action":"status"} and {"command":"status"} since the
 	// Vigil action proxy forwards form data as-is (which uses "command").
 	type commandRequest struct {
@@ -233,8 +252,9 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		Command string          `json:"command"`
 		Params  json.RawMessage `json:"params"`
 	}
-	raw, ok := decodeJSON[commandRequest](w, r, "invalid command")
-	if !ok {
+	var raw commandRequest
+	if err := json.Unmarshal(body, &raw); err != nil {
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid command"})
 		return
 	}
 

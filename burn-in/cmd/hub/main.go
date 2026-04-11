@@ -58,7 +58,7 @@ func run(logger *slog.Logger) error {
 		TempCriticalC: cfg.Alerts.TempCriticalC,
 	}, logger)
 
-	srv := hub.NewServer(registry, aggregator, cfg.Hub.AgentPSK, cfg.Hub.AdvertiseURL, cfg.Hub.DataDir, logger)
+	srv := hub.NewServer(registry, aggregator, cfg.Hub.AgentPSK, cfg.Hub.Listen, cfg.Hub.DataDir, logger)
 
 	httpServer := &http.Server{
 		Addr:         cfg.Hub.Listen,

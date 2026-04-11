@@ -66,6 +66,89 @@ All data pages have an **agent selector** — pick which host to view.
 
 ---
 
+## Prerequisites
+
+### Manager Requirements
+
+The Manager is a lightweight coordinator — it has **no ZFS dependency** and can run on any host (including one without ZFS). Only needs:
+
+- Docker (if using the container image), or any Linux amd64/arm64 host for the binary
+- Network access to the Vigil Server and to Agent hosts
+
+### Agent Host Requirements
+
+Each host running a ZFS Agent **must** have ZFS installed and operational. The Agent does not bundle ZFS — it calls the host's `zpool` and `zfs` binaries directly.
+
+#### Required
+
+| Dependency | Provides | Used For |
+|------------|----------|----------|
+| **ZFS** (`zfsutils-linux` or equivalent) | `zpool`, `zfs` | All pool, dataset, snapshot, scrub, and replication operations |
+| `/dev/zfs` device node | Kernel ZFS interface | Required for any `zpool`/`zfs` command to function |
+| **Root/sudo access** | Privileged execution | ZFS operations require root. Docker containers must run with `privileged: true` |
+
+Install ZFS on **Debian/Ubuntu/Proxmox**:
+
+```bash
+sudo apt install -y zfsutils-linux
+```
+
+Install ZFS on **Arch Linux** (via [archzfs](https://github.com/archzfs/archzfs)):
+
+```bash
+sudo pacman -S zfs-linux
+```
+
+Install ZFS on **Fedora/RHEL**:
+
+```bash
+sudo dnf install -y https://zfsonlinux.org/fedora/zfs-release-latest.noarch.rpm
+sudo dnf install -y zfs
+```
+
+> **TrueNAS SCALE / Proxmox:** ZFS is pre-installed — no additional packages needed.
+
+#### Optional
+
+| Dependency | Provides | Used For |
+|------------|----------|----------|
+| **ledctl** (`ledmon` package) | `ledctl` | Drive bay LED identification (locate/fault blink). Gracefully skipped if not installed — the "Identify" button will not appear in the UI. |
+
+```bash
+# Debian/Ubuntu
+sudo apt install -y ledmon
+
+# Arch
+sudo pacman -S ledmon
+```
+
+#### Docker Volume Mounts
+
+When running the Agent in Docker, the host's ZFS binaries and libraries must be bind-mounted into the container:
+
+| Mount | Purpose |
+|-------|---------|
+| `/dev/zfs:/dev/zfs` | Kernel ZFS device node |
+| `/sbin/zpool:/sbin/zpool:ro` | ZFS pool management binary |
+| `/sbin/zfs:/sbin/zfs:ro` | ZFS dataset/snapshot binary |
+| `/lib:/lib:ro` | Shared libraries required by `zpool`/`zfs` |
+| `/lib64:/lib64:ro` | 64-bit shared libraries |
+| `/usr/lib:/usr/lib:ro` | Additional shared libraries |
+
+> **Why `privileged: true`?** ZFS operations interact directly with kernel modules and block devices. Without privileged mode, `zpool` and `zfs` commands will fail with permission errors.
+
+> **Alpine vs Debian image:** The default image (`latest`) is Alpine-based. If your host uses glibc-compiled ZFS (Proxmox, Ubuntu, Debian), use `latest-debian` to avoid dynamic linker errors when calling the mounted host binaries.
+
+### Network Ports
+
+| Port | Service | Direction |
+|------|---------|-----------|
+| 9080 | Vigil Server | Manager → Server |
+| 9500 | ZFS Manager | Agent → Manager, Server → Manager |
+| 9600 | ZFS Agent | Manager → Agent |
+
+---
+
 ## Deployment
 
 ### 1. Register in Vigil

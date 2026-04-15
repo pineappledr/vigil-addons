@@ -1205,7 +1205,7 @@
           "id": "agent-list",
           "title": "Registered Agents",
           "config": {
-            "source": "/api/agents",
+            "source": "addon_agents",
             "columns": [
               { "key": "agent_id",      "label": "Agent ID",   "sortable": true },
               { "key": "hostname",      "label": "Hostname",   "sortable": true },

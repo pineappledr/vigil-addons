@@ -12,13 +12,14 @@ const agentOnlineThreshold = 2 * time.Minute
 
 // AgentEntry represents a registered ZFS agent.
 type AgentEntry struct {
-	ID            string    `json:"agent_id"`
-	Hostname      string    `json:"hostname"`
-	Arch          string    `json:"arch"`
-	Address       string    `json:"address"`
-	Version       string    `json:"version"`
-	RegisteredAt  time.Time `json:"registered_at"`
-	LastSeenAt    time.Time `json:"last_seen_at"`
+	ID           string    `json:"agent_id"`
+	Hostname     string    `json:"hostname"`
+	Alias        string    `json:"alias,omitempty"`
+	Arch         string    `json:"arch"`
+	Address      string    `json:"address"`
+	Version      string    `json:"version"`
+	RegisteredAt time.Time `json:"registered_at"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
 }
 
 // AgentView adds a computed online/offline status.
@@ -73,6 +74,19 @@ func (r *Registry) Touch(id string) {
 	if e, ok := r.agents[id]; ok {
 		e.LastSeenAt = time.Now().UTC()
 	}
+}
+
+// SetAlias updates the user-friendly alias for an agent. Passing an empty
+// string clears the alias. Returns false if the agent does not exist.
+func (r *Registry) SetAlias(id, alias string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.agents[id]
+	if !ok {
+		return false, nil
+	}
+	e.Alias = alias
+	return true, r.save()
 }
 
 // Delete removes an agent. Returns true if it existed.

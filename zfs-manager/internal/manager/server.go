@@ -74,6 +74,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/deploy-info", s.handleDeployInfo)
 	s.mux.HandleFunc("POST /api/agents/register", s.requirePSK(s.handleAgentRegister))
 	s.mux.HandleFunc("GET /api/agents", s.handleAgentList)
+	s.mux.HandleFunc("POST /api/agents/{id}/alias", s.handleAgentSetAlias)
 	s.mux.HandleFunc("DELETE /api/agents/{id}", s.handleAgentDelete)
 	s.mux.HandleFunc("POST /api/telemetry/ingest", s.requirePSK(s.handleTelemetryIngest))
 	s.mux.HandleFunc("GET /api/telemetry/{agentID}", s.handleTelemetryGet)
@@ -205,6 +206,39 @@ func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+type agentSetAliasRequest struct {
+	Alias string `json:"alias"`
+}
+
+func (s *Server) handleAgentSetAlias(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_id required"})
+		return
+	}
+	var req agentSetAliasRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	alias := strings.TrimSpace(req.Alias)
+	if len(alias) > 64 {
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "alias must be 64 characters or fewer"})
+		return
+	}
+	ok, err := s.registry.SetAlias(id, alias)
+	if err != nil {
+		s.logger.Error("failed to set agent alias", "agent_id", id, "error", err)
+		addonutil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist alias"})
+		return
+	}
+	if !ok {
+		addonutil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated", "alias": alias})
 }
 
 type telemetryIngestRequest struct {

@@ -1697,16 +1697,59 @@
             "source": "addon_agents",
             "columns": [
               { "key": "status",        "label": "Status",    "format": "status_dot" },
+              { "key": "alias",         "label": "Alias",     "sortable": true },
               { "key": "agent_id",      "label": "Agent ID",  "sortable": true },
               { "key": "hostname",      "label": "Hostname",  "sortable": true },
               { "key": "address",       "label": "Address",   "sortable": false },
               { "key": "arch",          "label": "Arch",      "sortable": true },
               { "key": "version",       "label": "Version",   "sortable": false },
-              { "key": "last_seen_at",  "label": "Last Seen", "sortable": true, "format": "relative_time" },
-              { "key": "_actions",      "label": "",          "format": "actions", "actions": [{ "type": "delete", "id_key": "agent_id", "label": "Delete agent" }] }
+              { "key": "last_seen_at",  "label": "Last Seen", "sortable": true, "format": "relative_time" }
             ],
             "sortable": true,
-            "default_sort": { "key": "agent_id", "direction": "asc" }
+            "default_sort": { "key": "agent_id", "direction": "asc" },
+            "row_actions": [
+              {
+                "id": "set-agent-alias",
+                "label": "Set Alias",
+                "icon": "tag",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/agents/{row.agent_id}/alias"
+                },
+                "form": {
+                  "title": "Set Alias — {row.agent_id}",
+                  "fields": [
+                    {
+                      "key": "alias",
+                      "label": "Alias",
+                      "type": "text",
+                      "value_from": "row.alias",
+                      "placeholder": "e.g. Friday",
+                      "hint": "Friendly name shown in the agent selector. Leave empty to clear.",
+                      "max_length": 64
+                    }
+                  ],
+                  "button_label": "Save Alias"
+                }
+              },
+              {
+                "id": "delete-agent",
+                "label": "Delete",
+                "icon": "trash-2",
+                "safety_tier": "red",
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/agents/{row.agent_id}"
+                },
+                "confirm": {
+                  "title": "Delete Agent",
+                  "message": "Remove agent {row.agent_id} ({row.hostname}) from the registry? This only drops the manager-side record — the agent process will re-register itself on its next heartbeat unless you also stop it.",
+                  "button_label": "Delete Agent",
+                  "button_variant": "danger"
+                }
+              }
+            ]
           }
         },
         {

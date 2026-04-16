@@ -125,6 +125,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/replication/tasks/{id}", signedProxy)
 	s.mux.HandleFunc("POST /api/replication/tasks/{id}/run", signedProxy)
 	s.mux.HandleFunc("GET /api/replication/tasks/{id}/history", s.proxyToAgent)
+	// Remote replication helpers — test-connection writes to the agent's
+	// known_hosts file (host key pinning on first use), so it's signed.
+	// keys/{name}/public lazy-creates the keypair on the agent, also a write.
+	s.mux.HandleFunc("POST /api/replication/test-connection", signedProxy)
+	s.mux.HandleFunc("GET /api/replication/keys/{name}/public", signedProxy)
 }
 
 // resolveAgentID returns the agent_id from the query string, falling back to

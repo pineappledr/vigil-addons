@@ -95,13 +95,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/retention", s.handleRetentionStats)
 	s.mux.HandleFunc("POST /api/retention/cleanup", s.handleRetentionCleanup)
 
-	// Phase 5 — Local Replication
+	// Phase 5 — Replication (local + remote)
 	s.mux.HandleFunc("GET /api/replication/tasks", s.handleListReplicationTasks)
 	s.mux.HandleFunc("POST /api/replication/tasks", s.handleCreateReplicationTask)
 	s.mux.HandleFunc("PUT /api/replication/tasks/{id}", s.handleUpdateReplicationTask)
 	s.mux.HandleFunc("DELETE /api/replication/tasks/{id}", s.handleDeleteReplicationTask)
 	s.mux.HandleFunc("POST /api/replication/tasks/{id}/run", s.handleRunReplicationTask)
 	s.mux.HandleFunc("GET /api/replication/tasks/{id}/history", s.handleReplicationTaskHistory)
+	s.mux.HandleFunc("POST /api/replication/test-connection", s.handleTestRemoteConnection)
+	s.mux.HandleFunc("GET /api/replication/keys/{name}/public", s.handleGetReplicationKeyPublic)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

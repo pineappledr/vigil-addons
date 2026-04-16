@@ -59,8 +59,14 @@ func migrate(db *sql.DB) error {
 		updated_at       DATETIME NOT NULL DEFAULT (datetime('now')),
 		-- Phase 5: replication columns (nullable)
 		dest_target      TEXT,
-		replication_mode TEXT,
-		last_sent_snap   TEXT
+		replication_mode TEXT,     -- 'local' or 'remote'
+		last_sent_snap   TEXT,
+		-- Phase 5.2: remote replication fields (only set when replication_mode='remote')
+		dest_host        TEXT,
+		dest_port        INTEGER,
+		dest_user        TEXT,
+		ssh_key_name     TEXT,
+		bandwidth_kbps   INTEGER
 	);
 
 	CREATE TABLE IF NOT EXISTS job_history (
@@ -84,6 +90,11 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE scheduled_tasks ADD COLUMN dest_target     TEXT`,
 		`ALTER TABLE scheduled_tasks ADD COLUMN replication_mode TEXT`,
 		`ALTER TABLE scheduled_tasks ADD COLUMN last_sent_snap  TEXT`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN dest_host       TEXT`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN dest_port       INTEGER`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN dest_user       TEXT`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN ssh_key_name    TEXT`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN bandwidth_kbps  INTEGER`,
 	} {
 		// Ignore "duplicate column" errors — idempotent.
 		_, _ = db.Exec(stmt)
@@ -109,18 +120,31 @@ type ScheduledTask struct {
 
 	// Replication-specific fields (nullable — only set when task_type='replication').
 	DestTarget      *string `json:"dest_target,omitempty"`
-	ReplicationMode *string `json:"replication_mode,omitempty"` // "local"
+	ReplicationMode *string `json:"replication_mode,omitempty"` // "local" | "remote"
 	LastSentSnap    *string `json:"last_sent_snap,omitempty"`
+
+	// Remote replication (only set when replication_mode='remote').
+	DestHost      *string `json:"dest_host,omitempty"`
+	DestPort      *int    `json:"dest_port,omitempty"`
+	DestUser      *string `json:"dest_user,omitempty"`
+	SSHKeyName    *string `json:"ssh_key_name,omitempty"`
+	BandwidthKbps *int    `json:"bandwidth_kbps,omitempty"`
 }
 
 // InsertTask creates a new scheduled task.
 func InsertTask(db *sql.DB, t ScheduledTask) (int64, error) {
 	now := time.Now().UTC().Format(timeFmt)
 	res, err := db.Exec(
-		`INSERT INTO scheduled_tasks (task_type, target, schedule, recursive, enabled, prefix, retention, dest_target, replication_mode, last_sent_snap, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO scheduled_tasks (
+			task_type, target, schedule, recursive, enabled, prefix, retention,
+			dest_target, replication_mode, last_sent_snap,
+			dest_host, dest_port, dest_user, ssh_key_name, bandwidth_kbps,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.TaskType, t.Target, t.Schedule, t.Recursive, t.Enabled, t.Prefix, t.Retention,
-		t.DestTarget, t.ReplicationMode, t.LastSentSnap, now, now,
+		t.DestTarget, t.ReplicationMode, t.LastSentSnap,
+		t.DestHost, t.DestPort, t.DestUser, t.SSHKeyName, t.BandwidthKbps,
+		now, now,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert task: %w", err)
@@ -132,10 +156,16 @@ func InsertTask(db *sql.DB, t ScheduledTask) (int64, error) {
 func UpdateTask(db *sql.DB, t ScheduledTask) error {
 	now := time.Now().UTC().Format(timeFmt)
 	_, err := db.Exec(
-		`UPDATE scheduled_tasks SET target = ?, schedule = ?, recursive = ?, enabled = ?, prefix = ?, retention = ?,
-		 dest_target = ?, replication_mode = ?, last_sent_snap = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE scheduled_tasks SET
+			target = ?, schedule = ?, recursive = ?, enabled = ?, prefix = ?, retention = ?,
+			dest_target = ?, replication_mode = ?, last_sent_snap = ?,
+			dest_host = ?, dest_port = ?, dest_user = ?, ssh_key_name = ?, bandwidth_kbps = ?,
+			updated_at = ?
+		WHERE id = ?`,
 		t.Target, t.Schedule, t.Recursive, t.Enabled, t.Prefix, t.Retention,
-		t.DestTarget, t.ReplicationMode, t.LastSentSnap, now, t.ID,
+		t.DestTarget, t.ReplicationMode, t.LastSentSnap,
+		t.DestHost, t.DestPort, t.DestUser, t.SSHKeyName, t.BandwidthKbps,
+		now, t.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update task %d: %w", t.ID, err)
@@ -158,7 +188,9 @@ func DeleteTask(db *sql.DB, id int64) error {
 	return nil
 }
 
-const taskColumns = `id, task_type, target, schedule, recursive, enabled, prefix, retention, created_at, updated_at, COALESCE(dest_target,''), COALESCE(replication_mode,''), COALESCE(last_sent_snap,'')`
+const taskColumns = `id, task_type, target, schedule, recursive, enabled, prefix, retention, created_at, updated_at,
+	COALESCE(dest_target,''), COALESCE(replication_mode,''), COALESCE(last_sent_snap,''),
+	COALESCE(dest_host,''), COALESCE(dest_port,0), COALESCE(dest_user,''), COALESCE(ssh_key_name,''), COALESCE(bandwidth_kbps,0)`
 
 // GetTask returns a single task by ID.
 func GetTask(db *sql.DB, id int64) (*ScheduledTask, error) {
@@ -211,11 +243,13 @@ func scanTasks(rows *sql.Rows) ([]ScheduledTask, error) {
 
 func scanTaskFields(scan func(dest ...any) error) (*ScheduledTask, error) {
 	var t ScheduledTask
-	var destTarget, replMode, lastSnap string
+	var destTarget, replMode, lastSnap, destHost, destUser, sshKeyName string
+	var destPort, bandwidthKbps int
 	if err := scan(
 		&t.ID, &t.TaskType, &t.Target, &t.Schedule, &t.Recursive, &t.Enabled,
 		&t.Prefix, &t.Retention, &t.CreatedAt, &t.UpdatedAt,
 		&destTarget, &replMode, &lastSnap,
+		&destHost, &destPort, &destUser, &sshKeyName, &bandwidthKbps,
 	); err != nil {
 		return nil, err
 	}
@@ -227,6 +261,21 @@ func scanTaskFields(scan func(dest ...any) error) (*ScheduledTask, error) {
 	}
 	if lastSnap != "" {
 		t.LastSentSnap = &lastSnap
+	}
+	if destHost != "" {
+		t.DestHost = &destHost
+	}
+	if destPort != 0 {
+		t.DestPort = &destPort
+	}
+	if destUser != "" {
+		t.DestUser = &destUser
+	}
+	if sshKeyName != "" {
+		t.SSHKeyName = &sshKeyName
+	}
+	if bandwidthKbps != 0 {
+		t.BandwidthKbps = &bandwidthKbps
 	}
 	return &t, nil
 }

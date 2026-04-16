@@ -195,13 +195,19 @@ func (s *Scheduler) runScrubTask(ctx context.Context, task agentdb.ScheduledTask
 	return nil
 }
 
-// runReplicationTask performs a local zfs send|receive between two datasets.
-// Flow: resolve common snapshot → create fresh source snapshot → send|receive → update bookkeeping → retention.
+// runReplicationTask performs a zfs send|receive for a scheduled replication
+// task — either local (two datasets on this host) or remote (over SSH).
+// Flow: create fresh source snapshot → resolve common snapshot → send|receive
+// → update bookkeeping → retention on both sides.
 func (s *Scheduler) runReplicationTask(ctx context.Context, task agentdb.ScheduledTask) error {
 	if task.DestTarget == nil || *task.DestTarget == "" {
 		return fmt.Errorf("replication task %d has no dest_target", task.ID)
 	}
 	destTarget := *task.DestTarget
+	mode := "local"
+	if task.ReplicationMode != nil {
+		mode = *task.ReplicationMode
+	}
 
 	// 1. Create a fresh snapshot on the source so we always have something to send.
 	snapName := task.Prefix + "-" + time.Now().UTC().Format("2006-01-02-150405")
@@ -209,32 +215,48 @@ func (s *Scheduler) runReplicationTask(ctx context.Context, task agentdb.Schedul
 		return fmt.Errorf("create source snapshot %s@%s: %w", task.Target, snapName, err)
 	}
 	newSnap := task.Target + "@" + snapName
-	s.logger.Info("replication: source snapshot created", "snap", newSnap)
+	s.logger.Info("replication: source snapshot created", "snap", newSnap, "mode", mode)
 
-	// 2. Resolve the common snapshot for incremental send.
+	// 2. Resolve the common snapshot for incremental send. Destination listing
+	//    is local for local replication and SSH for remote.
 	srcSnaps, err := s.engine.ListSnapshotsForDataset(ctx, task.Target)
 	if err != nil {
 		return fmt.Errorf("list source snapshots: %w", err)
 	}
-	dstSnaps, _ := s.engine.ListSnapshotsForDataset(ctx, destTarget)
 
-	baseSnap := agent.FindCommonSnapshot(srcSnaps, dstSnaps)
-	if baseSnap != "" {
-		s.logger.Info("replication: incremental send", "base", baseSnap, "snap", newSnap)
-	} else {
-		s.logger.Info("replication: full send (no common snapshot)", "snap", newSnap)
+	var result *agent.ReplicationResult
+	var baseSnap string
+
+	switch mode {
+	case "remote":
+		tgt, err := remoteTargetFromTask(s.engine, task)
+		if err != nil {
+			return err
+		}
+		dstSnaps, _ := s.engine.ListRemoteSnapshotsForDataset(ctx, tgt)
+		baseSnap = agent.FindCommonSnapshot(srcSnaps, dstSnaps)
+		s.logSendDecision(mode, baseSnap, newSnap)
+
+		result, err = s.engine.SendReceiveRemote(ctx, newSnap, baseSnap, tgt)
+		if err != nil {
+			return fmt.Errorf("remote send|receive: %w", err)
+		}
+
+	default: // "local" (or empty, back-compat)
+		dstSnaps, _ := s.engine.ListSnapshotsForDataset(ctx, destTarget)
+		baseSnap = agent.FindCommonSnapshot(srcSnaps, dstSnaps)
+		s.logSendDecision(mode, baseSnap, newSnap)
+
+		result, err = s.engine.SendReceiveLocal(ctx, newSnap, baseSnap, destTarget)
+		if err != nil {
+			return fmt.Errorf("local send|receive: %w", err)
+		}
 	}
 
-	// 3. Run the send|receive pipeline.
-	result, err := s.engine.SendReceiveLocal(ctx, newSnap, baseSnap, destTarget)
-	if err != nil {
-		return fmt.Errorf("send|receive: %w", err)
-	}
-
-	msg := fmt.Sprintf("replicated %s → %s (%s)",
-		task.Target, destTarget, result.Duration.Round(time.Second))
+	msg := fmt.Sprintf("replicated %s → %s (%s, %s)",
+		task.Target, destTarget, mode, result.Duration.Round(time.Second))
 	s.logger.Info("replication: completed",
-		"snap", newSnap, "incremental", result.Incremental,
+		"snap", newSnap, "incremental", result.Incremental, "mode", mode,
 		"duration", result.Duration.Round(time.Second))
 
 	// Emit success event for upstream notifications.
@@ -251,15 +273,17 @@ func (s *Scheduler) runReplicationTask(ctx context.Context, task agentdb.Schedul
 		s.logger.Error("replication: update last_sent_snap failed", "error", err)
 	}
 
-	// 5. Apply retention on source.
+	// 5. Apply retention on source (always local).
 	if task.Retention > 0 {
 		if err := s.applyRetention(ctx, task); err != nil {
 			s.logger.Error("replication: source retention failed", "error", err)
 		}
 	}
 
-	// 6. Apply retention on destination.
-	if task.Retention > 0 {
+	// 6. Apply retention on destination. Only local mode — remote retention is
+	//    out of v0.5.0 scope (would need a second SSH round-trip with destroy
+	//    permissions the remote user may not have).
+	if mode == "local" && task.Retention > 0 {
 		if err := s.applyRetentionOnDataset(ctx, destTarget, task.Prefix, task.Retention); err != nil {
 			s.logger.Error("replication: dest retention failed", "error", err)
 		}
@@ -267,6 +291,44 @@ func (s *Scheduler) runReplicationTask(ctx context.Context, task agentdb.Schedul
 
 	go s.collector.RequestFlush()
 	return nil
+}
+
+func (s *Scheduler) logSendDecision(mode, baseSnap, newSnap string) {
+	if baseSnap != "" {
+		s.logger.Info("replication: incremental send", "base", baseSnap, "snap", newSnap, "mode", mode)
+	} else {
+		s.logger.Info("replication: full send (no common snapshot)", "snap", newSnap, "mode", mode)
+	}
+}
+
+// remoteTargetFromTask resolves a ScheduledTask into a RemoteTarget, returning
+// a descriptive error if any required remote field is missing.
+func remoteTargetFromTask(engine *agent.Engine, task agentdb.ScheduledTask) (agent.RemoteTarget, error) {
+	var missing []string
+	if task.DestHost == nil || *task.DestHost == "" {
+		missing = append(missing, "dest_host")
+	}
+	if task.DestUser == nil || *task.DestUser == "" {
+		missing = append(missing, "dest_user")
+	}
+	if task.SSHKeyName == nil || *task.SSHKeyName == "" {
+		missing = append(missing, "ssh_key_name")
+	}
+	if task.DestTarget == nil || *task.DestTarget == "" {
+		missing = append(missing, "dest_target")
+	}
+	if len(missing) > 0 {
+		return agent.RemoteTarget{}, fmt.Errorf("remote replication task %d missing: %s", task.ID, strings.Join(missing, ", "))
+	}
+	port := 22
+	if task.DestPort != nil && *task.DestPort > 0 {
+		port = *task.DestPort
+	}
+	bandwidth := 0
+	if task.BandwidthKbps != nil {
+		bandwidth = *task.BandwidthKbps
+	}
+	return engine.RemoteTargetFromTask(*task.DestTarget, *task.DestHost, *task.DestUser, port, *task.SSHKeyName, bandwidth)
 }
 
 // applyRetentionOnDataset is a generalized retention helper that works on any

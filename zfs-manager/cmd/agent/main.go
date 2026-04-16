@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -50,7 +51,10 @@ func main() {
 	// Start daily prune of old job history (30 day retention).
 	agentdb.StartPruneLoop(appCtx, db, 30*24*time.Hour, logger)
 
-	engine := agent.NewEngine(cfg.ZFS.ZpoolPath, cfg.ZFS.ZfsPath, logger)
+	// SSH keys for remote replication live under <data_root>/ssh, where
+	// <data_root> is the directory containing the SQLite database.
+	sshKeyDir := filepath.Join(filepath.Dir(*dbPath), "ssh")
+	engine := agent.NewEngine(cfg.ZFS.ZpoolPath, cfg.ZFS.ZfsPath, sshKeyDir, logger)
 
 	hostname, _ := os.Hostname()
 	agentID := cfg.Identity.AgentID

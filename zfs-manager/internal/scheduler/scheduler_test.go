@@ -33,7 +33,12 @@ func openTestDB(t *testing.T) *sql.DB {
 			updated_at       DATETIME NOT NULL DEFAULT (datetime('now')),
 			dest_target      TEXT,
 			replication_mode TEXT,
-			last_sent_snap   TEXT
+			last_sent_snap   TEXT,
+			dest_host        TEXT,
+			dest_port        INTEGER,
+			dest_user         TEXT,
+			ssh_key_name     TEXT,
+			bandwidth_kbps   INTEGER
 		);
 		CREATE TABLE IF NOT EXISTS job_history (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,

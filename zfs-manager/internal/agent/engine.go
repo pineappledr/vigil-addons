@@ -21,22 +21,30 @@ var ErrCapabilityUnavailable = errors.New("capability not available on this host
 
 // Engine wraps ZFS CLI commands.
 type Engine struct {
-	zpoolPath  string
-	zfsPath    string
-	ledctlPath string
-	logger     *slog.Logger
+	zpoolPath     string
+	zfsPath       string
+	ledctlPath    string
+	sshPath       string
+	sshKeygenPath string
+	pvPath        string
+	sshKeyDir     string
+	logger        *slog.Logger
 }
 
 // Capabilities reports optional features the engine can perform based on which
 // host binaries were found at startup. The set is fixed for the engine's
 // lifetime — restart the agent if the host gains a new tool.
 type Capabilities struct {
-	LEDIdentify bool `json:"led_identify"`
+	LEDIdentify       bool `json:"led_identify"`
+	RemoteReplication bool `json:"remote_replication"`
+	BandwidthLimit    bool `json:"bandwidth_limit"`
 }
 
 // NewEngine creates an Engine with the given binary paths.
 // If paths are empty, it auto-detects from $PATH.
-func NewEngine(zpoolPath, zfsPath string, logger *slog.Logger) *Engine {
+// sshKeyDir is where Ed25519 keypairs and known_hosts are persisted for remote
+// replication; if empty, remote replication is disabled even if ssh is present.
+func NewEngine(zpoolPath, zfsPath, sshKeyDir string, logger *slog.Logger) *Engine {
 	if zpoolPath == "" {
 		zpoolPath = "zpool"
 	}
@@ -47,18 +55,30 @@ func NewEngine(zpoolPath, zfsPath string, logger *slog.Logger) *Engine {
 	// not present on every host (no enclosure, no SES backplane, container
 	// without /sys access), so a missing binary is not an error.
 	ledctlPath, _ := exec.LookPath("ledctl")
+	// Optional: ssh/ssh-keygen enable remote replication. pv enables the
+	// bandwidth-limit option in the remote pipeline. All three are probed at
+	// startup so the UI can grey out features the host cannot perform.
+	sshPath, _ := exec.LookPath("ssh")
+	sshKeygenPath, _ := exec.LookPath("ssh-keygen")
+	pvPath, _ := exec.LookPath("pv")
 	return &Engine{
-		zpoolPath:  zpoolPath,
-		zfsPath:    zfsPath,
-		ledctlPath: ledctlPath,
-		logger:     logger,
+		zpoolPath:     zpoolPath,
+		zfsPath:       zfsPath,
+		ledctlPath:    ledctlPath,
+		sshPath:       sshPath,
+		sshKeygenPath: sshKeygenPath,
+		pvPath:        pvPath,
+		sshKeyDir:     sshKeyDir,
+		logger:        logger,
 	}
 }
 
 // Capabilities returns the optional-feature flags probed at engine creation.
 func (e *Engine) Capabilities() Capabilities {
 	return Capabilities{
-		LEDIdentify: e.ledctlPath != "",
+		LEDIdentify:       e.ledctlPath != "",
+		RemoteReplication: e.sshPath != "" && e.sshKeygenPath != "" && e.sshKeyDir != "",
+		BandwidthLimit:    e.pvPath != "",
 	}
 }
 

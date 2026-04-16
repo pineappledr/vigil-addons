@@ -71,7 +71,9 @@ func (e *Engine) EnsureSSHKey(ctx context.Context, name string) (string, error) 
 	pubPath := PublicKeyPath(e.sshKeyDir, name)
 
 	if _, err := os.Stat(privPath); os.IsNotExist(err) {
-		// #nosec G204 -- name is validated by sshKeyNameValid above.
+		// #nosec G204,G702 -- name is validated by sshKeyNameValid above
+		// (letters/digits/-/_ only, max 64 chars) so the -C comment and -f
+		// path cannot be used for argument or command injection.
 		cmd := exec.CommandContext(ctx, e.sshKeygenPath,
 			"-t", "ed25519",
 			"-N", "",

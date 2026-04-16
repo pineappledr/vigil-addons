@@ -1207,15 +1207,14 @@
           "config": {
             "source": "addon_agents",
             "columns": [
-              { "key": "agent_id",      "label": "Agent ID",   "sortable": true },
-              { "key": "hostname",      "label": "Hostname",   "sortable": true },
-              { "key": "status",        "label": "Status",     "sortable": true, "badge": {
-                "online":  "success",
-                "offline": "muted"
-              }},
-              { "key": "arch",          "label": "Arch",       "sortable": true },
-              { "key": "version",       "label": "Version",    "sortable": false },
-              { "key": "last_seen_at",  "label": "Last Seen",  "sortable": true, "format": "timestamp" }
+              { "key": "status",        "label": "Status",    "format": "status_dot" },
+              { "key": "agent_id",      "label": "Agent ID",  "sortable": true },
+              { "key": "hostname",      "label": "Hostname",  "sortable": true },
+              { "key": "address",       "label": "Address",   "sortable": false },
+              { "key": "arch",          "label": "Arch",      "sortable": true },
+              { "key": "version",       "label": "Version",   "sortable": false },
+              { "key": "last_seen_at",  "label": "Last Seen", "sortable": true, "format": "relative_time" },
+              { "key": "_actions",      "label": "",          "format": "actions", "actions": [{ "type": "delete", "id_key": "agent_id", "label": "Delete agent" }] }
             ],
             "sortable": true,
             "default_sort": { "key": "agent_id", "direction": "asc" }

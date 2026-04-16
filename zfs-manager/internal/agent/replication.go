@@ -410,6 +410,189 @@ func (e *Engine) ListRemoteSnapshotsForDataset(ctx context.Context, tgt RemoteTa
 	return snapshots, nil
 }
 
+// GetReceiveResumeToken returns the zfs `receive_resume_token` property for a
+// local dataset. When a previous zfs receive was interrupted partway, zfs
+// stores a resume token on the destination so the sender can continue from
+// where it left off via `zfs send -t <token>`. A value of "-" or "" means no
+// interrupted receive exists.
+func (e *Engine) GetReceiveResumeToken(ctx context.Context, dataset string) (string, error) {
+	out, err := e.runZFS(ctx, "get", "-H", "-o", "value", "receive_resume_token", dataset)
+	if err != nil {
+		if strings.Contains(err.Error(), "does not exist") {
+			return "", nil
+		}
+		return "", fmt.Errorf("get receive_resume_token for %s: %w", dataset, err)
+	}
+	tok := strings.TrimSpace(out)
+	if tok == "-" {
+		return "", nil
+	}
+	return tok, nil
+}
+
+// GetRemoteReceiveResumeToken is the SSH analogue of GetReceiveResumeToken —
+// queries the remote destination dataset for an interrupted-receive token.
+func (e *Engine) GetRemoteReceiveResumeToken(ctx context.Context, tgt RemoteTarget) (string, error) {
+	if e.sshPath == "" {
+		return "", fmt.Errorf("%w: ssh not found", ErrCapabilityUnavailable)
+	}
+	args := append(BuildSSHArgs(tgt), "zfs", "get", "-H", "-o", "value", "receive_resume_token", tgt.DestDataset)
+	// #nosec G204,G702 -- sshPath probed at startup; target fields are either
+	// validated user input or agent-owned file paths.
+	cmd := exec.CommandContext(ctx, e.sshPath, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := stderr.String()
+		if strings.Contains(msg, "dataset does not exist") {
+			return "", nil
+		}
+		return "", fmt.Errorf("get remote receive_resume_token: %w: %s", err, strings.TrimSpace(msg))
+	}
+	tok := strings.TrimSpace(stdout.String())
+	if tok == "-" {
+		return "", nil
+	}
+	return tok, nil
+}
+
+// SendReceiveRemoteResume resumes an interrupted remote receive using a token
+// previously returned by GetRemoteReceiveResumeToken. `zfs send -t <token>`
+// streams only the bytes that weren't delivered last time; the destination's
+// existing partial state is kept.
+//
+// Uses the same pv / ssh pipeline plumbing as SendReceiveRemote but without
+// the -F flag on receive (resume explicitly does not force).
+func (e *Engine) SendReceiveRemoteResume(ctx context.Context, token string, tgt RemoteTarget) (*ReplicationResult, error) {
+	if e.sshPath == "" {
+		return nil, fmt.Errorf("%w: ssh not found", ErrCapabilityUnavailable)
+	}
+	if token == "" {
+		return nil, fmt.Errorf("resume: token is empty")
+	}
+
+	start := time.Now()
+
+	sendArgs := []string{"send", "-t", token}
+	// Resume does not use -F; the destination already has the partial stream.
+	sshArgs := append(BuildSSHArgs(tgt), "zfs", "receive", "-s", tgt.DestDataset)
+
+	// #nosec G204,G702 -- zfsPath/sshPath probed at startup; token comes from
+	// zfs's own property output, not user input.
+	sendCmd := exec.CommandContext(ctx, e.zfsPath, sendArgs...)
+	sshCmd := exec.CommandContext(ctx, e.sshPath, sshArgs...)
+
+	pr, pw := io.Pipe()
+	sendCmd.Stdout = pw
+	sshCmd.Stdin = pr
+
+	var sendStderr, sshStderr bytes.Buffer
+	sendCmd.Stderr = &sendStderr
+	sshCmd.Stderr = &sshStderr
+
+	e.logger.Info("replication: resuming remote receive", "host", tgt.Host, "dest", tgt.DestDataset)
+
+	if err := sshCmd.Start(); err != nil {
+		return nil, fmt.Errorf("start ssh: %w", err)
+	}
+	if err := sendCmd.Start(); err != nil {
+		sshCmd.Process.Kill() //nolint:errcheck
+		sshCmd.Wait()         //nolint:errcheck
+		return nil, fmt.Errorf("start zfs send -t: %w", err)
+	}
+
+	sendErr := sendCmd.Wait()
+	pw.Close()
+	sshErr := sshCmd.Wait()
+
+	if sendErr != nil {
+		return nil, fmt.Errorf("resume send failed: %w: %s", sendErr, strings.TrimSpace(sendStderr.String()))
+	}
+	if sshErr != nil {
+		return nil, fmt.Errorf("resume recv failed: %w: %s", sshErr, strings.TrimSpace(sshStderr.String()))
+	}
+
+	return &ReplicationResult{
+		Duration:     time.Since(start),
+		Incremental:  true,
+		SnapshotUsed: "(resume)",
+		Command:      e.zfsPath + " send -t <token> | ssh " + tgt.User + "@" + tgt.Host + " zfs receive -s " + tgt.DestDataset,
+	}, nil
+}
+
+// DestroyRemoteSnapshot removes a snapshot on the remote host over SSH. Used
+// by scheduled remote replication tasks that opt in to manage_remote_retention.
+// The remote SSH user must have `destroy,mount` zfs permissions on the parent
+// dataset — we do not attempt to escalate.
+func (e *Engine) DestroyRemoteSnapshot(ctx context.Context, tgt RemoteTarget, fullName string) error {
+	if e.sshPath == "" {
+		return fmt.Errorf("%w: ssh not found", ErrCapabilityUnavailable)
+	}
+	if !strings.Contains(fullName, "@") {
+		return fmt.Errorf("destroy-remote: %q is not a snapshot (expected dataset@name)", fullName)
+	}
+	args := append(BuildSSHArgs(tgt), "zfs", "destroy", fullName)
+
+	// #nosec G204,G702 -- sshPath probed at startup; fullName is built from
+	// remote-listed dataset names, not free-form user input.
+	cmd := exec.CommandContext(ctx, e.sshPath, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("destroy remote snapshot %s: %w: %s", fullName, err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// CreateBookmark creates a zfs bookmark from an existing snapshot. Bookmarks
+// act as a fixed incremental-send base that survives snapshot deletion, so the
+// source can prune aggressively without breaking the replication chain.
+//
+// snapFullName is "dataset@snap"; bookmarkName is the short name (no @ or #).
+// The resulting bookmark is "dataset#bookmarkName".
+func (e *Engine) CreateBookmark(ctx context.Context, snapFullName, bookmarkName string) (string, error) {
+	if !strings.Contains(snapFullName, "@") {
+		return "", fmt.Errorf("bookmark: %q is not a snapshot", snapFullName)
+	}
+	dataset := strings.SplitN(snapFullName, "@", 2)[0]
+	bm := dataset + "#" + bookmarkName
+	if _, err := e.runZFS(ctx, "bookmark", snapFullName, bm); err != nil {
+		return "", fmt.Errorf("zfs bookmark %s %s: %w", snapFullName, bm, err)
+	}
+	return bm, nil
+}
+
+// ListBookmarksForDataset returns existing bookmarks on the given dataset.
+// Returns FullName like "pool/ds#bm-...".
+func (e *Engine) ListBookmarksForDataset(ctx context.Context, dataset string) ([]string, error) {
+	out, err := e.runZFS(ctx, "list", "-Hp", "-o", "name", "-t", "bookmark", "-r", dataset)
+	if err != nil {
+		if strings.Contains(err.Error(), "does not exist") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list bookmarks for %s: %w", dataset, err)
+	}
+	var out2 []string
+	for _, line := range splitLines(out) {
+		if strings.HasPrefix(line, dataset+"#") {
+			out2 = append(out2, line)
+		}
+	}
+	return out2, nil
+}
+
+// DestroyBookmark removes a zfs bookmark ("dataset#name").
+func (e *Engine) DestroyBookmark(ctx context.Context, fullName string) error {
+	if !strings.Contains(fullName, "#") {
+		return fmt.Errorf("destroy-bookmark: %q is not a bookmark", fullName)
+	}
+	if _, err := e.runZFS(ctx, "destroy", fullName); err != nil {
+		return fmt.Errorf("destroy bookmark %s: %w", fullName, err)
+	}
+	return nil
+}
+
 // TestRemoteConnection performs a read-only SSH probe against the remote host
 // to verify three things: (1) the host key is trusted (or gets pinned now),
 // (2) the private key is accepted, and (3) the remote user can see the

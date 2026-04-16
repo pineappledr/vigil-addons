@@ -130,6 +130,7 @@ func (s *Server) routes() {
 	// keys/{name}/public lazy-creates the keypair on the agent, also a write.
 	s.mux.HandleFunc("POST /api/replication/test-connection", signedProxy)
 	s.mux.HandleFunc("GET /api/replication/keys/{name}/public", signedProxy)
+	s.mux.HandleFunc("POST /api/replication/keys/{name}/rotate", signedProxy)
 }
 
 // resolveAgentID returns the agent_id from the query string, falling back to

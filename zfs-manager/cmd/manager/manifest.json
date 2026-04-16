@@ -1,6 +1,6 @@
 {
   "name": "ZFS Manager",
-  "version": "0.4.0",
+  "version": "0.5.1",
   "description": "ZFS pool, dataset, and snapshot management for homelab servers",
   "author": "Vigil Add-ons",
   "docker_image": "ghcr.io/pineappledr/vigil-addons-zfs-manager:latest",
@@ -1351,6 +1351,20 @@
                       "hint": "0 or blank = unlimited. Ignored for local replication."
                     },
                     {
+                      "key": "manage_remote_retention",
+                      "label": "Manage Retention on Remote (remote mode only)",
+                      "type": "checkbox",
+                      "value_from": "row.manage_remote_retention",
+                      "hint": "Destroys old snapshots on the remote host after each successful receive, keeping the same count as source retention. Requires 'destroy,mount' zfs permissions for the SSH user on the destination dataset."
+                    },
+                    {
+                      "key": "use_bookmarks",
+                      "label": "Use Bookmarks for Incrementals (remote mode only)",
+                      "type": "checkbox",
+                      "value_from": "row.use_bookmarks",
+                      "hint": "Creates a zfs bookmark of each sent snapshot so source retention can prune aggressively without breaking the incremental chain."
+                    },
+                    {
                       "key": "enabled",
                       "label": "Enabled",
                       "type": "checkbox",
@@ -1358,6 +1372,79 @@
                     }
                   ],
                   "button_label": "Save Changes"
+                }
+              },
+              {
+                "id": "replication-history",
+                "label": "History",
+                "icon": "history",
+                "safety_tier": "green",
+                "action": {
+                  "method": "GET",
+                  "endpoint": "/api/replication/tasks/{row.id}/history"
+                },
+                "result_view": {
+                  "title": "Replication History — Task #{row.id}",
+                  "type": "table",
+                  "columns": [
+                    { "key": "id",          "label": "Job ID",     "sortable": true },
+                    { "key": "trigger",     "label": "Trigger",    "sortable": true },
+                    { "key": "started_at",  "label": "Started",    "sortable": true, "format": "timestamp" },
+                    { "key": "finished_at", "label": "Finished",   "sortable": true, "format": "timestamp" },
+                    { "key": "status",      "label": "Status",     "sortable": true, "badge": {
+                      "success": "success",
+                      "error":   "danger",
+                      "running": "warning"
+                    }},
+                    { "key": "message",     "label": "Message",    "sortable": false }
+                  ],
+                  "default_sort": { "key": "started_at", "direction": "desc" }
+                }
+              },
+              {
+                "id": "show-replication-key",
+                "label": "Show Public Key",
+                "icon": "key",
+                "safety_tier": "green",
+                "capability": "remote_replication",
+                "visible_when": { "field": "row.replication_mode", "equals": "remote" },
+                "action": {
+                  "method": "GET",
+                  "endpoint": "/api/replication/keys/{row.ssh_key_name}/public"
+                },
+                "result_view": {
+                  "title": "Public Key — {row.ssh_key_name}",
+                  "type": "text",
+                  "field": "public_key",
+                  "description": "Append this single line to ~/.ssh/authorized_keys on the destination host's SSH user so the agent can connect."
+                }
+              },
+              {
+                "id": "rotate-replication-key",
+                "label": "Rotate SSH Key",
+                "icon": "refresh-cw",
+                "safety_tier": "red",
+                "capability": "remote_replication",
+                "visible_when": { "field": "row.replication_mode", "equals": "remote" },
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/replication/keys/{row.ssh_key_name}/rotate"
+                },
+                "confirm": {
+                  "title": "Rotate SSH Key — {row.ssh_key_name}",
+                  "message": "Rotating deletes the existing keypair and generates a new Ed25519 one. Until you copy the new public line into ~/.ssh/authorized_keys on every host that currently trusts this key, scheduled replications using it will fail with permission denied.",
+                  "require_type_confirm": true,
+                  "confirm_value": "rotate",
+                  "confirm_label": "Type 'rotate' to confirm",
+                  "confirm_key": "confirm",
+                  "button_label": "Rotate Key",
+                  "button_variant": "danger"
+                },
+                "result_view": {
+                  "title": "New Public Key — {row.ssh_key_name}",
+                  "type": "text",
+                  "field": "public_key",
+                  "description": "Old key is gone. Copy this line into ~/.ssh/authorized_keys on every host that needs to trust this agent."
                 }
               },
               {
@@ -1469,11 +1556,16 @@
                 "capability": "remote_replication",
                 "action": {
                   "method": "POST",
-                  "endpoint": "/api/replication/tasks"
+                  "endpoint": "/api/replication/tasks",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "replication", "replication_mode": "remote" }
+                  }
                 },
                 "form": {
                   "title": "Create Remote Replication Task",
                   "description": "Send snapshots over SSH to a remote host's `zfs receive`. The agent auto-generates an Ed25519 keypair; copy its public line into ~/.ssh/authorized_keys on the remote user, then use Test Connection to pin the host key and verify access. First run is a full send; subsequent runs are incremental.",
+                  "show_command": true,
                   "fields": [
                     { "key": "replication_mode", "type": "hidden", "value": "remote" },
                     {
@@ -1564,7 +1656,19 @@
                       ],
                       "allow_custom": true,
                       "custom_label": "Custom count",
-                      "hint": "Applied on the source after a successful run. Remote-side retention is not managed by v0.5.0 — configure it on the remote host separately."
+                      "hint": "Applied on the source after a successful run. Also applied on the remote destination when 'Manage Retention on Remote' is enabled below."
+                    },
+                    {
+                      "key": "manage_remote_retention",
+                      "label": "Manage Retention on Remote",
+                      "type": "checkbox",
+                      "hint": "Destroys old snapshots on the remote host after each successful receive, keeping the same count as source retention. Requires 'destroy,mount' zfs permissions for the SSH user on the destination dataset."
+                    },
+                    {
+                      "key": "use_bookmarks",
+                      "label": "Use Bookmarks for Incrementals",
+                      "type": "checkbox",
+                      "hint": "Creates a zfs bookmark of each sent snapshot. Future incrementals use the bookmark as their base so aggressive source retention cannot break the incremental chain."
                     },
                     {
                       "key": "recursive",

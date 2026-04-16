@@ -226,6 +226,7 @@ func (s *Scheduler) runReplicationTask(ctx context.Context, task agentdb.Schedul
 
 	var result *agent.ReplicationResult
 	var baseSnap string
+	var remoteTgt agent.RemoteTarget
 
 	switch mode {
 	case "remote":
@@ -233,8 +234,31 @@ func (s *Scheduler) runReplicationTask(ctx context.Context, task agentdb.Schedul
 		if err != nil {
 			return err
 		}
+		remoteTgt = tgt
+		// If a previous receive was interrupted, resume before doing anything
+		// else. The next scheduled run will then pick up the normal send path.
+		if token, terr := s.engine.GetRemoteReceiveResumeToken(ctx, tgt); terr == nil && token != "" {
+			s.logger.Info("replication: resuming interrupted remote receive",
+				"task_id", task.ID, "dest", destTarget)
+			if rres, rerr := s.engine.SendReceiveRemoteResume(ctx, token, tgt); rerr != nil {
+				s.logger.Warn("replication: resume failed — will retry full send",
+					"task_id", task.ID, "error", rerr)
+			} else {
+				s.logger.Info("replication: resume completed",
+					"task_id", task.ID, "duration", rres.Duration.Round(time.Second))
+			}
+		}
 		dstSnaps, _ := s.engine.ListRemoteSnapshotsForDataset(ctx, tgt)
 		baseSnap = agent.FindCommonSnapshot(srcSnaps, dstSnaps)
+		// Prefer a bookmark base if the task opted in and one exists that
+		// matches the common snapshot name. Bookmarks survive source pruning,
+		// so this keeps the chain alive even after retention has deleted the
+		// original snapshot.
+		if baseSnap != "" && task.UseBookmarks {
+			if bm := s.pickBookmarkBase(ctx, task.Target, baseSnap); bm != "" {
+				baseSnap = bm
+			}
+		}
 		s.logSendDecision(mode, baseSnap, newSnap)
 
 		result, err = s.engine.SendReceiveRemote(ctx, newSnap, baseSnap, tgt)
@@ -280,17 +304,82 @@ func (s *Scheduler) runReplicationTask(ctx context.Context, task agentdb.Schedul
 		}
 	}
 
-	// 6. Apply retention on destination. Only local mode — remote retention is
-	//    out of v0.5.0 scope (would need a second SSH round-trip with destroy
-	//    permissions the remote user may not have).
-	if mode == "local" && task.Retention > 0 {
+	// 6. Apply retention on destination.
+	switch {
+	case mode == "local" && task.Retention > 0:
 		if err := s.applyRetentionOnDataset(ctx, destTarget, task.Prefix, task.Retention); err != nil {
 			s.logger.Error("replication: dest retention failed", "error", err)
+		}
+	case mode == "remote" && task.Retention > 0 && task.ManageRemoteRetention:
+		if err := s.applyRemoteRetention(ctx, remoteTgt, task.Prefix, task.Retention); err != nil {
+			s.logger.Error("replication: remote dest retention failed", "error", err)
+		}
+	}
+
+	// 7. Record a bookmark on the source for the snapshot we just sent, so
+	//    future incrementals can use it as a base even if the snapshot itself
+	//    gets pruned. Bookmark name mirrors the snapshot name.
+	if mode == "remote" && task.UseBookmarks {
+		if _, err := s.engine.CreateBookmark(ctx, newSnap, snapName); err != nil {
+			s.logger.Warn("replication: bookmark create failed (continuing)", "snap", newSnap, "error", err)
+		} else {
+			s.logger.Info("replication: bookmark created", "snap", newSnap, "bookmark", snapName)
 		}
 	}
 
 	go s.collector.RequestFlush()
 	return nil
+}
+
+// applyRemoteRetention destroys old prefix-matching snapshots on the remote
+// host, keeping the newest `retention` entries. Errors on individual destroys
+// are logged but do not fail the task.
+func (s *Scheduler) applyRemoteRetention(ctx context.Context, tgt agent.RemoteTarget, prefix string, retention int) error {
+	snapshots, err := s.engine.ListRemoteSnapshotsForDataset(ctx, tgt)
+	if err != nil {
+		return fmt.Errorf("list remote snapshots for retention: %w", err)
+	}
+	var matching []agent.SnapshotInfo
+	for _, snap := range snapshots {
+		if strings.HasPrefix(snap.SnapName, prefix+"-") {
+			matching = append(matching, snap)
+		}
+	}
+	if len(matching) <= retention {
+		return nil
+	}
+	// ListRemoteSnapshotsForDataset returns ascending by creation.
+	toDelete := matching[:len(matching)-retention]
+	for _, snap := range toDelete {
+		if err := s.engine.DestroyRemoteSnapshot(ctx, tgt, snap.FullName); err != nil {
+			s.logger.Error("remote retention delete failed", "snapshot", snap.FullName, "error", err)
+			continue
+		}
+		s.logger.Info("remote retention: deleted snapshot", "snapshot", snap.FullName)
+	}
+	return nil
+}
+
+// pickBookmarkBase returns a bookmark full-name whose short name matches the
+// common snapshot name (e.g. "pool/ds#auto-...") if one exists, otherwise "".
+// The caller should prefer this over the snapshot when task.UseBookmarks is
+// set, so source-side pruning doesn't break the incremental chain.
+func (s *Scheduler) pickBookmarkBase(ctx context.Context, dataset, commonSnapFull string) string {
+	parts := strings.SplitN(commonSnapFull, "@", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	want := dataset + "#" + parts[1]
+	bms, err := s.engine.ListBookmarksForDataset(ctx, dataset)
+	if err != nil {
+		return ""
+	}
+	for _, bm := range bms {
+		if bm == want {
+			return bm
+		}
+	}
+	return ""
 }
 
 func (s *Scheduler) logSendDecision(mode, baseSnap, newSnap string) {

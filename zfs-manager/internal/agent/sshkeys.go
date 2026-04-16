@@ -99,6 +99,36 @@ func (e *Engine) EnsureSSHKey(ctx context.Context, name string) (string, error) 
 	return strings.TrimSpace(string(pub)), nil
 }
 
+// RotateSSHKey replaces an existing keypair with a freshly generated one,
+// returning the new public key line. The old keypair is deleted. Returns an
+// error if the key did not exist (rotating a non-existent key is a no-op that
+// would surprise the caller — use EnsureSSHKey for idempotent creation).
+//
+// After rotation the user must re-copy the new public key to
+// ~/.ssh/authorized_keys on each remote host that was trusting the old one,
+// otherwise scheduled replications will start failing with permission denied.
+func (e *Engine) RotateSSHKey(ctx context.Context, name string) (string, error) {
+	if !sshKeyNameValid(name) {
+		return "", fmt.Errorf("invalid ssh key name %q", name)
+	}
+	if e.sshKeyDir == "" {
+		return "", fmt.Errorf("ssh key directory not configured")
+	}
+	privPath := PrivateKeyPath(e.sshKeyDir, name)
+	pubPath := PublicKeyPath(e.sshKeyDir, name)
+	if _, err := os.Stat(privPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("ssh key %q does not exist — create it first", name)
+		}
+		return "", fmt.Errorf("stat key: %w", err)
+	}
+	if err := os.Remove(privPath); err != nil {
+		return "", fmt.Errorf("remove old private key: %w", err)
+	}
+	_ = os.Remove(pubPath) // best-effort; EnsureSSHKey regenerates it
+	return e.EnsureSSHKey(ctx, name)
+}
+
 // PublicKey returns the OpenSSH authorized_keys line for an already-generated
 // keypair, or an error if it does not yet exist.
 func (e *Engine) PublicKey(name string) (string, error) {

@@ -60,6 +60,10 @@ type createReplicationRequest struct {
 	DestUser      string `json:"dest_user,omitempty"`
 	SSHKeyName    string `json:"ssh_key_name,omitempty"`
 	BandwidthKbps int    `json:"bandwidth_kbps,omitempty"`
+
+	// v0.5.1 opt-in remote features.
+	ManageRemoteRetention bool `json:"manage_remote_retention,omitempty"`
+	UseBookmarks          bool `json:"use_bookmarks,omitempty"`
 }
 
 func (s *Server) handleCreateReplicationTask(w http.ResponseWriter, r *http.Request) {
@@ -146,6 +150,8 @@ func (s *Server) handleCreateReplicationTask(w http.ResponseWriter, r *http.Requ
 		if req.BandwidthKbps > 0 {
 			task.BandwidthKbps = &req.BandwidthKbps
 		}
+		task.ManageRemoteRetention = req.ManageRemoteRetention
+		task.UseBookmarks = req.UseBookmarks
 	}
 
 	id, err := agentdb.InsertTask(s.db, task)
@@ -180,6 +186,11 @@ type updateReplicationRequest struct {
 	DestUser      string `json:"dest_user,omitempty"`
 	SSHKeyName    string `json:"ssh_key_name,omitempty"`
 	BandwidthKbps int    `json:"bandwidth_kbps,omitempty"`
+
+	// v0.5.1 opt-in remote features. Pointers so the UI can omit the field
+	// (leave existing value unchanged) vs. explicitly set false.
+	ManageRemoteRetention *bool `json:"manage_remote_retention,omitempty"`
+	UseBookmarks          *bool `json:"use_bookmarks,omitempty"`
 }
 
 func (s *Server) handleUpdateReplicationTask(w http.ResponseWriter, r *http.Request) {
@@ -258,6 +269,12 @@ func (s *Server) handleUpdateReplicationTask(w http.ResponseWriter, r *http.Requ
 			existing.BandwidthKbps = &req.BandwidthKbps
 		} else {
 			existing.BandwidthKbps = nil
+		}
+		if req.ManageRemoteRetention != nil {
+			existing.ManageRemoteRetention = *req.ManageRemoteRetention
+		}
+		if req.UseBookmarks != nil {
+			existing.UseBookmarks = *req.UseBookmarks
 		}
 	}
 
@@ -511,6 +528,34 @@ func (s *Server) handleTestRemoteConnection(w http.ResponseWriter, r *http.Reque
 	addonutil.WriteJSON(w, http.StatusOK, testRemoteConnectionResponse{
 		OK:      true,
 		Dataset: dataset,
+	})
+}
+
+// handleRotateReplicationKey deletes and regenerates a replication keypair,
+// returning the new public-key line. After rotation the user must re-copy the
+// public key to ~/.ssh/authorized_keys on every host that was trusting the
+// old key, or scheduled replications will begin failing with permission denied.
+func (s *Server) handleRotateReplicationKey(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !sshKeyNameValid(name) {
+		addonutil.WriteError(w, http.StatusBadRequest,
+			"ssh key name must contain only letters, digits, '-', '_' (max 64 chars)")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	pub, err := s.engine.RotateSSHKey(ctx, name)
+	if err != nil {
+		addonutil.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.logger.Info("rotated replication ssh key", "name", name)
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{
+		"name":       name,
+		"public_key": pub,
+		"status":     "rotated",
 	})
 }
 

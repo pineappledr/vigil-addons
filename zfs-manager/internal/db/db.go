@@ -66,7 +66,10 @@ func migrate(db *sql.DB) error {
 		dest_port        INTEGER,
 		dest_user        TEXT,
 		ssh_key_name     TEXT,
-		bandwidth_kbps   INTEGER
+		bandwidth_kbps   INTEGER,
+		-- v0.5.1: opt-in replication features
+		manage_remote_retention BOOLEAN NOT NULL DEFAULT 0,
+		use_bookmarks           BOOLEAN NOT NULL DEFAULT 0
 	);
 
 	CREATE TABLE IF NOT EXISTS job_history (
@@ -95,6 +98,8 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE scheduled_tasks ADD COLUMN dest_user       TEXT`,
 		`ALTER TABLE scheduled_tasks ADD COLUMN ssh_key_name    TEXT`,
 		`ALTER TABLE scheduled_tasks ADD COLUMN bandwidth_kbps  INTEGER`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN manage_remote_retention BOOLEAN NOT NULL DEFAULT 0`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN use_bookmarks           BOOLEAN NOT NULL DEFAULT 0`,
 	} {
 		// Ignore "duplicate column" errors — idempotent.
 		_, _ = db.Exec(stmt)
@@ -129,6 +134,17 @@ type ScheduledTask struct {
 	DestUser      *string `json:"dest_user,omitempty"`
 	SSHKeyName    *string `json:"ssh_key_name,omitempty"`
 	BandwidthKbps *int    `json:"bandwidth_kbps,omitempty"`
+
+	// v0.5.1 opt-in features.
+	// ManageRemoteRetention: when true on a remote-mode task, the scheduler
+	// destroys old snapshots on the remote host after a successful receive,
+	// same count as Retention. Requires the SSH user to have
+	// `destroy,mount` permissions on the destination dataset.
+	// UseBookmarks: create a zfs bookmark of each sent snapshot and use it as
+	// the incremental base next run, so source snapshots can be pruned
+	// aggressively without breaking the common-point chain.
+	ManageRemoteRetention bool `json:"manage_remote_retention"`
+	UseBookmarks          bool `json:"use_bookmarks"`
 }
 
 // InsertTask creates a new scheduled task.
@@ -139,11 +155,13 @@ func InsertTask(db *sql.DB, t ScheduledTask) (int64, error) {
 			task_type, target, schedule, recursive, enabled, prefix, retention,
 			dest_target, replication_mode, last_sent_snap,
 			dest_host, dest_port, dest_user, ssh_key_name, bandwidth_kbps,
+			manage_remote_retention, use_bookmarks,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.TaskType, t.Target, t.Schedule, t.Recursive, t.Enabled, t.Prefix, t.Retention,
 		t.DestTarget, t.ReplicationMode, t.LastSentSnap,
 		t.DestHost, t.DestPort, t.DestUser, t.SSHKeyName, t.BandwidthKbps,
+		t.ManageRemoteRetention, t.UseBookmarks,
 		now, now,
 	)
 	if err != nil {
@@ -160,11 +178,13 @@ func UpdateTask(db *sql.DB, t ScheduledTask) error {
 			target = ?, schedule = ?, recursive = ?, enabled = ?, prefix = ?, retention = ?,
 			dest_target = ?, replication_mode = ?, last_sent_snap = ?,
 			dest_host = ?, dest_port = ?, dest_user = ?, ssh_key_name = ?, bandwidth_kbps = ?,
+			manage_remote_retention = ?, use_bookmarks = ?,
 			updated_at = ?
 		WHERE id = ?`,
 		t.Target, t.Schedule, t.Recursive, t.Enabled, t.Prefix, t.Retention,
 		t.DestTarget, t.ReplicationMode, t.LastSentSnap,
 		t.DestHost, t.DestPort, t.DestUser, t.SSHKeyName, t.BandwidthKbps,
+		t.ManageRemoteRetention, t.UseBookmarks,
 		now, t.ID,
 	)
 	if err != nil {
@@ -190,7 +210,8 @@ func DeleteTask(db *sql.DB, id int64) error {
 
 const taskColumns = `id, task_type, target, schedule, recursive, enabled, prefix, retention, created_at, updated_at,
 	COALESCE(dest_target,''), COALESCE(replication_mode,''), COALESCE(last_sent_snap,''),
-	COALESCE(dest_host,''), COALESCE(dest_port,0), COALESCE(dest_user,''), COALESCE(ssh_key_name,''), COALESCE(bandwidth_kbps,0)`
+	COALESCE(dest_host,''), COALESCE(dest_port,0), COALESCE(dest_user,''), COALESCE(ssh_key_name,''), COALESCE(bandwidth_kbps,0),
+	COALESCE(manage_remote_retention,0), COALESCE(use_bookmarks,0)`
 
 // GetTask returns a single task by ID.
 func GetTask(db *sql.DB, id int64) (*ScheduledTask, error) {
@@ -250,6 +271,7 @@ func scanTaskFields(scan func(dest ...any) error) (*ScheduledTask, error) {
 		&t.Prefix, &t.Retention, &t.CreatedAt, &t.UpdatedAt,
 		&destTarget, &replMode, &lastSnap,
 		&destHost, &destPort, &destUser, &sshKeyName, &bandwidthKbps,
+		&t.ManageRemoteRetention, &t.UseBookmarks,
 	); err != nil {
 		return nil, err
 	}

@@ -38,7 +38,9 @@ func openTestDB(t *testing.T) *sql.DB {
 			dest_port        INTEGER,
 			dest_user         TEXT,
 			ssh_key_name     TEXT,
-			bandwidth_kbps   INTEGER
+			bandwidth_kbps   INTEGER,
+			manage_remote_retention BOOLEAN NOT NULL DEFAULT 0,
+			use_bookmarks           BOOLEAN NOT NULL DEFAULT 0
 		);
 		CREATE TABLE IF NOT EXISTS job_history (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,

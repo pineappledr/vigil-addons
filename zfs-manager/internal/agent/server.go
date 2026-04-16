@@ -104,6 +104,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/replication/tasks/{id}/history", s.handleReplicationTaskHistory)
 	s.mux.HandleFunc("POST /api/replication/test-connection", s.handleTestRemoteConnection)
 	s.mux.HandleFunc("GET /api/replication/keys/{name}/public", s.handleGetReplicationKeyPublic)
+	s.mux.HandleFunc("POST /api/replication/keys/{name}/rotate", s.handleRotateReplicationKey)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -531,6 +532,17 @@ type previewRequest struct {
 	Target     string `json:"target,omitempty"`
 	DestTarget string `json:"dest_target,omitempty"`
 	BaseSnap   string `json:"base_snap,omitempty"`
+
+	// Remote replication preview fields (v0.5.1). When ReplicationMode is
+	// "remote", the preview is built with BuildRemoteReplicationPipeline so the
+	// user sees the ssh + optional pv stages. All fields follow the same
+	// validation rules as the create-task handler.
+	ReplicationMode string `json:"replication_mode,omitempty"`
+	DestHost        string `json:"dest_host,omitempty"`
+	DestPort        int    `json:"dest_port,omitempty"`
+	DestUser        string `json:"dest_user,omitempty"`
+	SSHKeyName      string `json:"ssh_key_name,omitempty"`
+	BandwidthKbps   int    `json:"bandwidth_kbps,omitempty"`
 }
 
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
@@ -635,9 +647,43 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		if req.Name == "" {
 			snap = src + "@" + "repl-" + time.Now().UTC().Format("2006-01-02-150405")
 		}
-		cmd = BuildReplicationPipelineCommand(s.engine.zfsPath, snap, req.BaseSnap, req.DestTarget)
-		if src != "" && src == req.DestTarget {
-			warnings = append(warnings, "Source and destination datasets are the same — replication would overwrite itself.")
+		if req.ReplicationMode == "remote" {
+			// Validate the inputs the remote preview needs. sshKeyNameValid is
+			// the same check the create-task handler runs so the preview can't
+			// accept a name the actual run would later reject.
+			if req.DestHost == "" || req.DestUser == "" || req.SSHKeyName == "" || req.DestTarget == "" {
+				addonutil.WriteError(w, http.StatusBadRequest,
+					"remote preview requires dest_host, dest_user, ssh_key_name, and dest_target")
+				return
+			}
+			if !sshKeyNameValid(req.SSHKeyName) {
+				addonutil.WriteError(w, http.StatusBadRequest,
+					"ssh_key_name must contain only letters, digits, '-', '_' (max 64 chars)")
+				return
+			}
+			port := req.DestPort
+			if port == 0 {
+				port = 22
+			}
+			tgt, terr := s.engine.RemoteTargetFromTask(req.DestTarget, req.DestHost, req.DestUser, port, req.SSHKeyName, req.BandwidthKbps)
+			if terr != nil {
+				addonutil.WriteError(w, http.StatusBadRequest, terr.Error())
+				return
+			}
+			sshPath := s.engine.sshPath
+			if sshPath == "" {
+				sshPath = "ssh"
+				warnings = append(warnings, "ssh was not found on this host — remote replication is unavailable. Install openssh-client on the agent.")
+			}
+			cmd = BuildRemoteReplicationPipeline(s.engine.zfsPath, sshPath, snap, req.BaseSnap, tgt)
+			if req.BandwidthKbps > 0 && s.engine.pvPath == "" {
+				warnings = append(warnings, "pv was not found on this host — the bandwidth cap will be silently dropped at runtime. Install pv on the agent.")
+			}
+		} else {
+			cmd = BuildReplicationPipelineCommand(s.engine.zfsPath, snap, req.BaseSnap, req.DestTarget)
+			if src != "" && src == req.DestTarget {
+				warnings = append(warnings, "Source and destination datasets are the same — replication would overwrite itself.")
+			}
 		}
 
 	default:

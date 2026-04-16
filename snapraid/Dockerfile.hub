@@ -9,7 +9,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags="-s -w -X main.version=$VERSION" \
     -o /snapraid-hub ./cmd/hub
 
-FROM alpine:3.21
+FROM alpine:3.23.4
 RUN apk upgrade --no-cache && apk add --no-cache ca-certificates tzdata
 COPY --from=builder /snapraid-hub /usr/local/bin/snapraid-hub
 EXPOSE 9300

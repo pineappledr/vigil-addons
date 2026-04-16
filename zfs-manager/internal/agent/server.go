@@ -526,6 +526,7 @@ type previewRequest struct {
 	Devices   []string `json:"devices,omitempty"`
 	Mode      string   `json:"mode,omitempty"`
 	// Phase 5 fields
+	Target     string `json:"target,omitempty"`
 	DestTarget string `json:"dest_target,omitempty"`
 	BaseSnap   string `json:"base_snap,omitempty"`
 }
@@ -624,12 +625,16 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case "replication":
-		snap := req.Dataset + "@" + req.Name
+		src := req.Dataset
+		if src == "" {
+			src = req.Target
+		}
+		snap := src + "@" + req.Name
 		if req.Name == "" {
-			snap = req.Dataset + "@" + "repl-" + time.Now().UTC().Format("2006-01-02-150405")
+			snap = src + "@" + "repl-" + time.Now().UTC().Format("2006-01-02-150405")
 		}
 		cmd = BuildReplicationPipelineCommand(s.engine.zfsPath, snap, req.BaseSnap, req.DestTarget)
-		if req.Dataset == req.DestTarget {
+		if src != "" && src == req.DestTarget {
 			warnings = append(warnings, "Source and destination datasets are the same — replication would overwrite itself.")
 		}
 
@@ -941,14 +946,21 @@ func (s *Server) handleListTasks(w http.ResponseWriter, _ *http.Request) {
 		tasks = []agentdb.ScheduledTask{}
 	}
 
-	// Enrich with next run times from scheduler
+	// Enrich with next run times from scheduler. Replication tasks live on the
+	// dedicated Replication page and are intentionally excluded here so they
+	// cannot be edited through the generic /api/tasks handler (which would
+	// clobber replication-specific fields).
 	nextRuns := s.scheduler.NextRunTimes()
-	views := make([]taskView, len(tasks))
-	for i, t := range tasks {
-		views[i] = taskView{ScheduledTask: t}
-		if next, ok := nextRuns[t.ID]; ok {
-			views[i].NextRun = next.UTC().Format(time.RFC3339)
+	views := make([]taskView, 0, len(tasks))
+	for _, t := range tasks {
+		if t.TaskType == "replication" {
+			continue
 		}
+		v := taskView{ScheduledTask: t}
+		if next, ok := nextRuns[t.ID]; ok {
+			v.NextRun = next.UTC().Format(time.RFC3339)
+		}
+		views = append(views, v)
 	}
 	addonutil.WriteJSON(w, http.StatusOK, views)
 }
@@ -1034,6 +1046,10 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if existing == nil {
 		addonutil.WriteError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if existing.TaskType == "replication" {
+		addonutil.WriteError(w, http.StatusBadRequest, "use /api/replication/tasks/{id} to update replication tasks")
 		return
 	}
 

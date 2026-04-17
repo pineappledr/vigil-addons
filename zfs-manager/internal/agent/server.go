@@ -63,6 +63,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/presets", s.handlePresets)
 	s.mux.HandleFunc("GET /api/arc", s.handleARC)
 	s.mux.HandleFunc("GET /api/iostat", s.handleIOStat)
+	s.mux.HandleFunc("GET /api/properties/catalog", s.handlePropertyCatalog)
+	s.mux.HandleFunc("GET /api/dataset/properties", s.handleGetDatasetProperties)
+	s.mux.HandleFunc("GET /api/pool/properties", s.handleGetPoolProperties)
+	s.mux.HandleFunc("PUT /api/pool/properties", s.handleSetPoolProperties)
 
 	// Write operations (Phase 2)
 	s.mux.HandleFunc("POST /api/datasets", s.handleCreateDataset)
@@ -86,6 +90,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/devices/online", s.handleOnlineDevice)
 	s.mux.HandleFunc("POST /api/devices/identify", s.handleIdentifyDevice)
 	s.mux.HandleFunc("POST /api/pool/clear", s.handleClearErrors)
+	s.mux.HandleFunc("GET /api/pool/importable", s.handleListImportablePools)
+	s.mux.HandleFunc("POST /api/pool/import", s.handleImportPool)
+	s.mux.HandleFunc("POST /api/pool/export", s.handleExportPool)
 
 	// Phase 3 — Scheduled Tasks
 	s.mux.HandleFunc("GET /api/tasks", s.handleListTasks)
@@ -246,6 +253,7 @@ func (s *Server) handleCreateDataset(w http.ResponseWriter, r *http.Request) {
 type editDatasetRequest struct {
 	Name       string            `json:"name"`
 	Properties map[string]string `json:"properties"`
+	Confirm    string            `json:"confirm,omitempty"`
 }
 
 func (s *Server) handleEditDataset(w http.ResponseWriter, r *http.Request) {
@@ -260,7 +268,25 @@ func (s *Server) handleEditDataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.logger.Info("editing dataset", "name", req.Name, "props", req.Properties)
+	// Validate every change against the property catalog. A typo like
+	// "compresion=lz4" would silently succeed at the zfs CLI level (the
+	// property just doesn't exist and is ignored) — refusing it at the
+	// agent door surfaces the mistake before the user thinks the setting
+	// took effect.
+	catalog := BuildPropertyCatalog()
+	for k, v := range req.Properties {
+		if err := ValidateProperty(catalog, ScopeDataset, k, v); err != nil {
+			addonutil.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	tier := ClassifyChange(catalog, ScopeDataset, req.Properties)
+	if tier == TierRed && req.Confirm != req.Name {
+		addonutil.WriteError(w, http.StatusBadRequest, "red-tier change: send confirm=<dataset name> to apply")
+		return
+	}
+
+	s.logger.Info("editing dataset", "name", req.Name, "tier", tier, "props", req.Properties)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -1258,9 +1284,9 @@ func (s *Server) handleRetentionStats(w http.ResponseWriter, _ *http.Request) {
 }
 
 type retentionCleanupRequest struct {
-	Dataset    string `json:"dataset"`
+	Dataset   string `json:"dataset"`
 	OlderThan int    `json:"older_than_days"`
-	Confirm    string `json:"confirm"`
+	Confirm   string `json:"confirm"`
 }
 
 func (s *Server) handleRetentionCleanup(w http.ResponseWriter, r *http.Request) {

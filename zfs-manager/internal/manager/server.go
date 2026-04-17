@@ -87,6 +87,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/arc/recommendations", s.handleARCRecommendations)
 	s.mux.HandleFunc("GET /api/iostat", s.handleIOStat)
 	s.mux.HandleFunc("GET /api/iostat/rows", s.handleIOStatRows)
+	// Property editor (Phase 6.4). Catalog + current-value reads are pure
+	// GETs; pool property writes go through signedProxy so the signature
+	// verifier applies the same gate we use for other write operations.
+	s.mux.HandleFunc("GET /api/properties/catalog", s.proxyToAgent)
+	s.mux.HandleFunc("GET /api/dataset/properties", s.proxyToAgent)
+	s.mux.HandleFunc("GET /api/pool/properties", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/properties/preview-diff", s.handlePropertyPreviewDiff)
 	s.mux.HandleFunc("POST /api/rotate-psk", s.handleRotatePSK)
 
 	// signedProxy wraps proxyToAgent with Ed25519 signature verification
@@ -113,6 +120,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/devices/online", signedProxy)
 	s.mux.HandleFunc("POST /api/devices/identify", signedProxy)
 	s.mux.HandleFunc("POST /api/pool/clear", signedProxy)
+	s.mux.HandleFunc("PUT /api/pool/properties", signedProxy)
+	s.mux.HandleFunc("GET /api/pool/importable", s.proxyToAgent)
+	s.mux.HandleFunc("POST /api/pool/import", signedProxy)
+	s.mux.HandleFunc("POST /api/pool/export", signedProxy)
 
 	// Phase 3 — scheduled tasks proxy (routes to agent)
 	s.mux.HandleFunc("GET /api/tasks", s.proxyToAgent)

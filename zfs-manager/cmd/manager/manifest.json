@@ -50,6 +50,87 @@
             "expand_key": "vdevs",
             "row_actions": [
               {
+                "id": "edit-pool-properties",
+                "label": "Edit Properties",
+                "icon": "edit",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "PUT",
+                  "endpoint": "/api/pool/properties",
+                  "preview": {
+                    "endpoint": "/api/properties/preview-diff",
+                    "body": { "scope": "pool" },
+                    "body_map": { "name": "row.name" }
+                  }
+                },
+                "form": {
+                  "title": "Edit Pool Properties — {row.name}",
+                  "show_command": true,
+                  "fields": [
+                    { "key": "pool", "type": "hidden", "value_from": "row.name" },
+                    {
+                      "key": "properties.autotrim",
+                      "label": "Auto TRIM",
+                      "type": "select",
+                      "options": [
+                        { "value": "on", "label": "On" },
+                        { "value": "off", "label": "Off" }
+                      ],
+                      "hint": "Background TRIM on SSDs. Off by default; recommend on for all-SSD pools."
+                    },
+                    {
+                      "key": "properties.autoexpand",
+                      "label": "Auto Expand",
+                      "type": "select",
+                      "options": [
+                        { "value": "on", "label": "On" },
+                        { "value": "off", "label": "Off" }
+                      ],
+                      "hint": "Grow pool when all devices in a vdev are replaced with larger ones."
+                    },
+                    {
+                      "key": "properties.autoreplace",
+                      "label": "Auto Replace",
+                      "type": "select",
+                      "options": [
+                        { "value": "on", "label": "On" },
+                        { "value": "off", "label": "Off" }
+                      ],
+                      "hint": "Initiate replace when a hot spare kicks in. Requires configured spares."
+                    },
+                    {
+                      "key": "properties.failmode",
+                      "label": "Fail Mode",
+                      "type": "select",
+                      "safety_tier": "red",
+                      "options": [
+                        { "value": "wait", "label": "Wait (default — block I/O until device returns)" },
+                        { "value": "continue", "label": "Continue (return EIO on writes)" },
+                        { "value": "panic", "label": "Panic (kernel panic on I/O failure)" }
+                      ],
+                      "hint": "RED TIER — 'panic' will force a host reboot on the first pool I/O error."
+                    },
+                    {
+                      "key": "properties.delegation",
+                      "label": "Delegation",
+                      "type": "select",
+                      "options": [
+                        { "value": "on", "label": "On" },
+                        { "value": "off", "label": "Off" }
+                      ],
+                      "hint": "Whether 'zfs allow' delegations are honored."
+                    },
+                    {
+                      "key": "properties.comment",
+                      "label": "Comment",
+                      "type": "text",
+                      "placeholder": "Free-form note, shown in zpool list -o comment"
+                    }
+                  ],
+                  "button_label": "Apply Changes"
+                }
+              },
+              {
                 "id": "start-scrub",
                 "label": "Start Scrub",
                 "icon": "refresh-cw",
@@ -113,6 +194,118 @@
                   "message": "Cancel the running scrub on pool {row.name}?",
                   "show_command": true,
                   "button_label": "Cancel Scrub"
+                }
+              },
+              {
+                "id": "export-pool",
+                "label": "Export Pool",
+                "icon": "log-out",
+                "safety_tier": "red",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/pool/export",
+                  "body_map": { "pool": "row.name" }
+                },
+                "form": {
+                  "title": "Export Pool — {row.name}",
+                  "show_command": true,
+                  "fields": [
+                    { "key": "pool", "type": "hidden", "value_from": "row.name" },
+                    {
+                      "key": "force",
+                      "label": "Force (tear down active I/O)",
+                      "type": "checkbox",
+                      "hint": "Required when background processes still hold the pool open. Running VMs or containers must be stopped first to avoid data loss."
+                    },
+                    {
+                      "key": "confirm",
+                      "label": "Type the pool name to confirm",
+                      "type": "text",
+                      "placeholder": "{row.name}",
+                      "hint": "RED TIER — exporting the pool unmounts every dataset. The pool stays on disk but disappears from this host until re-imported."
+                    }
+                  ],
+                  "button_label": "Export Pool"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "importable-pools",
+          "title": "Importable Pools",
+          "config": {
+            "source": "/api/pool/importable",
+            "columns": [
+              { "key": "name",    "label": "Pool",    "sortable": true },
+              { "key": "id",      "label": "ID",      "sortable": false },
+              { "key": "state",   "label": "State",   "sortable": true, "format": "badge", "badge_map": {
+                "ONLINE":   "success",
+                "DEGRADED": "warning",
+                "FAULTED":  "critical",
+                "UNAVAIL":  "critical",
+                "OFFLINE":  "muted"
+              }},
+              { "key": "status",  "label": "Status",  "sortable": false },
+              { "key": "action",  "label": "Action",  "sortable": false },
+              { "key": "comment", "label": "Comment", "sortable": false }
+            ],
+            "sortable": true,
+            "filterable": true,
+            "empty_message": "No importable pools detected. Pools that have been cleanly exported or were created on another host will appear here.",
+            "row_actions": [
+              {
+                "id": "import-pool",
+                "label": "Import",
+                "icon": "log-in",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/pool/import",
+                  "body_map": { "name": "row.name" }
+                },
+                "form": {
+                  "title": "Import Pool — {row.name}",
+                  "show_command": true,
+                  "fields": [
+                    { "key": "name", "type": "hidden", "value_from": "row.name" },
+                    {
+                      "key": "new_name",
+                      "label": "Import under a different name (optional)",
+                      "type": "text",
+                      "placeholder": "Leave empty to keep the original name",
+                      "hint": "Useful when the pool name collides with an already-imported pool."
+                    },
+                    {
+                      "key": "altroot",
+                      "label": "Alternate root (optional)",
+                      "type": "text",
+                      "placeholder": "e.g. /mnt/recovery",
+                      "hint": "Mount the pool under a temporary root instead of honoring its normal mountpoints. Leave empty for standard import."
+                    },
+                    {
+                      "key": "readonly",
+                      "label": "Import read-only",
+                      "type": "checkbox",
+                      "hint": "Safer for inspection. The pool is not writable until re-imported without this option."
+                    },
+                    {
+                      "key": "force",
+                      "label": "Force import (pool in use by another host)",
+                      "type": "checkbox",
+                      "safety_tier": "red",
+                      "hint": "RED TIER — force-importing a pool that is currently in use by another host corrupts it. Never use this in a cluster where the other host is still alive."
+                    },
+                    {
+                      "key": "confirm",
+                      "label": "Type the pool name to confirm (force only)",
+                      "type": "text",
+                      "placeholder": "{row.name}",
+                      "hint": "Required only when Force is checked. Ignored otherwise."
+                    }
+                  ],
+                  "button_label": "Import Pool"
                 }
               }
             ]
@@ -224,6 +417,70 @@
                         { "value": "disabled", "label": "Disabled (fastest)" }
                       ],
                       "value_from": "row.sync"
+                    },
+                    {
+                      "key": "properties.xattr",
+                      "label": "Extended Attributes",
+                      "type": "select",
+                      "options": [
+                        { "value": "sa", "label": "SA (inline — ~10× faster on SELinux/ACL)" },
+                        { "value": "on", "label": "On (legacy directory-based)" },
+                        { "value": "off", "label": "Off" }
+                      ],
+                      "hint": "'sa' is the modern default; 'on' emulates the legacy format."
+                    },
+                    {
+                      "key": "properties.acltype",
+                      "label": "ACL Type",
+                      "type": "select",
+                      "options": [
+                        { "value": "off", "label": "Off" },
+                        { "value": "posix", "label": "POSIX ACLs" },
+                        { "value": "nfsv4", "label": "NFSv4 ACLs" }
+                      ]
+                    },
+                    {
+                      "key": "properties.logbias",
+                      "label": "Log Bias",
+                      "type": "select",
+                      "options": [
+                        { "value": "latency", "label": "Latency (default)" },
+                        { "value": "throughput", "label": "Throughput (bypass SLOG)" }
+                      ],
+                      "hint": "Only meaningful if this pool has a SLOG device."
+                    },
+                    {
+                      "key": "properties.primarycache",
+                      "label": "Primary Cache (ARC)",
+                      "type": "select",
+                      "options": [
+                        { "value": "all", "label": "All (data + metadata)" },
+                        { "value": "metadata", "label": "Metadata only" },
+                        { "value": "none", "label": "None (almost never what you want)" }
+                      ]
+                    },
+                    {
+                      "key": "properties.secondarycache",
+                      "label": "Secondary Cache (L2ARC)",
+                      "type": "select",
+                      "options": [
+                        { "value": "all", "label": "All" },
+                        { "value": "metadata", "label": "Metadata only" },
+                        { "value": "none", "label": "None" }
+                      ]
+                    },
+                    {
+                      "key": "properties.dedup",
+                      "label": "Deduplication",
+                      "type": "select",
+                      "safety_tier": "red",
+                      "options": [
+                        { "value": "off", "label": "Off (recommended)" },
+                        { "value": "on", "label": "On (SHA-256)" },
+                        { "value": "sha512", "label": "SHA-512" },
+                        { "value": "skein", "label": "Skein" }
+                      ],
+                      "hint": "RED TIER — dedup table lives in RAM (~320B/block). Effectively permanent: deduped blocks stay deduped even after dedup=off."
                     },
                     {
                       "key": "properties.quota",

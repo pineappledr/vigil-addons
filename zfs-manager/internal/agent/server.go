@@ -61,6 +61,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/datasets", s.handleDatasets)
 	s.mux.HandleFunc("GET /api/snapshots", s.handleSnapshots)
 	s.mux.HandleFunc("GET /api/presets", s.handlePresets)
+	s.mux.HandleFunc("GET /api/arc", s.handleARC)
+	s.mux.HandleFunc("GET /api/iostat", s.handleIOStat)
 
 	// Write operations (Phase 2)
 	s.mux.HandleFunc("POST /api/datasets", s.handleCreateDataset)
@@ -142,6 +144,35 @@ func (s *Server) handleSnapshots(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handlePresets(w http.ResponseWriter, _ *http.Request) {
 	addonutil.WriteJSON(w, http.StatusOK, DatasetPresets)
+}
+
+// handleIOStat returns the most recent per-pool iostat counters. Values are
+// cumulative since pool import; rate computation is hub-side.
+func (s *Server) handleIOStat(w http.ResponseWriter, _ *http.Request) {
+	stats := s.collector.GetIOStat()
+	if stats == nil {
+		stats = []PoolIOStat{}
+	}
+	addonutil.WriteJSON(w, http.StatusOK, stats)
+}
+
+// handleARC returns the most recent ARC/L2ARC snapshot. On hosts without
+// /proc/spl/kstat/zfs/arcstats (non-Linux, zfs.ko not loaded), responds 501
+// so the UI can render a dedicated "not supported" state rather than an
+// empty dashboard that looks broken.
+func (s *Server) handleARC(w http.ResponseWriter, _ *http.Request) {
+	if arc := s.collector.GetARC(); arc != nil {
+		addonutil.WriteJSON(w, http.StatusOK, arc)
+		return
+	}
+	if !ARCStatsAvailable() {
+		addonutil.WriteError(w, http.StatusNotImplemented,
+			"arcstats are not available on this host — /proc/spl/kstat/zfs/arcstats does not exist")
+		return
+	}
+	// Capability is present but no snapshot has landed yet (collector hasn't
+	// run its first Refresh). Return a 204 so the UI polls again shortly.
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- Dataset Management ---

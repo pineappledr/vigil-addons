@@ -82,6 +82,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/datasets", s.handleDatasets)
 	s.mux.HandleFunc("GET /api/snapshots", s.handleSnapshots)
 	s.mux.HandleFunc("GET /api/presets", s.handlePresets)
+	s.mux.HandleFunc("GET /api/arc", s.handleARC)
+	s.mux.HandleFunc("GET /api/arc/metrics", s.handleARCMetrics)
+	s.mux.HandleFunc("GET /api/arc/recommendations", s.handleARCRecommendations)
+	s.mux.HandleFunc("GET /api/iostat", s.handleIOStat)
+	s.mux.HandleFunc("GET /api/iostat/rows", s.handleIOStatRows)
 	s.mux.HandleFunc("POST /api/rotate-psk", s.handleRotatePSK)
 
 	// signedProxy wraps proxyToAgent with Ed25519 signature verification
@@ -294,6 +299,22 @@ func (s *Server) handleDatasets(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSnapshots(w http.ResponseWriter, r *http.Request) {
 	s.serveAgentField(w, r, "snapshots")
+}
+
+// handleARC serves the ARC snapshot from the aggregator cache (preferred:
+// comes from the last telemetry frame) and falls back to a live proxy when
+// the cache is empty. This keeps the Performance page responsive right after
+// agent registration, before the first telemetry frame has landed.
+func (s *Server) handleARC(w http.ResponseWriter, r *http.Request) {
+	agentID := s.resolveAgentID(r)
+	if agentID != "" {
+		if data := s.aggregator.LatestField(agentID, "arc"); data != nil && string(data) != "null" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(data)
+			return
+		}
+	}
+	s.proxyToAgent(w, r)
 }
 
 func (s *Server) handlePresets(w http.ResponseWriter, _ *http.Request) {

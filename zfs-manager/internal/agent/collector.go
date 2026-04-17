@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -17,6 +18,8 @@ type TelemetryPayload struct {
 	Datasets     []DatasetInfo  `json:"datasets"`
 	Snapshots    []SnapshotInfo `json:"snapshots"`
 	Capabilities Capabilities   `json:"capabilities"`
+	ARC          *ARCStats      `json:"arc,omitempty"`
+	IOStat       []PoolIOStat   `json:"iostat,omitempty"`
 	LastEvent    *AgentEvent    `json:"last_event,omitempty"`
 }
 
@@ -41,6 +44,8 @@ type Collector struct {
 	pools     []PoolInfo
 	datasets  []DatasetInfo
 	snapshots []SnapshotInfo
+	arc       *ARCStats
+	iostat    []PoolIOStat
 	lastEvent *AgentEvent
 	logger    *slog.Logger
 
@@ -100,6 +105,19 @@ func (c *Collector) Refresh(ctx context.Context) {
 		c.logger.Error("failed to list snapshots", "error", err)
 	}
 
+	// ARC stats are optional: the file is absent on non-Linux hosts and on
+	// Linux before zfs.ko loads. ErrARCStatsUnavailable isn't worth logging
+	// as an error — it's the expected state on systems without kstat.
+	arc, err := c.engine.ReadARCStats(ctx)
+	if err != nil && !errors.Is(err, ErrARCStatsUnavailable) {
+		c.logger.Warn("failed to read arcstats", "error", err)
+	}
+
+	iostat, err := c.engine.SampleIOStat(ctx)
+	if err != nil {
+		c.logger.Warn("failed to sample iostat", "error", err)
+	}
+
 	c.mu.Lock()
 	if pools != nil {
 		c.pools = pools
@@ -109,6 +127,10 @@ func (c *Collector) Refresh(ctx context.Context) {
 	}
 	if snapshots != nil {
 		c.snapshots = snapshots
+	}
+	c.arc = arc
+	if iostat != nil {
+		c.iostat = iostat
 	}
 	c.mu.Unlock()
 }
@@ -132,6 +154,20 @@ func (c *Collector) GetSnapshots() []SnapshotInfo {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.snapshots
+}
+
+// GetARC returns the latest ARC stats snapshot, or nil if unavailable.
+func (c *Collector) GetARC() *ARCStats {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.arc
+}
+
+// GetIOStat returns the latest per-pool iostat snapshot.
+func (c *Collector) GetIOStat() []PoolIOStat {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.iostat
 }
 
 // Build assembles the current telemetry state into a payload.
@@ -160,6 +196,8 @@ func (c *Collector) Build() *TelemetryPayload {
 		Datasets:     datasets,
 		Snapshots:    snapshots,
 		Capabilities: c.engine.Capabilities(),
+		ARC:          c.arc,
+		IOStat:       c.iostat,
 		LastEvent:    c.lastEvent,
 	}
 }

@@ -31,6 +31,12 @@ type Aggregator struct {
 	// resilvering" and "vdev count went up" between successive frames.
 	lastPoolStates map[string]map[string]trackedPool // agentID → poolName → state
 	lastEventIDs   map[string]string                 // agentID → last forwarded LastEvent.ID
+
+	// prevIOStat holds the iostat field from the frame immediately preceding
+	// the one in `cache`. Rates are derived by diffing counters between the
+	// current cached sample and this one — keeping it at the aggregator so
+	// shifting is atomic with a new Ingest overwriting the cache.
+	prevIOStat map[string]json.RawMessage // agentID → prior iostat snapshot
 }
 
 // trackedPool is the per-pool transition state retained between frames.
@@ -86,6 +92,7 @@ func NewAggregator(registry *Registry, upstream chan []byte, logger *slog.Logger
 		logger:         logger,
 		lastPoolStates: make(map[string]map[string]trackedPool),
 		lastEventIDs:   make(map[string]string),
+		prevIOStat:     make(map[string]json.RawMessage),
 	}
 }
 
@@ -101,6 +108,15 @@ func (a *Aggregator) SetTelemetryClient(c *vigilclient.TelemetryClient) {
 // detected events are emitted as typed notifications.
 func (a *Aggregator) Ingest(agentID string, payload json.RawMessage) {
 	a.mu.Lock()
+	// Before overwriting the cached frame, extract its iostat field and keep
+	// it as the "previous" sample so rate diffs have something to subtract
+	// against on the next render. If the previous cache entry has no iostat
+	// (e.g. agent running on a non-ZFS host), we just drop the placeholder.
+	if prev, ok := a.cache[agentID]; ok {
+		if iostat := extractField(prev, "iostat"); iostat != nil {
+			a.prevIOStat[agentID] = iostat
+		}
+	}
 	a.cache[agentID] = payload
 	a.mu.Unlock()
 
@@ -297,7 +313,24 @@ func (a *Aggregator) LatestField(agentID, field string) json.RawMessage {
 	a.mu.RLock()
 	raw := a.cache[agentID]
 	a.mu.RUnlock()
+	return extractField(raw, field)
+}
 
+// PreviousIOStat returns the iostat field from the telemetry frame that was
+// cached immediately before the current one, or nil if this is the first
+// frame the hub has seen for the agent. The hub uses the difference between
+// this and the latest sample to compute rates without requiring the agent to
+// remember state between polls.
+func (a *Aggregator) PreviousIOStat(agentID string) json.RawMessage {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.prevIOStat[agentID]
+}
+
+// extractField pulls a top-level key out of a JSON object payload without
+// unmarshalling anything inside it. Kept package-private because callers
+// should route through Latest / LatestField / PreviousIOStat.
+func extractField(raw json.RawMessage, field string) json.RawMessage {
 	if raw == nil {
 		return nil
 	}

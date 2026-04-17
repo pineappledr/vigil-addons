@@ -1,6 +1,6 @@
 {
   "name": "ZFS Manager",
-  "version": "0.5.1",
+  "version": "0.6.0-dev",
   "description": "ZFS pool, dataset, and snapshot management for homelab servers",
   "author": "Vigil Add-ons",
   "docker_image": "ghcr.io/pineappledr/vigil-addons-zfs-manager:latest",
@@ -1790,6 +1790,82 @@
               }
             },
             "prefill_endpoint": "/api/deploy-info"
+          }
+        }
+      ]
+    },
+    {
+      "id": "performance",
+      "title": "Performance",
+      "icon": "activity",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 30, "label": "30 Seconds" },
+            { "value": 60, "label": "1 Minute" },
+            { "value": 300, "label": "5 Minutes" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "arc-metrics",
+          "title": "ARC & L2ARC Performance",
+          "config": {
+            "source": "/api/arc/metrics",
+            "columns": [
+              { "key": "category", "label": "Category", "sortable": true },
+              { "key": "metric",   "label": "Metric",   "sortable": true },
+              { "key": "value",    "label": "Value",    "sortable": false },
+              { "key": "help",     "label": "What it means", "sortable": false }
+            ],
+            "sortable": true,
+            "filterable": true,
+            "default_sort": { "key": "category", "direction": "asc" }
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "arc-recommendations",
+          "title": "Recommendations",
+          "config": {
+            "source": "/api/arc/recommendations",
+            "columns": [
+              { "key": "message", "label": "Suggestion", "sortable": false }
+            ],
+            "sortable": false,
+            "filterable": false
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "iostat-rows",
+          "title": "I/O — Pools, Vdevs & Disks",
+          "description": "Per-second read/write rates derived from zpool iostat. Rates are blank on the first frame after agent start; refresh once more to see them.",
+          "config": {
+            "source": "/api/iostat/rows",
+            "columns": [
+              { "key": "scope",             "label": "Scope",   "sortable": true, "badge": {
+                "pool": "info",
+                "vdev": "warning",
+                "disk": "muted"
+              }},
+              { "key": "name",              "label": "Name",    "sortable": true },
+              { "key": "vdev_type",         "label": "Type",    "sortable": true },
+              { "key": "parent",            "label": "Parent",  "sortable": true },
+              { "key": "read_ops_per_s",    "label": "Read Ops/s",   "sortable": true, "format": "number" },
+              { "key": "write_ops_per_s",   "label": "Write Ops/s",  "sortable": true, "format": "number" },
+              { "key": "read_bytes_per_s",  "label": "Read/s",       "sortable": true, "format": "bytes" },
+              { "key": "write_bytes_per_s", "label": "Write/s",      "sortable": true, "format": "bytes" },
+              { "key": "alloc",             "label": "Allocated",    "sortable": true, "format": "bytes" },
+              { "key": "free",              "label": "Free",         "sortable": true, "format": "bytes" }
+            ],
+            "sortable": true,
+            "filterable": true,
+            "default_sort": { "key": "scope", "direction": "asc" }
           }
         }
       ]

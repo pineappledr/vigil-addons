@@ -38,6 +38,7 @@ type Capabilities struct {
 	LEDIdentify       bool `json:"led_identify"`
 	RemoteReplication bool `json:"remote_replication"`
 	BandwidthLimit    bool `json:"bandwidth_limit"`
+	ARCStats          bool `json:"arc_stats"`
 }
 
 // NewEngine creates an Engine with the given binary paths.
@@ -74,11 +75,14 @@ func NewEngine(zpoolPath, zfsPath, sshKeyDir string, logger *slog.Logger) *Engin
 }
 
 // Capabilities returns the optional-feature flags probed at engine creation.
+// ARCStats is re-probed on each call so a freshly-loaded zfs kernel module
+// becomes visible without an agent restart; the others are fixed at startup.
 func (e *Engine) Capabilities() Capabilities {
 	return Capabilities{
 		LEDIdentify:       e.ledctlPath != "",
 		RemoteReplication: e.sshPath != "" && e.sshKeygenPath != "" && e.sshKeyDir != "",
 		BandwidthLimit:    e.pvPath != "",
+		ARCStats:          ARCStatsAvailable(),
 	}
 }
 

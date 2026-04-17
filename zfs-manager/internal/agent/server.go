@@ -93,6 +93,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/pool/importable", s.handleListImportablePools)
 	s.mux.HandleFunc("POST /api/pool/import", s.handleImportPool)
 	s.mux.HandleFunc("POST /api/pool/export", s.handleExportPool)
+	s.mux.HandleFunc("POST /api/pool/create", s.handleCreatePool)
 
 	// Phase 3 — Scheduled Tasks
 	s.mux.HandleFunc("GET /api/tasks", s.handleListTasks)

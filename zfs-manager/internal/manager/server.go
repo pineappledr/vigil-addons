@@ -124,6 +124,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/pool/importable", s.proxyToAgent)
 	s.mux.HandleFunc("POST /api/pool/import", signedProxy)
 	s.mux.HandleFunc("POST /api/pool/export", signedProxy)
+	s.mux.HandleFunc("POST /api/pool/create", signedProxy)
 
 	// Phase 3 — scheduled tasks proxy (routes to agent)
 	s.mux.HandleFunc("GET /api/tasks", s.proxyToAgent)

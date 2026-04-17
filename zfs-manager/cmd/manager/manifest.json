@@ -48,6 +48,162 @@
             "default_sort": { "key": "name", "direction": "asc" },
             "expandable": true,
             "expand_key": "vdevs",
+            "toolbar_actions": [
+              {
+                "id": "create-pool",
+                "label": "Create Pool",
+                "icon": "plus-square",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/pool/create",
+                  "preview": {
+                    "endpoint": "/api/pool/create?preview=1"
+                  }
+                },
+                "form": {
+                  "title": "Create New Pool",
+                  "show_command": true,
+                  "fields": [
+                    {
+                      "key": "name",
+                      "label": "Pool Name",
+                      "type": "text",
+                      "required": true,
+                      "placeholder": "e.g. tank",
+                      "hint": "Letters, digits, underscore, hyphen. Cannot start with a digit or match a zpool keyword (mirror, raidz, log, cache, etc.)."
+                    },
+                    {
+                      "key": "data_type",
+                      "label": "Redundancy",
+                      "type": "select",
+                      "required": true,
+                      "options": [
+                        { "value": "mirror", "label": "Mirror — 2+ drives, highest durability, lose 50% capacity" },
+                        { "value": "raidz1", "label": "RAIDZ1 — 3+ drives, survive 1 failure" },
+                        { "value": "raidz2", "label": "RAIDZ2 — 4+ drives, survive 2 failures (recommended for 6+)" },
+                        { "value": "raidz3", "label": "RAIDZ3 — 5+ drives, survive 3 failures" },
+                        { "value": "stripe", "label": "Stripe — NO redundancy (data is lost on ANY device failure)" }
+                      ],
+                      "hint": "Pick the shape of the primary data vdev. Mirrors are easier to expand later; raidz is more space-efficient."
+                    },
+                    {
+                      "key": "data_devices",
+                      "label": "Data Devices",
+                      "type": "multi-select",
+                      "required": true,
+                      "options_from": "/api/disks",
+                      "option_value": "path",
+                      "option_label": "name",
+                      "option_detail": "model",
+                      "hint": "Only disks not already in a pool are shown. Use all drives of the same size for best results."
+                    },
+                    {
+                      "key": "log_devices",
+                      "label": "Log (SLOG) Devices — optional",
+                      "type": "multi-select",
+                      "options_from": "/api/disks",
+                      "option_value": "path",
+                      "option_label": "name",
+                      "option_detail": "model",
+                      "hint": "Dedicated low-latency device for synchronous writes. Leave empty unless you know you need it."
+                    },
+                    {
+                      "key": "log_type",
+                      "label": "SLOG Layout",
+                      "type": "select",
+                      "options": [
+                        { "value": "mirror", "label": "Mirror (recommended — survives SLOG device loss)" },
+                        { "value": "stripe", "label": "Stripe (single SLOG or accepted risk)" }
+                      ],
+                      "hint": "Only used when at least one SLOG device is selected."
+                    },
+                    {
+                      "key": "cache_devices",
+                      "label": "Cache (L2ARC) Devices — optional",
+                      "type": "multi-select",
+                      "options_from": "/api/disks",
+                      "option_value": "path",
+                      "option_label": "name",
+                      "option_detail": "model",
+                      "hint": "Reads accelerate on SSDs. Always striped — no redundancy needed since L2ARC data is regenerated from disk on loss."
+                    },
+                    {
+                      "key": "spare_devices",
+                      "label": "Hot Spares — optional",
+                      "type": "multi-select",
+                      "options_from": "/api/disks",
+                      "option_value": "path",
+                      "option_label": "name",
+                      "option_detail": "model",
+                      "hint": "Spare drives that auto-replace on failure when autoreplace=on."
+                    },
+                    {
+                      "key": "ashift",
+                      "label": "ashift (sector size)",
+                      "type": "select",
+                      "options": [
+                        { "value": 12, "label": "12 (4K sectors — default, correct for most drives)" },
+                        { "value": 13, "label": "13 (8K sectors — some enterprise SSDs)" },
+                        { "value": 9,  "label": "9 (512B sectors — legacy)" }
+                      ],
+                      "hint": "Cannot be changed after pool creation. When in doubt, leave at 12."
+                    },
+                    {
+                      "key": "compression",
+                      "label": "Compression",
+                      "type": "select",
+                      "options": [
+                        { "value": "lz4",  "label": "LZ4 (recommended — negligible CPU cost)" },
+                        { "value": "zstd", "label": "ZSTD (better ratio, moderate CPU)" },
+                        { "value": "off",  "label": "Off" }
+                      ],
+                      "hint": "Applied to new data. Existing blocks (there aren't any yet on a fresh pool) keep their original compression."
+                    },
+                    {
+                      "key": "atime",
+                      "label": "Access Time",
+                      "type": "select",
+                      "options": [
+                        { "value": "off", "label": "Off (recommended — avoids a metadata write on every read)" },
+                        { "value": "on",  "label": "On" }
+                      ]
+                    },
+                    {
+                      "key": "autotrim",
+                      "label": "Auto TRIM",
+                      "type": "select",
+                      "options": [
+                        { "value": "off", "label": "Off (default)" },
+                        { "value": "on",  "label": "On (recommended for all-SSD pools)" }
+                      ]
+                    },
+                    {
+                      "key": "mountpoint",
+                      "label": "Mountpoint — optional",
+                      "type": "text",
+                      "placeholder": "/mnt/tank (leave empty for default /<pool name>)",
+                      "hint": "Absolute path. Overrides the default /pool-name mountpoint."
+                    },
+                    {
+                      "key": "force",
+                      "label": "Force create (overwrite foreign labels)",
+                      "type": "checkbox",
+                      "safety_tier": "red",
+                      "hint": "RED TIER — reuses disks even when they carry existing zfs/lvm/md labels. Only enable if you have verified every selected disk is safe to overwrite."
+                    },
+                    {
+                      "key": "confirm",
+                      "label": "Type the pool name to confirm (force only)",
+                      "type": "text",
+                      "placeholder": "tank",
+                      "hint": "Required only when Force is checked. Ignored otherwise."
+                    }
+                  ],
+                  "button_label": "Create Pool"
+                }
+              }
+            ],
             "row_actions": [
               {
                 "id": "edit-pool-properties",

@@ -211,9 +211,31 @@
             "columns": [
               {"key": "agent_id", "label": "Agent ID"},
               {"key": "hostname", "label": "Hostname"},
-              {"key": "status", "label": "Status"},
+              {"key": "status", "label": "Status", "format": "status_dot"},
               {"key": "last_seen_at", "label": "Last Seen", "format": "relative_time"},
               {"key": "version", "label": "Version"}
+            ],
+            "sortable": true,
+            "default_sort": {"key": "agent_id", "direction": "asc"},
+            "row_actions": [
+              {
+                "id": "delete-agent",
+                "label": "Delete",
+                "icon": "trash-2",
+                "safety_tier": "red",
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/agents/{row.agent_id}"
+                },
+                "confirm": {
+                  "title": "Delete agent {row.agent_id}?",
+                  "message": "Removes {row.hostname} from the registry. The agent process re-registers itself on its next heartbeat unless you stop it too.",
+                  "button_label": "Delete",
+                  "button_variant": "danger",
+                  "success_message": "Agent {row.agent_id} deleted",
+                  "error_message": "Delete failed: {error}"
+                }
+              }
             ]
           }
         }
@@ -242,15 +264,48 @@
           "config": {
             "source": "job_history",
             "columns": [
+              {"key": "job_id", "label": "Job ID"},
               {"key": "job_type", "label": "Type"},
               {"key": "trigger", "label": "Trigger"},
               {"key": "started_at", "label": "Started", "format": "datetime"},
               {"key": "finished_at", "label": "Finished", "format": "datetime"},
-              {"key": "status", "label": "Status"},
+              {"key": "status", "label": "Status", "format": "badge", "badge_map": {
+                "running": "warning",
+                "succeeded": "success",
+                "failed": "critical",
+                "cancelled": "muted"
+              }},
               {"key": "exit_code", "label": "Exit Code"}
             ],
             "sortable": true,
-            "default_sort": {"key": "started_at", "direction": "desc"}
+            "filterable": true,
+            "default_sort": {"key": "started_at", "direction": "desc"},
+            "progress_indicator": {
+              "field": "status",
+              "busy_values": ["running"],
+              "interval_seconds": 5
+            },
+            "row_actions": [
+              {
+                "id": "cancel-job",
+                "label": "Cancel",
+                "icon": "x-circle",
+                "safety_tier": "yellow",
+                "visible_when": {"field": "row.status", "equals": "running"},
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/jobs/{row.job_id}"
+                },
+                "confirm": {
+                  "title": "Cancel job {row.job_id}?",
+                  "message": "Sends an abort signal to the running {row.job_type} on agent {row.agent_id}. The partial work completed so far will not be rolled back.",
+                  "button_label": "Cancel Job",
+                  "button_variant": "warning",
+                  "success_message": "Cancel signal sent to job {row.job_id}",
+                  "error_message": "Cancel failed: {error}"
+                }
+              }
+            ]
           }
         }
       ]

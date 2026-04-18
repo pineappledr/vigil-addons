@@ -216,13 +216,32 @@
               { "key": "hostname", "label": "Hostname" },
               { "key": "arch", "label": "Architecture" },
               { "key": "drive_count", "label": "Drives" },
-              { "key": "last_seen_at", "label": "Last Seen", "format": "relative_time" },
-              { "key": "_actions", "label": "", "format": "actions", "actions": [{ "type": "delete", "id_key": "agent_id", "label": "Delete agent" }] }
+              { "key": "last_seen_at", "label": "Last Seen", "format": "relative_time" }
             ],
             "expandable": true,
             "expand_key": "drives",
             "sortable": true,
-            "default_sort": { "key": "agent_id", "direction": "asc" }
+            "default_sort": { "key": "agent_id", "direction": "asc" },
+            "row_actions": [
+              {
+                "id": "delete-agent",
+                "label": "Delete",
+                "icon": "trash-2",
+                "safety_tier": "red",
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/agents/{row.agent_id}"
+                },
+                "confirm": {
+                  "title": "Delete agent {row.agent_id}?",
+                  "message": "Removes {row.hostname} from the registry. The agent process re-registers itself on its next heartbeat unless you stop it too.",
+                  "button_label": "Delete",
+                  "button_variant": "danger",
+                  "success_message": "Agent {row.agent_id} deleted",
+                  "error_message": "Delete failed: {error}"
+                }
+              }
+            ]
           }
         },
         {
@@ -314,6 +333,11 @@
             "default_sort": { "key": "started_at", "direction": "desc" },
             "filterable": true,
             "filter_keys": ["command", "agent_id", "status"],
+            "progress_indicator": {
+              "field": "status",
+              "busy_values": ["running"],
+              "interval_seconds": 5
+            },
             "time_filter": {
               "default": "7d",
               "options": [
@@ -323,7 +347,28 @@
                 { "value": "30d", "label": "Last 30 Days" },
                 { "value": "", "label": "All Time" }
               ]
-            }
+            },
+            "row_actions": [
+              {
+                "id": "cancel-job",
+                "label": "Cancel",
+                "icon": "x-circle",
+                "safety_tier": "yellow",
+                "visible_when": { "field": "row.status", "equals": "running" },
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/jobs/{row.job_id}"
+                },
+                "confirm": {
+                  "title": "Cancel job {row.job_id}?",
+                  "message": "Sends an abort signal to the running {row.command} on agent {row.agent_id}. Partial work will not be rolled back.",
+                  "button_label": "Cancel Job",
+                  "button_variant": "warning",
+                  "success_message": "Cancel signal sent to job {row.job_id}",
+                  "error_message": "Cancel failed: {error}"
+                }
+              }
+            ]
           }
         },
         {

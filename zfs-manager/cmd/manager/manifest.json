@@ -21,6 +21,15 @@
       },
       "components": [
         {
+          "type": "discovery-card",
+          "id": "unused-disks",
+          "config": {
+            "source": "/api/disks",
+            "target_table": "pool-list",
+            "poll_interval_seconds": 60
+          }
+        },
+        {
           "type": "smart-table",
           "id": "pool-list",
           "title": "ZFS Pools",
@@ -58,146 +67,189 @@
                   "method": "POST",
                   "endpoint": "/api/pool/create",
                   "preview": {
-                    "endpoint": "/api/pool/create?preview=1"
+                    "endpoint": "/api/preview",
+                    "body": { "action": "create_pool" }
                   }
                 },
                 "form": {
                   "title": "Create New Pool",
                   "show_command": true,
-                  "fields": [
+                  "sections": [
                     {
-                      "key": "name",
-                      "label": "Pool Name",
-                      "type": "text",
-                      "required": true,
-                      "placeholder": "e.g. tank",
-                      "hint": "Letters, digits, underscore, hyphen. Cannot start with a digit or match a zpool keyword (mirror, raidz, log, cache, etc.)."
-                    },
-                    {
-                      "key": "data_type",
-                      "label": "Redundancy",
-                      "type": "select",
-                      "required": true,
-                      "options": [
-                        { "value": "mirror", "label": "Mirror — 2+ drives, highest durability, lose 50% capacity" },
-                        { "value": "raidz1", "label": "RAIDZ1 — 3+ drives, survive 1 failure" },
-                        { "value": "raidz2", "label": "RAIDZ2 — 4+ drives, survive 2 failures (recommended for 6+)" },
-                        { "value": "raidz3", "label": "RAIDZ3 — 5+ drives, survive 3 failures" },
-                        { "value": "stripe", "label": "Stripe — NO redundancy (data is lost on ANY device failure)" }
-                      ],
-                      "hint": "Pick the shape of the primary data vdev. Mirrors are easier to expand later; raidz is more space-efficient."
-                    },
-                    {
-                      "key": "data_devices",
-                      "label": "Data Devices",
-                      "type": "multi-select",
-                      "required": true,
-                      "options_from": "/api/disks",
-                      "option_value": "path",
-                      "option_label": "name",
-                      "option_detail": "model",
-                      "hint": "Only disks not already in a pool are shown. Use all drives of the same size for best results."
-                    },
-                    {
-                      "key": "log_devices",
-                      "label": "Log (SLOG) Devices — optional",
-                      "type": "multi-select",
-                      "options_from": "/api/disks",
-                      "option_value": "path",
-                      "option_label": "name",
-                      "option_detail": "model",
-                      "hint": "Dedicated low-latency device for synchronous writes. Leave empty unless you know you need it."
-                    },
-                    {
-                      "key": "log_type",
-                      "label": "SLOG Layout",
-                      "type": "select",
-                      "options": [
-                        { "value": "mirror", "label": "Mirror (recommended — survives SLOG device loss)" },
-                        { "value": "stripe", "label": "Stripe (single SLOG or accepted risk)" }
-                      ],
-                      "hint": "Only used when at least one SLOG device is selected."
-                    },
-                    {
-                      "key": "cache_devices",
-                      "label": "Cache (L2ARC) Devices — optional",
-                      "type": "multi-select",
-                      "options_from": "/api/disks",
-                      "option_value": "path",
-                      "option_label": "name",
-                      "option_detail": "model",
-                      "hint": "Reads accelerate on SSDs. Always striped — no redundancy needed since L2ARC data is regenerated from disk on loss."
-                    },
-                    {
-                      "key": "spare_devices",
-                      "label": "Hot Spares — optional",
-                      "type": "multi-select",
-                      "options_from": "/api/disks",
-                      "option_value": "path",
-                      "option_label": "name",
-                      "option_detail": "model",
-                      "hint": "Spare drives that auto-replace on failure when autoreplace=on."
-                    },
-                    {
-                      "key": "ashift",
-                      "label": "ashift (sector size)",
-                      "type": "select",
-                      "options": [
-                        { "value": 12, "label": "12 (4K sectors — default, correct for most drives)" },
-                        { "value": 13, "label": "13 (8K sectors — some enterprise SSDs)" },
-                        { "value": 9,  "label": "9 (512B sectors — legacy)" }
-                      ],
-                      "hint": "Cannot be changed after pool creation. When in doubt, leave at 12."
-                    },
-                    {
-                      "key": "compression",
-                      "label": "Compression",
-                      "type": "select",
-                      "options": [
-                        { "value": "lz4",  "label": "LZ4 (recommended — negligible CPU cost)" },
-                        { "value": "zstd", "label": "ZSTD (better ratio, moderate CPU)" },
-                        { "value": "off",  "label": "Off" }
-                      ],
-                      "hint": "Applied to new data. Existing blocks (there aren't any yet on a fresh pool) keep their original compression."
-                    },
-                    {
-                      "key": "atime",
-                      "label": "Access Time",
-                      "type": "select",
-                      "options": [
-                        { "value": "off", "label": "Off (recommended — avoids a metadata write on every read)" },
-                        { "value": "on",  "label": "On" }
+                      "title": "Identity",
+                      "fields": [
+                        {
+                          "key": "name",
+                          "label": "Pool Name",
+                          "type": "text",
+                          "required": true,
+                          "placeholder": "e.g. tank",
+                          "hint": "Letters, digits, underscore, hyphen. Cannot start with a digit or match a zpool keyword (mirror, raidz, log, cache, etc.)."
+                        }
                       ]
                     },
                     {
-                      "key": "autotrim",
-                      "label": "Auto TRIM",
-                      "type": "select",
-                      "options": [
-                        { "value": "off", "label": "Off (default)" },
-                        { "value": "on",  "label": "On (recommended for all-SSD pools)" }
+                      "title": "Data Vdev",
+                      "fields": [
+                        {
+                          "key": "data_type",
+                          "label": "Redundancy",
+                          "type": "select",
+                          "required": true,
+                          "options": [
+                            { "value": "mirror", "label": "Mirror — 2+ drives, highest durability, lose 50% capacity" },
+                            { "value": "raidz1", "label": "RAIDZ1 — 3+ drives, survive 1 failure" },
+                            { "value": "raidz2", "label": "RAIDZ2 — 4+ drives, survive 2 failures (recommended for 6+)" },
+                            { "value": "raidz3", "label": "RAIDZ3 — 5+ drives, survive 3 failures" },
+                            { "value": "stripe", "label": "Stripe — NO redundancy (data is lost on ANY device failure)" }
+                          ],
+                          "hint": "Pick the shape of the primary data vdev. Mirrors are easier to expand later; raidz is more space-efficient."
+                        },
+                        {
+                          "key": "data_devices",
+                          "label": "Data Devices",
+                          "type": "multi-select",
+                          "variant": "cards",
+                          "required": true,
+                          "options_from": "/api/disks",
+                          "option_value": "path",
+                          "option_label": "name",
+                          "option_detail": "model",
+                          "option_meta": { "size": "size-bytes" },
+                          "hint": "Only disks not already in a pool are shown. Use all drives of the same size for best results."
+                        },
+                        {
+                          "key": "__capacity_preview",
+                          "type": "capacity_preview",
+                          "label": "Capacity preview",
+                          "type_field": "data_type",
+                          "devices_field": "data_devices"
+                        }
                       ]
                     },
                     {
-                      "key": "mountpoint",
-                      "label": "Mountpoint — optional",
-                      "type": "text",
-                      "placeholder": "/mnt/tank (leave empty for default /<pool name>)",
-                      "hint": "Absolute path. Overrides the default /pool-name mountpoint."
+                      "title": "Optional Vdevs",
+                      "collapsed": true,
+                      "fields": [
+                        {
+                          "key": "log_devices",
+                          "label": "Log (SLOG) Devices",
+                          "type": "multi-select",
+                          "variant": "cards",
+                          "options_from": "/api/disks",
+                          "option_value": "path",
+                          "option_label": "name",
+                          "option_detail": "model",
+                          "hint": "Dedicated low-latency device for synchronous writes. Leave empty unless you know you need it."
+                        },
+                        {
+                          "key": "log_type",
+                          "label": "SLOG Layout",
+                          "type": "select",
+                          "options": [
+                            { "value": "mirror", "label": "Mirror (recommended — survives SLOG device loss)" },
+                            { "value": "stripe", "label": "Stripe (single SLOG or accepted risk)" }
+                          ],
+                          "hint": "Only used when at least one SLOG device is selected."
+                        },
+                        {
+                          "key": "cache_devices",
+                          "label": "Cache (L2ARC) Devices",
+                          "type": "multi-select",
+                          "variant": "cards",
+                          "options_from": "/api/disks",
+                          "option_value": "path",
+                          "option_label": "name",
+                          "option_detail": "model",
+                          "hint": "Reads accelerate on SSDs. Always striped — no redundancy needed since L2ARC data is regenerated from disk on loss."
+                        },
+                        {
+                          "key": "spare_devices",
+                          "label": "Hot Spares",
+                          "type": "multi-select",
+                          "variant": "cards",
+                          "options_from": "/api/disks",
+                          "option_value": "path",
+                          "option_label": "name",
+                          "option_detail": "model",
+                          "hint": "Spare drives that auto-replace on failure when autoreplace=on."
+                        }
+                      ]
                     },
                     {
-                      "key": "force",
-                      "label": "Force create (overwrite foreign labels)",
-                      "type": "checkbox",
-                      "safety_tier": "red",
-                      "hint": "RED TIER — reuses disks even when they carry existing zfs/lvm/md labels. Only enable if you have verified every selected disk is safe to overwrite."
+                      "title": "Defaults",
+                      "collapsed": true,
+                      "layout": "columns",
+                      "fields": [
+                        {
+                          "key": "ashift",
+                          "label": "ashift (sector size)",
+                          "type": "select",
+                          "options": [
+                            { "value": 12, "label": "12 (4K sectors — default, correct for most drives)" },
+                            { "value": 13, "label": "13 (8K sectors — some enterprise SSDs)" },
+                            { "value": 9,  "label": "9 (512B sectors — legacy)" }
+                          ],
+                          "hint": "Cannot be changed after pool creation. When in doubt, leave at 12."
+                        },
+                        {
+                          "key": "compression",
+                          "label": "Compression",
+                          "type": "select",
+                          "options": [
+                            { "value": "lz4",  "label": "LZ4 (recommended — negligible CPU cost)" },
+                            { "value": "zstd", "label": "ZSTD (better ratio, moderate CPU)" },
+                            { "value": "off",  "label": "Off" }
+                          ],
+                          "hint": "Applied to new data."
+                        },
+                        {
+                          "key": "atime",
+                          "label": "Access Time",
+                          "type": "select",
+                          "options": [
+                            { "value": "off", "label": "Off (recommended — avoids a metadata write on every read)" },
+                            { "value": "on",  "label": "On" }
+                          ]
+                        },
+                        {
+                          "key": "autotrim",
+                          "label": "Auto TRIM",
+                          "type": "select",
+                          "options": [
+                            { "value": "off", "label": "Off (default)" },
+                            { "value": "on",  "label": "On (recommended for all-SSD pools)" }
+                          ]
+                        },
+                        {
+                          "key": "mountpoint",
+                          "label": "Mountpoint",
+                          "type": "text",
+                          "placeholder": "/mnt/tank (leave empty for default /<pool name>)",
+                          "hint": "Absolute path. Overrides the default /pool-name mountpoint."
+                        }
+                      ]
                     },
                     {
-                      "key": "confirm",
-                      "label": "Type the pool name to confirm (force only)",
-                      "type": "text",
-                      "placeholder": "tank",
-                      "hint": "Required only when Force is checked. Ignored otherwise."
+                      "title": "Force / Advanced",
+                      "collapsed": true,
+                      "fields": [
+                        {
+                          "key": "force",
+                          "label": "Force create (overwrite foreign labels)",
+                          "type": "checkbox",
+                          "safety_tier": "red",
+                          "hint": "RED TIER — reuses disks even when they carry existing zfs/lvm/md labels. Only enable if you have verified every selected disk is safe to overwrite."
+                        },
+                        {
+                          "key": "confirm",
+                          "label": "Type the pool name to confirm (force only)",
+                          "type": "text",
+                          "placeholder": "tank",
+                          "hint": "Required only when Force is checked. Ignored otherwise.",
+                          "visible_when": { "field": "force", "equals": true }
+                        }
+                      ]
                     }
                   ],
                   "button_label": "Create Pool"
@@ -1113,10 +1165,12 @@
                       "key": "devices",
                       "label": "Devices",
                       "type": "multi-select",
+                      "variant": "cards",
                       "options_from": "/api/disks",
                       "option_value": "path",
                       "option_label": "name",
                       "option_detail": "model",
+                      "option_meta": { "size": "size-bytes" },
                       "required": true,
                       "hint": "Select the drives for the new vdev"
                     }
@@ -1979,114 +2033,141 @@
                   "title": "Create Remote Replication Task",
                   "description": "Send snapshots over SSH to a remote host's `zfs receive`. The agent auto-generates an Ed25519 keypair; copy its public line into ~/.ssh/authorized_keys on the remote user, then use Test Connection to pin the host key and verify access. First run is a full send; subsequent runs are incremental.",
                   "show_command": true,
-                  "fields": [
-                    { "key": "replication_mode", "type": "hidden", "value": "remote" },
+                  "sections": [
                     {
-                      "key": "target",
-                      "label": "Source Dataset",
-                      "type": "select",
-                      "options_from": "/api/datasets",
-                      "option_value": "name",
-                      "option_label": "name",
-                      "required": true,
-                      "hint": "The local dataset whose snapshots will be sent"
+                      "title": "Source",
+                      "fields": [
+                        { "key": "replication_mode", "type": "hidden", "value": "remote" },
+                        {
+                          "key": "target",
+                          "label": "Source Dataset",
+                          "type": "select",
+                          "options_from": "/api/datasets",
+                          "option_value": "name",
+                          "option_label": "name",
+                          "required": true,
+                          "hint": "The local dataset whose snapshots will be sent"
+                        },
+                        {
+                          "key": "prefix",
+                          "label": "Snapshot Prefix",
+                          "type": "text",
+                          "placeholder": "repl",
+                          "hint": "Source snapshots will be named: prefix-2026-04-07-120000"
+                        }
+                      ]
                     },
                     {
-                      "key": "dest_target",
-                      "label": "Remote Destination Dataset",
-                      "type": "text",
-                      "placeholder": "tank/backups/incoming",
-                      "required": true,
-                      "hint": "Full ZFS path on the remote host, e.g. pool/dataset. Must already exist — use a dedicated receive-only dataset (zfs receive -F will roll back conflicts)."
+                      "title": "Destination",
+                      "fields": [
+                        {
+                          "key": "dest_target",
+                          "label": "Remote Destination Dataset",
+                          "type": "text",
+                          "placeholder": "tank/backups/incoming",
+                          "required": true,
+                          "hint": "Full ZFS path on the remote host, e.g. pool/dataset. Must already exist — use a dedicated receive-only dataset (zfs receive -F will roll back conflicts)."
+                        },
+                        {
+                          "key": "dest_host",
+                          "label": "Remote Host",
+                          "type": "text",
+                          "placeholder": "backup.lan or 192.168.1.50",
+                          "required": true
+                        },
+                        {
+                          "key": "dest_port",
+                          "label": "SSH Port",
+                          "type": "number",
+                          "placeholder": "22",
+                          "hint": "Leave blank for the default 22"
+                        },
+                        {
+                          "key": "dest_user",
+                          "label": "Remote User",
+                          "type": "text",
+                          "placeholder": "zfs-recv",
+                          "required": true,
+                          "hint": "SSH user on the remote host. Needs `zfs receive` permission — grant via `zfs allow -u <user> receive,create,mount <dataset>`."
+                        },
+                        {
+                          "key": "ssh_key_name",
+                          "label": "SSH Key Name",
+                          "type": "text",
+                          "placeholder": "backup-target",
+                          "required": true,
+                          "hint": "Identifier (letters, digits, '-', '_') for the Ed25519 keypair. Fetch the public key with `GET /api/replication/keys/<name>/public` after creation and append it to ~/.ssh/authorized_keys on the remote user."
+                        }
+                      ]
                     },
                     {
-                      "key": "dest_host",
-                      "label": "Remote Host",
-                      "type": "text",
-                      "placeholder": "backup.lan or 192.168.1.50",
-                      "required": true
+                      "title": "Schedule",
+                      "fields": [
+                        {
+                          "key": "schedule",
+                          "label": "Schedule",
+                          "type": "select",
+                          "options": [
+                            { "value": "0 * * * *",     "label": "Every hour" },
+                            { "value": "0 */6 * * *",   "label": "Every 6 hours" },
+                            { "value": "0 0 * * *",     "label": "Daily at midnight" },
+                            { "value": "0 0 * * 0",     "label": "Weekly on Sunday" }
+                          ],
+                          "allow_custom": true,
+                          "custom_label": "Custom (cron expression)",
+                          "required": true
+                        }
+                      ]
                     },
                     {
-                      "key": "dest_port",
-                      "label": "SSH Port",
-                      "type": "number",
-                      "placeholder": "22",
-                      "hint": "Leave blank for the default 22"
+                      "title": "Retention",
+                      "collapsed": true,
+                      "fields": [
+                        {
+                          "key": "retention",
+                          "label": "Source Retention",
+                          "type": "select",
+                          "options": [
+                            { "value": "0",  "label": "Unlimited (no auto-delete)" },
+                            { "value": "24", "label": "Keep last 24 snapshots" },
+                            { "value": "7",  "label": "Keep last 7 snapshots" },
+                            { "value": "4",  "label": "Keep last 4 snapshots" }
+                          ],
+                          "allow_custom": true,
+                          "custom_label": "Custom count",
+                          "hint": "Applied on the source after a successful run. Also applied on the remote destination when 'Manage Retention on Remote' is enabled below."
+                        },
+                        {
+                          "key": "manage_remote_retention",
+                          "label": "Manage Retention on Remote",
+                          "type": "checkbox",
+                          "hint": "Destroys old snapshots on the remote host after each successful receive, keeping the same count as source retention. Requires 'destroy,mount' zfs permissions for the SSH user on the destination dataset."
+                        }
+                      ]
                     },
                     {
-                      "key": "dest_user",
-                      "label": "Remote User",
-                      "type": "text",
-                      "placeholder": "zfs-recv",
-                      "required": true,
-                      "hint": "SSH user on the remote host. Needs `zfs receive` permission — grant via `zfs allow -u <user> receive,create,mount <dataset>`."
-                    },
-                    {
-                      "key": "ssh_key_name",
-                      "label": "SSH Key Name",
-                      "type": "text",
-                      "placeholder": "backup-target",
-                      "required": true,
-                      "hint": "Identifier (letters, digits, '-', '_') for the Ed25519 keypair. Fetch the public key with `GET /api/replication/keys/<name>/public` after creation and append it to ~/.ssh/authorized_keys on the remote user."
-                    },
-                    {
-                      "key": "bandwidth_kbps",
-                      "label": "Bandwidth Limit (kB/s)",
-                      "type": "number",
-                      "placeholder": "0",
-                      "hint": "0 or blank = unlimited. Requires `pv` installed on the agent host."
-                    },
-                    {
-                      "key": "schedule",
-                      "label": "Schedule",
-                      "type": "select",
-                      "options": [
-                        { "value": "0 * * * *",     "label": "Every hour" },
-                        { "value": "0 */6 * * *",   "label": "Every 6 hours" },
-                        { "value": "0 0 * * *",     "label": "Daily at midnight" },
-                        { "value": "0 0 * * 0",     "label": "Weekly on Sunday" }
-                      ],
-                      "allow_custom": true,
-                      "custom_label": "Custom (cron expression)",
-                      "required": true
-                    },
-                    {
-                      "key": "prefix",
-                      "label": "Snapshot Prefix",
-                      "type": "text",
-                      "placeholder": "repl",
-                      "hint": "Source snapshots will be named: prefix-2026-04-07-120000"
-                    },
-                    {
-                      "key": "retention",
-                      "label": "Source Retention",
-                      "type": "select",
-                      "options": [
-                        { "value": "0",  "label": "Unlimited (no auto-delete)" },
-                        { "value": "24", "label": "Keep last 24 snapshots" },
-                        { "value": "7",  "label": "Keep last 7 snapshots" },
-                        { "value": "4",  "label": "Keep last 4 snapshots" }
-                      ],
-                      "allow_custom": true,
-                      "custom_label": "Custom count",
-                      "hint": "Applied on the source after a successful run. Also applied on the remote destination when 'Manage Retention on Remote' is enabled below."
-                    },
-                    {
-                      "key": "manage_remote_retention",
-                      "label": "Manage Retention on Remote",
-                      "type": "checkbox",
-                      "hint": "Destroys old snapshots on the remote host after each successful receive, keeping the same count as source retention. Requires 'destroy,mount' zfs permissions for the SSH user on the destination dataset."
-                    },
-                    {
-                      "key": "use_bookmarks",
-                      "label": "Use Bookmarks for Incrementals",
-                      "type": "checkbox",
-                      "hint": "Creates a zfs bookmark of each sent snapshot. Future incrementals use the bookmark as their base so aggressive source retention cannot break the incremental chain."
-                    },
-                    {
-                      "key": "recursive",
-                      "label": "Recursive (include child datasets)",
-                      "type": "checkbox"
+                      "title": "Advanced",
+                      "collapsed": true,
+                      "fields": [
+                        {
+                          "key": "bandwidth_kbps",
+                          "label": "Bandwidth Limit (kB/s)",
+                          "type": "number",
+                          "placeholder": "0",
+                          "hint": "0 or blank = unlimited. Requires `pv` installed on the agent host."
+                        },
+                        {
+                          "key": "use_bookmarks",
+                          "label": "Use Bookmarks for Incrementals",
+                          "type": "checkbox",
+                          "hint": "Creates a zfs bookmark of each sent snapshot. Future incrementals use the bookmark as their base so aggressive source retention cannot break the incremental chain."
+                        },
+                        {
+                          "key": "recursive",
+                          "label": "Recursive (include child datasets)",
+                          "type": "checkbox"
+                        }
+                      ]
                     }
                   ],
                   "button_label": "Create Task"
@@ -2110,7 +2191,6 @@
             "source": "addon_agents",
             "columns": [
               { "key": "status",        "label": "Status",    "format": "status_dot" },
-              { "key": "alias",         "label": "Alias",     "sortable": true },
               { "key": "agent_id",      "label": "Agent ID",  "sortable": true },
               { "key": "hostname",      "label": "Hostname",  "sortable": true },
               { "key": "address",       "label": "Address",   "sortable": false },
@@ -2121,31 +2201,6 @@
             "sortable": true,
             "default_sort": { "key": "agent_id", "direction": "asc" },
             "row_actions": [
-              {
-                "id": "set-agent-alias",
-                "label": "Set Alias",
-                "icon": "tag",
-                "safety_tier": "green",
-                "action": {
-                  "method": "POST",
-                  "endpoint": "/api/agents/{row.agent_id}/alias"
-                },
-                "form": {
-                  "title": "Set Alias — {row.agent_id}",
-                  "fields": [
-                    {
-                      "key": "alias",
-                      "label": "Alias",
-                      "type": "text",
-                      "value_from": "row.alias",
-                      "placeholder": "e.g. Friday",
-                      "hint": "Friendly name shown in the agent selector. Leave empty to clear.",
-                      "max_length": 64
-                    }
-                  ],
-                  "button_label": "Save Alias"
-                }
-              },
               {
                 "id": "delete-agent",
                 "label": "Delete",

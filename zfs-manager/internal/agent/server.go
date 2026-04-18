@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -604,8 +605,13 @@ type previewRequest struct {
 }
 
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		addonutil.WriteError(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
 	var req previewRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		addonutil.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -615,6 +621,18 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		warnings []string
 	)
 	switch req.Action {
+	case "create_pool":
+		var cp createPoolRequest
+		if err := json.Unmarshal(bodyBytes, &cp); err != nil {
+			addonutil.WriteError(w, http.StatusBadRequest, "invalid create_pool body: "+err.Error())
+			return
+		}
+		spec := cp.toSpec()
+		if verr := ValidatePoolSpec(spec); verr != nil {
+			warnings = append(warnings, verr.Error())
+		}
+		cmd = BuildCreatePoolCommand(s.engine.zpoolPath, spec)
+
 	case "create_dataset":
 		props := make(map[string]string)
 		if preset, ok := DatasetPresets[req.Preset]; ok {

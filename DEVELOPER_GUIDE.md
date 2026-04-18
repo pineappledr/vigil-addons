@@ -640,6 +640,8 @@ Shared field properties:
 | `option_label`   | with `options_from`      | JSON key → option label (default `label`) |
 | `option_detail`  | with `options_from`      | JSON key → " — detail" suffix |
 
+**Select value types.** `<select>.value` is always a string in the DOM, but smart-table preserves the JSON type you declared. An option written as `{ "value": 12, "label": "12 (4K)" }` is submitted as the number `12`; `{ "value": true, "label": "On" }` is submitted as boolean `true`. Strings pass through unchanged. The same coercion applies to `options_from` responses — if the fetched JSON value is a number or boolean, the submitted body preserves it. Without this, Go handlers typed `int` / `bool` would reject string input with `400 Bad Request` (`json: cannot unmarshal string into Go struct field …`).
+
 ### Column formatters
 
 | `format`          | Input                        | Rendered as |

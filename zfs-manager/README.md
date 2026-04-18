@@ -56,14 +56,17 @@ Because agents will eventually execute destructive operations, every agent reque
 
 | Page | Description |
 |------|-------------|
-| **Pools** | Pool health (ONLINE/DEGRADED/FAULTED), size, used/free, fragmentation %, dedup ratio, last scrub date, vdev topology tree |
-| **Datasets** | All ZFS filesystems — used, available, referenced, mountpoint, compression, record size, atime, sync |
-| **Snapshots** | All snapshots across all datasets — creation date, used space, referenced size. Sortable by date. |
-| **Replication** | Local `zfs send | receive` replication tasks — create, schedule, run manually, view history. Supports full and incremental sends with automatic common-snapshot resolution. |
+| **Pools** | Pool health (ONLINE/DEGRADED/FAULTED), size, used/free, fragmentation %, dedup ratio, last scrub date, vdev topology. **Create Pool** wizard with section-based form (Identity, Data Vdev, Optional Vdevs, Defaults, Force/Advanced), live capacity preview, cross-field disk-picker (prevents selecting the same disk in two roles). **Import / Export / Destroy**, **Add Vdev** (pool expansion), **Edit Properties**. |
+| **Datasets** | All ZFS filesystems — used, available, referenced, mountpoint, compression, record size, atime, sync. Create/edit/delete with preset templates (General, Media, VM, Database). Property editor grouped by category with plain-language tooltips. |
+| **Snapshots** | All snapshots across all datasets — creation date, used space, referenced size. Sortable. Take / delete / rollback with type-the-name confirm. Retention dashboard per dataset. |
+| **Devices** | Per-pool vdev topology with READ/WRITE/CKSUM counters. **Replace Disk** wizard (size-check warnings), **Offline / Online / Clear Errors**, **Identify** (ledctl blink — hidden when `ledctl` isn't installed). |
+| **Scheduled Tasks** | Snapshot and scrub schedules with preset ("Every hour", "Daily at midnight") or custom cron. Retention policies ("Keep last 7 daily"). History of past runs with exit codes. |
+| **Replication** | Local and remote `zfs send \| receive` tasks with incremental bookmarks. Remote flow includes connection test, SSH key management, bandwidth limit, optional remote retention. Create, schedule, run manually, view history. |
+| **ARC / I/O** | ARC hit ratio, size, target, eviction rate; L2ARC when present. `zpool iostat` per-pool and per-vdev IOPS, bandwidth, latency. Historical charts. |
 | **Logs** | Live log viewer with real-time streaming from each agent. Select an agent to view its log output. |
 | **Agents** | Registered agents, online/offline status, last-seen timestamp, deploy-wizard to add new agents |
 
-All data pages have an **agent selector** — pick which host to view.
+All data pages have an **agent selector** — pick which host to view. Tables aggregating rows from multiple hosts (e.g. drive inventory) route each row's actions to that row's `agent_id` automatically.
 
 ---
 
@@ -306,41 +309,91 @@ See [config.manager.example.yaml](config.manager.example.yaml) and [config.agent
 
 ### Manager Endpoints
 
+Write endpoints marked **Signed** require a valid Ed25519 signature from the Vigil server (set `VIGIL_SERVER_PUBKEY` to enable verification). Read endpoints are unsigned but CSRF-protected via the `X-Requested-With: XMLHttpRequest` header on non-`GET` calls. All proxied write calls forward the body to the agent over PSK-authenticated HTTP.
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/health` | None | Health check |
 | `GET` | `/api/deploy-info` | None | Returns `hub_url` + `hub_psk` for deploy-wizard |
 | `POST` | `/api/agents/register` | PSK | Agent self-registration |
 | `GET` | `/api/agents` | None | List all registered agents with status |
+| `POST` | `/api/agents/{id}/alias` | None | Set a friendly alias (deprecated — alias is auto-derived) |
 | `DELETE` | `/api/agents/{id}` | None | Remove an agent |
 | `POST` | `/api/telemetry/ingest` | PSK | Receive telemetry from an agent |
 | `GET` | `/api/telemetry/{agentID}` | None | Get cached telemetry for an agent |
 | `GET` | `/api/pools` | None | Pool data for selected agent (`?agent_id=`) |
 | `GET` | `/api/datasets` | None | Dataset data for selected agent (`?agent_id=`) |
 | `GET` | `/api/snapshots` | None | Snapshot data for selected agent (`?agent_id=`) |
+| `GET` | `/api/presets` | None | Dataset preset catalog (General / Media / VM / Database) |
+| `GET` | `/api/arc` | None | ARC/L2ARC snapshot |
+| `GET` | `/api/arc/metrics` | None | ARC historical metrics |
+| `GET` | `/api/arc/recommendations` | None | Plain-language ARC tuning hints |
+| `GET` | `/api/iostat` | None | `zpool iostat` snapshot |
+| `GET` | `/api/iostat/rows` | None | Per-pool / per-vdev iostat rows |
+| `GET` | `/api/disks` | None | Disk inventory (`?unused=true` for the "Add to Pool" discovery card) |
+| `GET` | `/api/pool/importable` | None | Scan for importable pools (`zpool import`) |
+| `GET` | `/api/pool/properties` | None | Pool property catalog |
+| `GET` | `/api/dataset/properties` | None | Dataset property catalog |
+| `GET` | `/api/properties/catalog` | None | Grouped property metadata with tooltips |
+| `POST` | `/api/properties/preview-diff` | None | Compute the `zfs set` diff for a proposed property change |
+| `POST` | `/api/preview` | None | Read-only preview for write endpoints (`?preview=1` forwarded to agent) |
+| `POST` | `/api/pool/create` | Signed | Create a pool (`zpool create`) |
+| `POST` | `/api/pool/import` | Signed | Import a pool (`zpool import`) |
+| `POST` | `/api/pool/export` | Signed | Export a pool (`zpool export`) |
+| `POST` | `/api/pool/add-vdev` | Signed | Expand pool with a new vdev (`zpool add`) |
+| `POST` | `/api/pool/replace` | Signed | Replace a device (`zpool replace`) |
+| `POST` | `/api/pool/clear` | Signed | Clear error counters (`zpool clear`) |
+| `PUT` | `/api/pool/properties` | Signed | Update pool properties (`zpool set`) |
+| `POST` | `/api/devices/offline` | Signed | Offline a device (`zpool offline`) |
+| `POST` | `/api/devices/online` | Signed | Online a device (`zpool online`) |
+| `POST` | `/api/devices/identify` | Signed | Blink drive-bay LED (`ledctl`) — 501 if unavailable |
+| `POST` | `/api/datasets` | Signed | Create dataset (`zfs create`) |
+| `PUT` | `/api/datasets` | Signed | Edit dataset properties (`zfs set`) |
+| `DELETE` | `/api/datasets` | Signed | Destroy dataset (`zfs destroy`) |
+| `POST` | `/api/snapshots` | Signed | Take snapshot (`zfs snapshot`) |
+| `DELETE` | `/api/snapshots` | Signed | Destroy snapshot (`zfs destroy`) |
+| `POST` | `/api/snapshots/rollback` | Signed | Rollback to snapshot (`zfs rollback`) |
+| `POST` | `/api/scrub/start` | Signed | Start scrub (`zpool scrub`) |
+| `POST` | `/api/scrub/pause` | Signed | Pause scrub (`zpool scrub -p`) |
+| `POST` | `/api/scrub/cancel` | Signed | Cancel scrub (`zpool scrub -s`) |
+| `GET` | `/api/tasks` | None | List scheduled snapshot/scrub tasks |
+| `POST` | `/api/tasks` | Signed | Create a scheduled task |
+| `PUT` | `/api/tasks/{id}` | Signed | Update a scheduled task |
+| `DELETE` | `/api/tasks/{id}` | Signed | Delete a scheduled task |
+| `GET` | `/api/tasks/{id}/history` | None | Task run history |
+| `GET` | `/api/jobs` | None | Active background jobs |
+| `GET` | `/api/retention` | None | Snapshot retention dashboard |
+| `POST` | `/api/retention/cleanup` | Signed | Run bulk snapshot cleanup |
+| `GET` | `/api/replication/tasks` | None | List replication tasks |
+| `POST` | `/api/replication/tasks` | Signed | Create a replication task |
+| `PUT` | `/api/replication/tasks/{id}` | Signed | Update a replication task |
+| `DELETE` | `/api/replication/tasks/{id}` | Signed | Delete a replication task |
+| `POST` | `/api/replication/tasks/{id}/run` | Signed | Manually trigger a replication run |
+| `GET` | `/api/replication/tasks/{id}/history` | None | Replication task run history |
+| `POST` | `/api/replication/test-connection` | Signed | Test SSH + `zfs receive` to a remote host |
+| `GET` | `/api/replication/keys/{name}/public` | Signed | Fetch the SSH public key for a replication key pair |
+| `POST` | `/api/replication/keys/{name}/rotate` | Signed | Rotate a replication SSH key pair |
 | `POST` | `/api/rotate-psk` | None | Rotate the PSK (body: `{"confirm":"ROTATE"}`) |
-| `GET` | `/api/replication/tasks` | None | List replication tasks (proxied to agent) |
-| `POST` | `/api/replication/tasks` | None | Create a replication task (proxied to agent) |
-| `PUT` | `/api/replication/tasks/{id}` | None | Update a replication task (proxied to agent) |
-| `DELETE` | `/api/replication/tasks/{id}` | None | Delete a replication task (proxied to agent) |
-| `POST` | `/api/replication/tasks/{id}/run` | None | Manually trigger a replication task (proxied to agent) |
-| `GET` | `/api/replication/tasks/{id}/history` | None | Replication task run history (proxied to agent) |
 
 ### Agent Endpoints
+
+The agent exposes the same write surface behind `Authorization: Bearer <psk>`. Every write endpoint also accepts `?preview=1` which returns `{command, warnings}` without executing — used by the UI's Command Preview.
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
 | `GET` | `/api/telemetry` | Full telemetry snapshot |
-| `GET` | `/api/pools` | Pool list |
-| `GET` | `/api/datasets` | Dataset list |
-| `GET` | `/api/snapshots` | Snapshot list |
-| `GET` | `/api/replication/tasks` | List all replication tasks |
-| `POST` | `/api/replication/tasks` | Create a replication task |
-| `PUT` | `/api/replication/tasks/{id}` | Update a replication task |
-| `DELETE` | `/api/replication/tasks/{id}` | Delete a replication task |
-| `POST` | `/api/replication/tasks/{id}/run` | Manually trigger a replication run |
-| `GET` | `/api/replication/tasks/{id}/history` | Replication run history |
+| `GET` | `/api/pools`, `/api/datasets`, `/api/snapshots`, `/api/disks` | Inventory |
+| `GET` | `/api/arc`, `/api/iostat` | Performance metrics |
+| `POST` | `/api/pool/{create,import,export,add-vdev,replace,clear}` | Pool mutations |
+| `PUT` | `/api/pool/properties` | Pool property updates |
+| `POST` | `/api/devices/{offline,online,identify}` | Device controls |
+| `POST`, `PUT`, `DELETE` | `/api/datasets` | Dataset CRUD |
+| `POST`, `DELETE` | `/api/snapshots`, `POST /api/snapshots/rollback` | Snapshot CRUD + rollback |
+| `POST` | `/api/scrub/{start,pause,cancel}` | Scrub control |
+| `GET`, `POST`, `PUT`, `DELETE` | `/api/tasks` | Scheduled task CRUD |
+| `GET`, `POST`, `PUT`, `DELETE` | `/api/replication/tasks` | Replication task CRUD |
+| `POST` | `/api/replication/{test-connection,keys/{name}/rotate}` | Replication helpers |
 
 ---
 

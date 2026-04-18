@@ -68,6 +68,7 @@
                 "label": "Create Pool",
                 "icon": "plus-square",
                 "safety_tier": "yellow",
+                "hidden": true,
                 "action": {
                   "method": "POST",
                   "endpoint": "/api/pool/create",

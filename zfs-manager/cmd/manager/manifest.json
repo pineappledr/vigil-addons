@@ -55,6 +55,11 @@
             ],
             "sortable": true,
             "default_sort": { "key": "name", "direction": "asc" },
+            "progress_indicator": {
+              "field": "scrub_status",
+              "busy_values": ["in_progress", "resilvering", "scanning"],
+              "interval_seconds": 5
+            },
             "expandable": true,
             "expand_key": "vdevs",
             "toolbar_actions": [
@@ -252,7 +257,9 @@
                       ]
                     }
                   ],
-                  "button_label": "Create Pool"
+                  "button_label": "Create Pool",
+                  "success_message": "Pool created",
+                  "error_message": "Create pool failed: {error}"
                 }
               }
             ],
@@ -843,7 +850,8 @@
                       "hint": "Guaranteed minimum space for this dataset"
                     }
                   ],
-                  "button_label": "Create Dataset"
+                  "button_label": "Create Dataset",
+                  "success_message": "Dataset {name} created"
                 }
               }
             ]
@@ -881,6 +889,29 @@
             ],
             "sortable": true,
             "filterable": true,
+            "selectable": true,
+            "key_field": "full_name",
+            "bulk_actions": [
+              {
+                "id": "bulk-delete-snapshots",
+                "label": "Delete Selected",
+                "icon": "trash-2",
+                "safety_tier": "red",
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/snapshots",
+                  "body_map": { "name": "row.full_name" }
+                },
+                "confirm": {
+                  "title": "Delete {count} Snapshots",
+                  "message": "Permanently delete {count} snapshots? This cannot be undone.",
+                  "button_label": "Delete All",
+                  "button_variant": "danger"
+                },
+                "success_message": "Deleted {succeeded} of {total} snapshots",
+                "error_message": "Delete failed: {error}"
+              }
+            ],
             "default_sort": { "key": "creation", "direction": "desc" },
             "row_actions": [
               {

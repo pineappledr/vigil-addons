@@ -121,6 +121,8 @@ func (s *Scheduler) executeTask(ctx context.Context, task agentdb.ScheduledTask)
 	jobID, _ := agentdb.InsertJob(s.db, &taskID, task.TaskType, "scheduled")
 
 	s.logger.Info("executing scheduled task", "task_id", task.ID, "type", task.TaskType, "target", task.Target)
+	source := fmt.Sprintf("scheduler:%s", task.TaskType)
+	s.emitLog(source, "info", fmt.Sprintf("starting %s on %s (task #%d)", task.TaskType, task.Target, task.ID))
 
 	var err error
 	switch task.TaskType {
@@ -138,11 +140,13 @@ func (s *Scheduler) executeTask(ctx context.Context, task agentdb.ScheduledTask)
 		s.logger.Error("scheduled task failed", "task_id", task.ID, "error", err)
 		agentdb.CompleteJob(s.db, jobID, "error", err.Error())
 		s.emitFailureEvent(task, err)
+		s.emitLog(source, "error", fmt.Sprintf("task #%d failed: %s", task.ID, err))
 		return
 	}
 
 	agentdb.CompleteJob(s.db, jobID, "success", "")
 	s.logger.Info("scheduled task completed", "task_id", task.ID)
+	s.emitLog(source, "info", fmt.Sprintf("task #%d on %s completed", task.ID, task.Target))
 }
 
 // emitEvent is a nil-safe wrapper around Collector.EmitEvent so scheduler
@@ -161,6 +165,15 @@ func (s *Scheduler) requestFlush() {
 		return
 	}
 	s.collector.RequestFlush()
+}
+
+// emitLog pushes a log line through the Collector's sink (if installed),
+// surfacing scheduler activity on the dashboard Logs page in real time.
+func (s *Scheduler) emitLog(source, level, message string) {
+	if s.collector == nil {
+		return
+	}
+	s.collector.EmitLogLine(source, level, message)
 }
 
 // emitFailureEvent maps a scheduled task failure onto a typed agent event.

@@ -54,6 +54,16 @@ func NewServer(cfg *config.AgentConfig, engine *Engine, collector *Collector, da
 	return s
 }
 
+// logOp pushes a real-time log line through the Collector's sink so user-
+// triggered writes surface on the dashboard Logs page as they happen. Nil-safe
+// for tests that construct a bare Server without a collector.
+func (s *Server) logOp(source, level, message string) {
+	if s.collector == nil {
+		return
+	}
+	s.collector.EmitLogLine(source, level, message)
+}
+
 // requirePSK gates every /api/* handler on the hub PSK supplied by the
 // manager during registration (cfg.Hub.PSK). The manager forwards it as
 // Authorization: Bearer <psk> on every proxied request. Falls open when
@@ -526,6 +536,7 @@ func (s *Server) handleStartScrub(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.logger.Info("starting scrub", "pool", req.Pool)
+	s.logOp("zpool-scrub", "info", "starting scrub on pool "+req.Pool)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -533,10 +544,12 @@ func (s *Server) handleStartScrub(w http.ResponseWriter, r *http.Request) {
 	result, err := s.engine.StartScrub(ctx, req.Pool)
 	if err != nil {
 		s.logger.Error("start scrub failed", "pool", req.Pool, "error", err)
+		s.logOp("zpool-scrub", "error", "scrub on "+req.Pool+" failed: "+err.Error())
 		addonutil.WriteJSON(w, http.StatusInternalServerError, result)
 		return
 	}
 
+	s.logOp("zpool-scrub", "info", "scrub scheduled on "+req.Pool)
 	go s.refreshAndFlush()
 	addonutil.WriteJSON(w, http.StatusOK, result)
 }
@@ -884,6 +897,7 @@ func (s *Server) handleReplaceDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.logger.Info("replacing device", "pool", req.Pool, "old", req.OldDevice, "new", req.NewDevice)
+	s.logOp("zpool-replace", "info", fmt.Sprintf("replacing %s → %s on pool %s", req.OldDevice, req.NewDevice, req.Pool))
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
@@ -891,6 +905,7 @@ func (s *Server) handleReplaceDevice(w http.ResponseWriter, r *http.Request) {
 	result, err := s.engine.ReplaceDevice(ctx, req.Pool, req.OldDevice, req.NewDevice)
 	if err != nil {
 		s.logger.Error("replace device failed", "pool", req.Pool, "error", err)
+		s.logOp("zpool-replace", "error", "replace on "+req.Pool+" failed: "+err.Error())
 		addonutil.WriteJSON(w, http.StatusInternalServerError, result)
 		return
 	}

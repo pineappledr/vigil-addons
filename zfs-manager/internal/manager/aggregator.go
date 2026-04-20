@@ -284,6 +284,23 @@ func isScrubRunning(status string) bool {
 	return strings.HasPrefix(status, "in_progress") || status == "paused"
 }
 
+// EmitLogLine forwards a real-time log line upstream as a typed "log" frame
+// so it surfaces on the dashboard Logs page via SSE (event: log). Best-effort:
+// a disconnected upstream drops the line rather than blocking the ingest path.
+func (a *Aggregator) EmitLogLine(payload map[string]string) {
+	a.mu.RLock()
+	tc := a.vigil
+	a.mu.RUnlock()
+
+	if tc == nil {
+		return
+	}
+
+	if err := tc.Send("log", payload); err != nil {
+		a.logger.Debug("failed to send log line upstream", "error", err)
+	}
+}
+
 // emitNotification looks up the agent hostname from the registry and sends a
 // typed notification frame upstream.
 func (a *Aggregator) emitNotification(tc *vigilclient.TelemetryClient, agentID, eventType, severity, message string) {

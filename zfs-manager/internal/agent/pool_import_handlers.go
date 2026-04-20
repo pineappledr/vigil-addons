@@ -62,6 +62,7 @@ func (s *Server) handleImportPool(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.logger.Info("importing pool", "name", req.Name, "new_name", req.NewName, "force", req.Force, "readonly", req.ReadOnly)
+	s.logOp("zpool-import", "info", "importing pool "+req.Name)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
@@ -75,9 +76,11 @@ func (s *Server) handleImportPool(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		s.logger.Error("import pool failed", "name", req.Name, "error", err)
+		s.logOp("zpool-import", "error", "import "+req.Name+" failed: "+err.Error())
 		addonutil.WriteJSON(w, http.StatusInternalServerError, result)
 		return
 	}
+	s.logOp("zpool-import", "info", "pool "+req.Name+" imported")
 
 	// A successful import reshapes the pool/dataset/snapshot inventory, so
 	// flush the collector before responding. Clients polling telemetry will
@@ -115,6 +118,7 @@ func (s *Server) handleExportPool(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.logger.Info("exporting pool", "pool", req.Pool, "force", req.Force)
+	s.logOp("zpool-export", "info", "exporting pool "+req.Pool)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
@@ -122,9 +126,11 @@ func (s *Server) handleExportPool(w http.ResponseWriter, r *http.Request) {
 	result, err := s.engine.ExportPool(ctx, req.Pool, req.Force)
 	if err != nil {
 		s.logger.Error("export pool failed", "pool", req.Pool, "error", err)
+		s.logOp("zpool-export", "error", "export "+req.Pool+" failed: "+err.Error())
 		addonutil.WriteJSON(w, http.StatusInternalServerError, result)
 		return
 	}
+	s.logOp("zpool-export", "info", "pool "+req.Pool+" exported")
 
 	go s.refreshAndFlush()
 	addonutil.WriteJSON(w, http.StatusOK, result)

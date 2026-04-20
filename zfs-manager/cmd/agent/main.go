@@ -85,6 +85,7 @@ func main() {
 		} else {
 			go agent.RegisterWithHub(appCtx, cfg.Hub.URL, cfg.Hub.PSK, agentID, hostname, advertiseAddr, version, logger)
 			go agent.StartHubForwarder(appCtx, collector, cfg.Hub.URL, cfg.Hub.PSK, agentID, 30*time.Second, logger)
+			agent.SetupLogForwarding(appCtx, collector, cfg.Hub.URL, cfg.Hub.PSK, agentID, logger)
 		}
 	}
 

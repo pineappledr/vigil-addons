@@ -35,6 +35,20 @@ type AgentEvent struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// LogLine is a real-time log entry forwarded to the hub during command
+// execution. Mirrors the snapraid add-on so vigil-core's SSE `log` event
+// frontend component can render frames from either source identically.
+type LogLine struct {
+	Timestamp string `json:"timestamp"`
+	Level     string `json:"level"`
+	Source    string `json:"source"`
+	Message   string `json:"message"`
+}
+
+// LogSink receives real-time log lines during command execution. The agent
+// main wires this to an HTTP POST to the hub's /api/logs/ingest endpoint.
+type LogSink func(LogLine)
+
 // Collector periodically gathers ZFS state and caches it for telemetry.
 type Collector struct {
 	mu        sync.RWMutex
@@ -47,6 +61,7 @@ type Collector struct {
 	arc       *ARCStats
 	iostat    []PoolIOStat
 	lastEvent *AgentEvent
+	logSink   LogSink
 	logger    *slog.Logger
 
 	// flushCh signals the hub forwarder to send an immediate telemetry frame.
@@ -86,6 +101,31 @@ func (c *Collector) EmitEvent(event AgentEvent) {
 	c.lastEvent = &event
 	c.mu.Unlock()
 	c.RequestFlush()
+}
+
+// SetLogSink installs (or clears with nil) the live log forwarding function.
+func (c *Collector) SetLogSink(sink LogSink) {
+	c.mu.Lock()
+	c.logSink = sink
+	c.mu.Unlock()
+}
+
+// EmitLogLine pushes a log line to the current sink, if any. Safe to call
+// when no sink is installed (drops silently) so call sites don't need to
+// know whether the hub forwarder is wired.
+func (c *Collector) EmitLogLine(source, level, message string) {
+	c.mu.RLock()
+	sink := c.logSink
+	c.mu.RUnlock()
+	if sink == nil {
+		return
+	}
+	sink(LogLine{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Level:     level,
+		Source:    source,
+		Message:   message,
+	})
 }
 
 // LastEvent returns the most recently emitted AgentEvent, or nil if none.

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -174,6 +175,7 @@ func (s *Server) handleCreatePool(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.logger.Info("creating pool", "name", spec.Name, "vdevs", len(spec.Vdevs), "force", spec.Force)
+	s.logOp("zpool-create", "info", fmt.Sprintf("creating pool %s with %d vdevs (force=%t)", spec.Name, len(spec.Vdevs), spec.Force))
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
@@ -181,15 +183,15 @@ func (s *Server) handleCreatePool(w http.ResponseWriter, r *http.Request) {
 	result, err := s.engine.CreatePool(ctx, spec)
 	if err != nil {
 		s.logger.Error("create pool failed", "name", spec.Name, "error", err)
+		s.logOp("zpool-create", "error", "create pool "+spec.Name+" failed: "+err.Error())
 		if result == nil {
-			// Validation returned nil result — wrap in a minimal shape so
-			// the client sees the error in the expected place.
 			result = &CommandResult{Command: BuildCreatePoolCommand(s.engine.zpoolPath, spec), Error: err.Error()}
 		}
 		addonutil.WriteJSON(w, http.StatusInternalServerError, result)
 		return
 	}
 
+	s.logOp("zpool-create", "info", "pool "+spec.Name+" created")
 	go s.refreshAndFlush()
 	addonutil.WriteJSON(w, http.StatusOK, result)
 }

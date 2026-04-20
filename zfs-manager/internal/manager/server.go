@@ -105,6 +105,7 @@ func (s *Server) routes() {
 	// don't know it.
 	s.mux.HandleFunc("POST /api/agents/register", s.requirePSK(s.handleAgentRegister))
 	s.mux.HandleFunc("POST /api/telemetry/ingest", s.requirePSK(s.handleTelemetryIngest))
+	s.mux.HandleFunc("POST /api/logs/ingest", s.requirePSK(s.handleLogIngest))
 
 	// Vigil-core-facing endpoints gated on the addon registration token. The
 	// proxy in vigil-core attaches it as Authorization: Bearer <token>.
@@ -297,6 +298,49 @@ func (s *Server) handleTelemetryIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	s.registry.Touch(req.AgentID)
 	s.aggregator.Ingest(req.AgentID, req.Payload)
+	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
+}
+
+type logIngestRequest struct {
+	AgentID string `json:"agent_id"`
+	Log     struct {
+		Timestamp string `json:"timestamp"`
+		Level     string `json:"level"`
+		Source    string `json:"source"`
+		Message   string `json:"message"`
+	} `json:"log"`
+}
+
+// handleLogIngest receives a real-time log line from an agent and forwards it
+// upstream as a typed "log" frame so vigil-core pushes it to the frontend via
+// SSE (event: log). Source is prefixed with "{agent_id}:" so the dashboard can
+// filter per-host when multiple agents share a hub.
+func (s *Server) handleLogIngest(w http.ResponseWriter, r *http.Request) {
+	var req logIngestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		addonutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid log"})
+		return
+	}
+
+	source := req.Log.Source
+	if req.AgentID != "" {
+		if source == "" {
+			source = req.AgentID
+		} else {
+			source = req.AgentID + ":" + source
+		}
+	}
+
+	payload := map[string]string{
+		"level":   req.Log.Level,
+		"message": req.Log.Message,
+		"source":  source,
+	}
+	if req.Log.Timestamp != "" {
+		payload["timestamp"] = req.Log.Timestamp
+	}
+	s.aggregator.EmitLogLine(payload)
+
 	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 }
 

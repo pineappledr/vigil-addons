@@ -15,6 +15,41 @@ type TelemetryIngestRequest struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+// LogIngestRequest is the payload for the Hub's /api/logs/ingest endpoint.
+type LogIngestRequest struct {
+	AgentID string  `json:"agent_id"`
+	Log     LogLine `json:"log"`
+}
+
+// SetupLogForwarding installs a LogSink on the Collector that POSTs each log
+// line to the Hub's /api/logs/ingest endpoint. Best-effort: forwarding errors
+// are dropped silently so a momentary hub outage doesn't stall the agent.
+func SetupLogForwarding(ctx context.Context, collector *Collector, hubURL, psk, agentID string, logger *slog.Logger) {
+	logIngestURL := hubURL + "/api/logs/ingest"
+
+	collector.SetLogSink(func(line LogLine) {
+		body, _ := json.Marshal(LogIngestRequest{
+			AgentID: agentID,
+			Log:     line,
+		})
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, logIngestURL, bytes.NewReader(body))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+psk)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return
+		}
+		resp.Body.Close()
+	})
+
+	logger.Info("hub log forwarder installed", "hub_url", hubURL)
+}
+
 // StartHubForwarder runs the telemetry loop and forwards each frame to the Hub
 // via POST /api/telemetry/ingest. This keeps the agent's LastSeenAt updated
 // so the Hub can report online/offline status.

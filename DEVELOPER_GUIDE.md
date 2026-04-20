@@ -7,11 +7,14 @@ This guide explains how to build, package, and publish a new add-on for the [Vig
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [JSON UI Manifest](#json-ui-manifest)
-3. [WebSocket Communication Protocol](#websocket-communication-protocol)
-4. [Multi-Architecture Builds](#multi-architecture-builds)
-5. [CI/CD Pipeline Conventions](#cicd-pipeline-conventions)
-6. [Development Workflow](#development-workflow)
+2. [Hub/Agent Pattern](#hubagent-pattern)
+3. [JSON UI Manifest](#json-ui-manifest)
+4. [WebSocket Communication Protocol](#websocket-communication-protocol)
+5. [Multi-Architecture Builds](#multi-architecture-builds)
+6. [CI/CD Pipeline Conventions](#cicd-pipeline-conventions)
+7. [Development Workflow](#development-workflow)
+8. [Action Schema (smart-table)](#action-schema-smart-table)
+9. [Migration from FormComponent](#migration-from-formcomponent)
 
 ---
 
@@ -35,6 +38,69 @@ Registration is a two-phase process:
 After registration, the add-on opens a WebSocket connection for telemetry. The token is reused for WebSocket authentication on reconnect.
 
 If the token is not yet bound to an add-on (admin hasn't completed step 1), the server returns `412 Precondition Failed` and the add-on should retry with backoff.
+
+---
+
+## Hub/Agent Pattern
+
+Most add-ons in this repo use a **two-tier Hub/Agent model**. The Hub runs alongside the Vigil server (or anywhere on the network). Agents run on the hosts where the actual work happens. The Hub registers with Vigil, aggregates agent telemetry, and serves UI data. Agents register with the Hub and push telemetry.
+
+```text
+Vigil Server
+    │  POST /api/addons/connect
+    │  WS   /api/addons/ws
+    │
+Hub (port varies per addon)
+    │  POST /api/agents/register    ← PSK required
+    │  POST /api/telemetry/ingest   ← PSK required
+    │  GET  /api/deploy-info        ← returns hub_url + hub_psk
+    │
+Agent (port varies per addon)   ← one per host
+    │
+    └─ host tooling (CLI, binaries, etc.)
+```
+
+### PSK Authentication
+
+Because agents often execute privileged or destructive operations, every agent-to-hub request must include a **Pre-Shared Key**:
+
+```text
+Authorization: Bearer <psk>
+```
+
+**How the PSK lifecycle works:**
+
+1. The Hub generates a cryptographically random 32-byte hex PSK on first boot and saves it to `/data/hub.psk` with `0600` permissions.
+2. `GET /api/deploy-info` returns `{"hub_url": "...", "hub_psk": "..."}`. The `deploy-wizard` manifest component calls this endpoint automatically to pre-fill the generated Docker Compose.
+3. Agents include the PSK in every request. The Hub rejects any missing or mismatched PSK with `401 Unauthorized`.
+4. `POST /api/rotate-psk` (body: `{"confirm":"ROTATE"}`) generates a new PSK, persists it, and returns it. All agents must be redeployed with the new value.
+
+**Implementation reference:** `shared/` libraries handle the registration and telemetry client. See `snapraid/internal/hub/` or `zfs-manager/internal/manager/` for the full server-side pattern.
+
+### Shared Libraries
+
+The `shared/` directory contains reusable packages available to all add-ons via `replace` directives in `go.mod`:
+
+| Package              | Description                                                                      |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `shared/addonutil`   | `WriteJSON(w, status, v)` and other HTTP helpers                                 |
+| `shared/vigilclient` | Vigil registration (`POST /api/addons/connect`) and WebSocket telemetry client   |
+
+```go
+// go.mod
+replace (
+    github.com/pineappledr/vigil-addons/shared/addonutil  => ../shared/addonutil
+    github.com/pineappledr/vigil-addons/shared/vigilclient => ../shared/vigilclient
+)
+```
+
+### Agent Registry
+
+The Hub persists registered agents to a JSON file (`/data/agents.json` by default). An agent is considered **online** if its `last_seen_at` is within 2 minutes. Agents update `last_seen_at` on every telemetry ingest (`POST /api/telemetry/ingest`).
+
+### Telemetry Cache
+
+The Hub caches the latest telemetry payload per agent in memory. UI data endpoints (`GET /api/pools`, `GET /api/datasets`, etc.) read from this cache. If the cache is empty for an agent, endpoints return `[]`.
 
 ---
 
@@ -454,3 +520,415 @@ ghcr.io/pineappledr/vigil-addons-<addon>-<component>:<tag>
    - Verify the manifest renders correctly and telemetry frames appear in real-time
 
 7. **Open** a pull request with your add-on, tests, and documentation.
+
+---
+
+## Action Schema (smart-table)
+
+*Added in Phase 8 — promotes the `smart-table` manifest contract from "implicit zfs-manager behaviour" to the documented standard that `snapraid`, `burn-in`, and future add-ons write against.*
+
+A `smart-table` component renders tabular data from a `source` endpoint, applies formatters, and attaches user actions. Actions live on three surfaces:
+
+| Surface           | Rendered                           | Typical use |
+|-------------------|------------------------------------|-------------|
+| `toolbar_actions` | Buttons above the table            | "Create", "Start Sync", operations that don't target a specific row |
+| `row_actions`     | Buttons in auto-injected last column | Per-row: "Delete", "Edit", "Rollback", "Cancel Job" |
+| `bulk_actions`    | Buttons in a bar above the table when rows are selected | Batch delete, batch cancel, applied to every checked row |
+
+Every action follows the same three-part shape:
+
+```jsonc
+{
+  "id":           "unique-within-table",  // also used by invokeActionById()
+  "label":        "Button Label",
+  "icon":         "trash-2",               // optional; see icon registry
+  "safety_tier":  "yellow",                // green | yellow | red | black
+  "hidden":       false,                   // toolbar only; hide button but keep invokable
+
+  "action":       { /* what the HTTP request looks like — required */ },
+  "form":         { /* multi-field modal */ },       // OR
+  "confirm":      { /* single dialog */ }            // pick ONE (or neither for immediate fire)
+}
+```
+
+### `action` — the HTTP contract
+
+```jsonc
+"action": {
+  "method":   "POST",                      // GET | POST | PUT | DELETE | PATCH
+  "endpoint": "/api/pool/create",          // agent-relative; proxy appends ?agent_id
+  "body":     { "force": false },          // static fields (shallow-merged under form values)
+  "body_map": { "pool": "row.name" },      // row.X → body keys
+  "preview":  {                            // optional: debounced CLI preview fired on input
+    "endpoint": "/api/preview",
+    "method":   "POST",
+    "body":     { "action": "pool-create" }
+  }
+}
+```
+
+**Method tunnelling:** `PUT` and `DELETE` are tunneled through `POST /api/addons/{id}/proxy?path=…&method=DELETE` — the Vigil hub's proxy only accepts GET/POST directly. Smart-table handles this transparently.
+
+**Path templating:** `endpoint` supports `{row.X}` and `{key_field}` substitution.
+
+### `form` — multi-field modal
+
+Use when the action needs several inputs (create, edit, multi-step workflows).
+
+```jsonc
+"form": {
+  "title":           "Create Dataset — {row.name}",  // {row.X} interpolated
+  "show_command":    true,                            // shows Command Preview panel if action.preview set
+  "button_label":    "Create",
+  "button_variant":  "primary",                       // primary | warning | danger
+  "success_message": "Dataset {name} created",        // toast on 2xx; form values interpolate
+  "error_message":   "Create failed: {error}",        // toast on non-2xx
+  "wide":            true,                            // widens modal for multi-column forms
+  "fields":          [ /* see Field types */ ]
+}
+```
+
+### `confirm` — single dialog
+
+Use when the user just needs to confirm, optionally with a type-to-confirm gate.
+
+```jsonc
+"confirm": {
+  "title":                "Export {row.name}",
+  "message":              "This unmounts every dataset on {row.name}.",
+  "show_command":         true,
+  "button_label":         "Export Pool",
+  "button_variant":       "danger",
+  "require_type_confirm": true,
+  "confirm_value":        "{row.name}",           // what the user must type
+  "confirm_key":          "confirm",               // body key for the typed value
+  "confirm_label":        "Type the pool name",
+  "extra_fields": [                                // inputs alongside the type-confirm
+    { "key": "force", "type": "checkbox", "label": "Force export" }
+  ],
+  "success_message":      "Pool {row.name} exported",
+  "error_message":        "Export failed: {error}"
+}
+```
+
+### Field types
+
+Every field has `key`, `type`, `label`. Dotted keys (`properties.compression`) collapse into nested body objects on submit: `properties.compression=lz4` becomes `{ "properties": { "compression": "lz4" } }`.
+
+| `type`             | Extra props                                 | Behaviour |
+|--------------------|---------------------------------------------|-----------|
+| `text`             | `placeholder`, `hint`, `pattern`            | `<input type="text">` |
+| `number`           | `min`, `max`, `step`, `default`             | `<input type="number">` |
+| `select`           | `options` *or* `options_from`               | `<select>` |
+| `multi-select`     | `options` *or* `options_from`, `size`       | `<select multiple>` |
+| `checkbox`         | `default`                                   | `<input type="checkbox">` |
+| `toggle`           | `default`                                   | iOS-style toggle |
+| `hidden`           | `value`                                     | Invisible, but sent in body |
+| `capacity_preview` | `type_field`, `devices_field`, `size_from`  | Live client-side ZFS capacity calculation |
+
+Shared field properties:
+
+| Prop             | Applies to               | Purpose |
+|------------------|--------------------------|---------|
+| `required`       | all                      | Blocks submit if empty |
+| `value_from`     | all                      | Prefill from row — `"row.X"` |
+| `visible_when`   | all                      | `{ field: "row.mode" \| "<form-field-key>", equals: … }` |
+| `safety_tier`    | all                      | Red-highlights one destructive field in an otherwise-yellow form |
+| `options`        | `select`, `multi-select` | Static — `[{ value, label, detail? }]` |
+| `options_from`   | `select`, `multi-select` | Async fetch via addon proxy. Auto-appends `agent_id` |
+| `option_value`   | with `options_from`      | JSON key → option.value (default `value`) |
+| `option_label`   | with `options_from`      | JSON key → option label (default `label`) |
+| `option_detail`  | with `options_from`      | JSON key → " — detail" suffix |
+
+**Select value types.** `<select>.value` is always a string in the DOM, but smart-table preserves the JSON type you declared. An option written as `{ "value": 12, "label": "12 (4K)" }` is submitted as the number `12`; `{ "value": true, "label": "On" }` is submitted as boolean `true`. Strings pass through unchanged. The same coercion applies to `options_from` responses — if the fetched JSON value is a number or boolean, the submitted body preserves it. Without this, Go handlers typed `int` / `bool` would reject string input with `400 Bad Request` (`json: cannot unmarshal string into Go struct field …`).
+
+### Column formatters
+
+| `format`          | Input                        | Rendered as |
+|-------------------|------------------------------|-------------|
+| *(default)*       | any                          | Escaped text; arrays joined with `, ` |
+| `bytes`           | number                       | `1.5 GB` |
+| `percent`         | number                       | `12.3%` |
+| `duration`        | seconds                      | `2m 15s` |
+| `datetime`        | ISO 8601                     | Locale date/time |
+| `relative_time`   | ISO 8601                     | `5 min ago` |
+| `badge`           | string                       | Pill via `badge_map`: `success`, `warning`, `critical`, `muted`, `info` |
+| `status_dot`      | `online`/`offline`/`busy`    | Coloured dot + label |
+| `warning_badge`   | truthy                       | Red "OS" style badge |
+| `row_actions`     | *(auto-injected)*            | The per-row button strip |
+
+When `row_actions` is declared and no explicit `format: "actions"` column exists, smart-table appends a right-aligned actions column automatically.
+
+### Data binding & templating
+
+Interpolation is available in every string field of an action's `form` / `confirm` / `action`:
+
+| Template      | Resolved from                           | Example |
+|---------------|-----------------------------------------|---------|
+| `{row.X}`     | The clicked row                         | `"Export {row.name}"` → `"Export tank"` |
+| `{X}`         | Form values (in `success_message` etc.) | `"Dataset {name} created"` |
+| `{key_field}` | Bulk-action per-row value               | `"/api/snapshots/{key_field}"` |
+| `{count}`     | Bulk-action selection size              | `"Delete {count} snapshots?"` |
+| `{error}`     | Server-returned `error` / `message`     | `"Export failed: {error}"` |
+
+### Safety tiers
+
+The tier controls both button colour and the implicit confirmation flow.
+
+| Tier     | Button colour       | Default confirmation | Typical use |
+|----------|---------------------|----------------------|-------------|
+| `green`  | Success (green)     | None — fires on click (or simple modal if `form`/`confirm` present) | View, refresh, rescan |
+| `yellow` | Warning (amber)     | `confirm` or `form` dialog | Create, edit, start scrub |
+| `red`    | Danger (red)        | `confirm` + `require_type_confirm` recommended | Delete, rollback |
+| `black`  | Solid red + bold outline | `confirm` + `require_type_confirm` mandatory | Pool create, pool destroy |
+
+### Multi-agent routing
+
+`smart-table` supports two routing modes for hub + per-host-agent add-ons:
+
+**Page-level selection** — the user picks an agent from a dropdown; every action on the page routes to that agent. Enabled via `page_config.agent_selector: true`.
+
+**Per-row routing** — when a table aggregates rows from multiple agents, include `agent_id` on each row. The framework uses that row's `agent_id` for its actions instead of the page selector. This is how the ZFS Manager's aggregated drive list dispatches per-disk actions to the correct host.
+
+### Progress indicators
+
+Long-running operations surface in the table via `progress_indicator`:
+
+```jsonc
+"progress_indicator": {
+  "field": "scrub_status",
+  "busy_values": ["in_progress", "resilvering", "scanning"],
+  "interval_seconds": 5
+}
+```
+
+When any row's `field` matches (exact or prefix — `"in_progress (35% done)"` counts), a pulsing dot appears next to the value and the table auto-refreshes on the interval until no row is busy.
+
+### Async actions (in-modal progress overlay)
+
+When an action takes more than a few seconds and the agent cannot return a final result synchronously, declare `"async": true` on the action. The submit handler keeps the modal open and swaps its body for a progress overlay that polls the job state.
+
+```jsonc
+"action": {
+  "method":   "POST",
+  "endpoint": "/api/pool/scrub",
+  "async":    true,
+  // Defaults shown; all optional.
+  "poll_endpoint":         "/api/jobs/{job_id}",
+  "poll_interval_seconds": 2,
+  "cancel_endpoint":       "/api/jobs/{job_id}",
+  "cancel_method":         "DELETE",
+  "cancelable":            true
+}
+```
+
+**Agent contract:**
+
+1. The action handler returns `200 OK` with `{"job_id": "..."}` — any extra fields are ignored by the overlay but still available via `{job_id}` / `{form.X}` interpolation in the `poll_endpoint` and `cancel_endpoint` templates.
+2. The poll endpoint returns `200 OK` with this shape (all fields optional except `status`):
+
+   ```jsonc
+   {
+     "status":           "pending|running|completed|failed|cancelled",
+     "phase":            "SMART extended",        // short label
+     "phase_detail":     "drive sda — 42%",        // optional longer line
+     "progress_percent": 42.5,                      // 0..100
+     "message":          "optional multi-line log tail",
+     "fail_reason":      "...",                     // only on status=failed
+     "elapsed_sec":      90,
+     "eta_sec":          180
+   }
+   ```
+
+3. The cancel endpoint receives the configured `cancel_method` (default `DELETE`) at the interpolated `cancel_endpoint`. The overlay does not mark the job cancelled locally — the next poll's `status: "cancelled"` drives the terminal branch.
+
+**Terminal statuses** (overlay stops polling, switches the primary button to "Close", and toasts): `completed`, `failed`, `cancelled`, plus the defensive aliases `succeeded`, `success`, `done`, `error`, `canceled`.
+
+**Cancel button:**
+- Hidden when `cancelable: false` or `cancel_endpoint: false`.
+- Disabled during the in-flight cancel request, with transient errors rendered inline (the poll loop continues running).
+
+A 404 from the poll endpoint is treated as `completed` — some agents GC jobs shortly after they finish.
+
+### Bulk actions
+
+Opt in with `selectable: true` and `key_field: "unique-field"` on the table config. A checkbox column appears, and `bulk_actions` buttons reveal in a bar when at least one row is selected.
+
+```jsonc
+"selectable":  true,
+"key_field":   "full_name",
+"bulk_actions": [
+  {
+    "id": "bulk-delete",
+    "label": "Delete selected",
+    "safety_tier": "red",
+    "action": { "method": "DELETE", "endpoint": "/api/snapshots/{key_field}" },
+    "confirm": {
+      "title":                "Delete {count} snapshots?",
+      "message":              "This cannot be undone. Deletes {count} snapshots across all checked rows.",
+      "button_variant":       "danger",
+      "require_type_confirm": true,
+      "confirm_value":        "DELETE",
+      "confirm_label":        "Type DELETE"
+    }
+  }
+]
+```
+
+The framework iterates the selected rows, fires the action once per row, and aggregates successes/failures into a single summary toast. No agent-side batch endpoint is required, but if one exists you can hit it with one request by pointing `endpoint` at it and using `body_map: { "keys": "selection" }`.
+
+### Icons
+
+Resolved against an inline registry in `smart-table.js`. Available names include: `edit`, `plus`, `plus-square`, `trash`, `trash-2`, `refresh-cw`, `play`, `pause`, `x-circle`, `log-in`, `log-out`, `hard-drive`, `disc`, `settings`, `check`, `x`. Unknown names render as no-icon.
+
+### Toasts & feedback
+
+Every action with a `form` or `confirm` shape may declare `success_message` / `error_message`. These drive the toast rendered by `Utils.toast(message, type)` in vigil-core. Always set them for `yellow`/`red`/`black` actions — users on slow networks need confirmation beyond the modal closing.
+
+### Validator allowlist (hub-side)
+
+Vigil-core validates every registered manifest against a whitelist in `vigil/internal/addons/manifest.go` (`validComponentTypes` map). Unknown types fail registration with `Invalid manifest: unknown type 'X'`. Currently allowed: `smart-table`, `config-card`, `discovery-card`, `chart`, `progress`, `log-viewer`, `deploy-wizard`, `form`, `disk-storage`. File a PR against vigil-core to add new component types.
+
+### Complete reference
+
+```jsonc
+{
+  "type": "smart-table",
+  "id":   "pool-list",
+  "title":"ZFS Pools",
+  "config": {
+    "source": "/api/pools",
+    "columns": [
+      { "key": "name",   "label": "Pool",   "sortable": true },
+      { "key": "health", "label": "Health", "format": "badge", "badge_map": {
+          "ONLINE": "success", "DEGRADED": "warning", "FAULTED": "critical"
+      }},
+      { "key": "size",   "label": "Size",   "format": "bytes" }
+    ],
+
+    "sortable":      true,
+    "filterable":    true,
+    "default_sort":  { "key": "name", "direction": "asc" },
+    "empty_message": "No pools on this host yet.",
+    "selectable":    true,
+    "key_field":     "name",
+    "progress_indicator": {
+      "field":            "scrub_status",
+      "busy_values":      ["in_progress", "resilvering"],
+      "interval_seconds": 5
+    },
+
+    "toolbar_actions": [
+      {
+        "id":           "create-pool",
+        "label":        "Create Pool",
+        "icon":         "plus-square",
+        "safety_tier":  "yellow",
+        "action":       { "method": "POST", "endpoint": "/api/pool/create",
+                          "preview": { "endpoint": "/api/preview",
+                                       "body": { "action": "pool-create" } } },
+        "form": {
+          "title":           "Create Pool",
+          "show_command":    true,
+          "button_label":    "Create",
+          "button_variant":  "primary",
+          "success_message": "Pool {name} created",
+          "error_message":   "Create failed: {error}",
+          "fields": [
+            { "key": "name",       "type": "text", "label": "Pool Name", "required": true },
+            { "key": "data_type",  "type": "select", "label": "Layout",
+              "options": [
+                { "value": "mirror", "label": "Mirror" },
+                { "value": "raidz1", "label": "RAIDZ1" },
+                { "value": "raidz2", "label": "RAIDZ2" }
+              ] },
+            { "key": "data_devices", "type": "multi-select", "label": "Data Devices",
+              "required": true, "options_from": "/api/disks?unused=true",
+              "option_value": "path", "option_label": "model", "option_detail": "serial" }
+          ]
+        }
+      }
+    ],
+
+    "row_actions": [
+      {
+        "id":           "export-pool",
+        "label":        "Export",
+        "icon":         "log-out",
+        "safety_tier":  "red",
+        "action":       { "method": "POST", "endpoint": "/api/pool/export",
+                          "body_map": { "name": "row.name" } },
+        "confirm": {
+          "title":                "Export {row.name}",
+          "message":              "This unmounts every dataset on {row.name}.",
+          "button_variant":       "danger",
+          "require_type_confirm": true,
+          "confirm_value":        "{row.name}",
+          "confirm_label":        "Type the pool name",
+          "extra_fields": [
+            { "key": "force", "type": "checkbox", "label": "Force export" }
+          ],
+          "success_message":      "Pool {row.name} exported",
+          "error_message":        "Export failed: {error}"
+        }
+      }
+    ],
+
+    "bulk_actions": [
+      {
+        "id":          "bulk-export",
+        "label":       "Export selected",
+        "safety_tier": "red",
+        "action":      { "method": "POST", "endpoint": "/api/pool/export",
+                         "body_map": { "name": "row.name" } },
+        "confirm": {
+          "title":           "Export {count} pools?",
+          "message":         "This unmounts datasets on every selected pool.",
+          "button_variant":  "danger"
+        }
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Migration from FormComponent
+
+`vigil/web/js/components/form.js` is the pre-Phase-7 form renderer. It predates the action schema above and has hardcoded behaviours that do not compose with the smart-table pipeline:
+
+- Only three `source` values are supported (`addon_agents`, `agent_drives`, `job_history`) — arbitrary `options_from` is not.
+- The `security_gate` field emits a multi-step modal flow (password → path confirm) that `require_type_confirm` superseded.
+- `depends_on` cascading selects work only for those hardcoded sources.
+- Action dispatch goes to a fixed `action: "config"` / `action: "execute"` endpoint pair on the hub — not an arbitrary endpoint from the manifest.
+
+**Decision (Phase 8.3):** Keep `FormComponent` in vigil-core for backward compatibility — the `snapraid` Automation page and `burn-in` New Job page still depend on it. **Do not use it in new manifests.** For any new workflow that needs more than a trivial "config update" form, declare a `toolbar_action` on a relevant `smart-table` with the full `form` shape.
+
+When migrating an existing `type: "form"` page to a toolbar action:
+
+| `FormComponent`                    | Smart-table equivalent |
+|------------------------------------|------------------------|
+| `source: "addon_agents"`           | `options_from: "/api/agents"` with `option_value: "agent_id"`, `option_label: "hostname"` |
+| `source: "agent_drives"`           | `options_from: "/api/disks"` (or `/api/agent/drives`) |
+| `security_gate: true` on checkbox  | `require_type_confirm: true` + `confirm_value: "DESTROY"` on the `confirm` block |
+| `depends_on: "agent_id"`           | Not yet supported on smart-table forms — tracked as future work |
+| `visible_when: { field: [v1, v2] }` | `visible_when: { field: "X", equals: v1 }` (single value) |
+
+### Deprecation target
+
+Once every add-on has migrated, delete `form.js` and remove `"form"` from the vigil-core `validComponentTypes` allowlist. Migration status:
+
+- [ ] `snapraid` — **Automation** (`automation_form`)
+- [ ] `snapraid` — **Operations** (`command_form`, 5 sub-actions)
+- [ ] `burn-in` — **New Job** (`job-form`, 9 fields + security gate)
+
+Phase 8.2 migrated the easy wins (agent deletion, job cancellation) to `row_actions`. The three pages above are larger refactors — deferred because their current forms work, and the cascading-select feature they rely on (`depends_on`) is not yet in the smart-table contract.
+
+---
+
+## Changelog
+
+| Date       | Change |
+|------------|--------|
+| 2026-04-18 | Added "Action Schema (smart-table)" and "Migration from FormComponent" sections (Phase 8). |

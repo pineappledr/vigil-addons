@@ -61,6 +61,7 @@ func main() {
 	agentdb.StartPruneLoop(appCtx, db, 30*24*time.Hour, logger)
 
 	eng := engine.NewEngine(cfg.SnapRAID.BinaryPath, cfg.SnapRAID.ConfigPath, logger)
+	eng.SetTimeouts(cfg.Timeouts)
 
 	hostname, _ := os.Hostname()
 
@@ -137,9 +138,9 @@ func main() {
 		if advertiseAddr == "" {
 			logger.Error("VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR is required for Hub registration (set to http://<host-LAN-IP>:<port>)")
 		} else {
-			go agent.RegisterWithHub(appCtx, cfg.Hub.URL, agentID, hostname, advertiseAddr, version, logger)
-			agent.SetupLogForwarding(appCtx, collector, cfg.Hub.URL, agentID, logger)
-			go agent.StartHubForwarder(appCtx, collector, cfg.Hub.URL, agentID, 30*time.Second, logger)
+			go agent.RegisterWithHub(appCtx, cfg.Hub.URL, cfg.Hub.PSK, agentID, hostname, advertiseAddr, version, logger)
+			agent.SetupLogForwarding(appCtx, collector, cfg.Hub.URL, cfg.Hub.PSK, agentID, logger)
+			go agent.StartHubForwarder(appCtx, collector, cfg.Hub.URL, cfg.Hub.PSK, agentID, 30*time.Second, logger)
 		}
 	}
 

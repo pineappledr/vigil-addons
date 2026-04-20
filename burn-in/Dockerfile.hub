@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.26.1-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.2-alpine AS builder
 ARG TARGETOS TARGETARCH
 ARG VERSION=dev
 WORKDIR /src
@@ -9,8 +9,8 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags="-s -w -X main.version=$VERSION" \
     -o /burnin-hub ./cmd/hub
 
-FROM alpine:3.21
-RUN apk add --no-cache ca-certificates tzdata
+FROM alpine:3.23.4
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates tzdata
 COPY --from=builder /burnin-hub /usr/local/bin/burnin-hub
 EXPOSE 9100
 ENTRYPOINT ["burnin-hub"]

@@ -5,6 +5,7 @@
 #
 # All values can be overridden via environment variables prefixed with
 # VIGIL_SNAPRAID_HUB_ (e.g., VIGIL_SNAPRAID_HUB_LISTEN_PORT=9300).
+# The Vigil connection uses the uniform VIGIL_URL / VIGIL_TOKEN env vars.
 # ───────────────────────────────────────────────────────────────────────
 
 # ── Listener ─────────────────────────────────────────────────────────
@@ -26,6 +27,12 @@ vigil:
   # After successful registration, this value is no longer needed
   # but is kept for reconnection authentication.
   token: ""
+
+  # Base64-encoded Ed25519 public key from the Vigil server.
+  # Used to verify command signatures. If empty, signature
+  # verification is disabled (not recommended for production).
+  # Override with: VIGIL_SERVER_PUBKEY
+  server_pubkey: ""
 
 # ── Data Persistence ────────────────────────────────────────────────
 data:

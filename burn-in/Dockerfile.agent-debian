@@ -1,4 +1,5 @@
-FROM --platform=$BUILDPLATFORM golang:1.26.1 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.2 AS builder
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 ARG TARGETOS TARGETARCH
 ARG VERSION=dev
 WORKDIR /src
@@ -10,7 +11,8 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     -o /burnin-agent ./cmd/agent
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
     ca-certificates tzdata \
     smartmontools e2fsprogs util-linux gdisk \
     xfsprogs btrfs-progs dosfstools \

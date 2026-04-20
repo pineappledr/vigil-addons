@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,28 +17,28 @@ import (
 
 // Server is the HTTP server for the burn-in hub.
 type Server struct {
-	registry     *AgentRegistry
-	router       *CommandRouter
-	aggregator   *Aggregator
-	pskMu        sync.RWMutex
-	psk          string
-	advertiseURL string
-	dataDir      string
-	logger       *slog.Logger
-	mux          *http.ServeMux
+	registry   *AgentRegistry
+	router     *CommandRouter
+	aggregator *Aggregator
+	pskMu      sync.RWMutex
+	psk        string
+	listen     string
+	dataDir    string
+	logger     *slog.Logger
+	mux        *http.ServeMux
 }
 
 // NewServer creates the hub HTTP server with all routes registered.
-func NewServer(registry *AgentRegistry, aggregator *Aggregator, psk, advertiseURL, dataDir string, logger *slog.Logger) *Server {
+func NewServer(registry *AgentRegistry, aggregator *Aggregator, psk, listen, dataDir string, logger *slog.Logger) *Server {
 	s := &Server{
-		registry:     registry,
-		router:       NewCommandRouter(registry, logger),
-		aggregator:   aggregator,
-		psk:          psk,
-		advertiseURL: advertiseURL,
-		dataDir:      dataDir,
-		logger:       logger,
-		mux:          http.NewServeMux(),
+		registry:   registry,
+		router:     NewCommandRouter(registry, logger),
+		aggregator: aggregator,
+		psk:        psk,
+		listen:     listen,
+		dataDir:    dataDir,
+		logger:     logger,
+		mux:        http.NewServeMux(),
 	}
 	s.routes()
 	return s
@@ -56,6 +57,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
 	s.mux.HandleFunc("POST /api/execute", s.router.HandleExecute)
 	s.mux.HandleFunc("GET /api/jobs/history", s.router.HandleJobHistory)
+	s.mux.HandleFunc("GET /api/jobs/{id}", s.router.HandleJobStatus)
 	s.mux.HandleFunc("DELETE /api/jobs/{id}", s.router.HandleCancelJob)
 	s.mux.HandleFunc("GET /api/logs/history", s.handleLogHistory)
 	s.mux.HandleFunc("GET /api/chart/history", s.handleChartHistory)
@@ -109,9 +111,9 @@ func (s *Server) handleRegisterAgent(w http.ResponseWriter, r *http.Request) {
 	addonutil.WriteJSON(w, http.StatusOK, record)
 }
 
-func (s *Server) handleDeployInfo(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleDeployInfo(w http.ResponseWriter, r *http.Request) {
 	addonutil.WriteJSON(w, http.StatusOK, map[string]string{
-		"hub_url": s.advertiseURL,
+		"hub_url": fmt.Sprintf("http://%s", r.Host),
 		"hub_psk": s.getPSK(),
 	})
 }

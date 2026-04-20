@@ -1,0 +1,618 @@
+name: "ZFS Manager Add-on: Build and Release"
+
+on:
+  push:
+    branches: [ "**" ]
+    tags:
+      - 'zfs-manager-v*'
+    paths:
+      - 'zfs-manager/**'
+      - 'shared/**'
+      - '.github/workflows/zfs-manager.yml'
+  pull_request:
+    branches: [ "main", "develop" ]
+    paths:
+      - 'zfs-manager/**'
+      - 'shared/**'
+      - '.github/workflows/zfs-manager.yml'
+
+env:
+  REGISTRY: ghcr.io
+  MANAGER_IMAGE: ghcr.io/pineappledr/vigil-addons-zfs-manager
+  AGENT_IMAGE: ghcr.io/pineappledr/vigil-addons-zfs-agent
+  GO_VERSION: '1.26.2'
+  WORKDIR: zfs-manager
+  # Opt every JavaScript action in this workflow (including transitive ones
+  # like actions/cache pulled in by setup-go and docker/build-push-action)
+  # into Node.js 24. Node 20 is deprecated on GitHub Actions runners — forced
+  # default from 2026-06-02 and removed on 2026-09-16.
+  # Ref: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # TEST JOB - Runs on every push/PR
+  # ─────────────────────────────────────────────────────────────────────────
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: zfs-manager
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: zfs-manager/go.sum
+
+      - name: Install dependencies
+        run: go mod tidy
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests with coverage
+        run: |
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+          go tool cover -func=coverage.out
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage-report
+          path: zfs-manager/coverage.out
+          retention-days: 7
+
+      - name: Build check
+        run: |
+          go build -v ./cmd/manager
+          go build -v ./cmd/agent
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # SECURITY SCAN - Breaks the build on high/critical vulnerabilities
+  # ─────────────────────────────────────────────────────────────────────────
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: zfs-manager
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: zfs-manager/go.sum
+
+      - name: Install dependencies
+        run: go mod tidy
+
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Run gosec
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          gosec -severity high -confidence high -quiet ./...
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build manager image for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.manager
+          push: false
+          load: true
+          tags: zfs-manager:scan
+          cache-from: type=gha
+
+      - name: Build agent (Alpine) image for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.agent
+          push: false
+          load: true
+          tags: zfs-agent-alpine:scan
+          cache-from: type=gha
+
+      - name: Build agent (Debian) image for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.agent.debian
+          push: false
+          load: true
+          tags: zfs-agent-debian:scan
+          cache-from: type=gha
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get install -y wget apt-transport-https gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update && sudo apt-get install -y trivy
+
+      - name: Trivy scan - Manager image
+        run: trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed zfs-manager:scan
+
+      - name: Trivy scan - Agent (Alpine) image
+        run: trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed zfs-agent-alpine:scan
+
+      - name: Trivy scan - Agent (Debian) image
+        run: trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed zfs-agent-debian:scan
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # PR PREVIEW - Build preview images for pull requests
+  # ─────────────────────────────────────────────────────────────────────────
+  build-pr-preview:
+    name: PR Preview
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set version
+        id: version
+        run: echo "tag=pr-${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+
+      - name: Build Manager
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.manager
+          push: true
+          build-args: VERSION=${{ steps.version.outputs.tag }}
+          tags: ${{ env.MANAGER_IMAGE }}:${{ steps.version.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Agent (Alpine)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.agent
+          push: true
+          build-args: VERSION=${{ steps.version.outputs.tag }}
+          tags: ${{ env.AGENT_IMAGE }}:${{ steps.version.outputs.tag }}-alpine
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Agent (Debian)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.agent.debian
+          push: true
+          build-args: VERSION=${{ steps.version.outputs.tag }}
+          tags: ${{ env.AGENT_IMAGE }}:${{ steps.version.outputs.tag }}-debian
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ steps.version.outputs.tag }}';
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🐳 ZFS Manager Preview Images Built!
+
+            | Image | Pull Command |
+            |-------|--------------|
+            | Manager | \`docker pull ${{ env.MANAGER_IMAGE }}:${tag}\` |
+            | Agent (Alpine) | \`docker pull ${{ env.AGENT_IMAGE }}:${tag}-alpine\` |
+            | Agent (Debian) | \`docker pull ${{ env.AGENT_IMAGE }}:${tag}-debian\` |
+
+            These preview images can be used for testing before merging.`
+            })
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # DEV BUILD - Feature branches (not main, not tags)
+  # ─────────────────────────────────────────────────────────────────────────
+  build-dev:
+    name: Dev Build
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' &&
+      !startsWith(github.ref, 'refs/tags/') &&
+      github.ref != 'refs/heads/main'
+    permissions:
+      contents: write
+      packages: write
+    defaults:
+      run:
+        working-directory: zfs-manager
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: zfs-manager/go.sum
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        run: |
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          BRANCH_TAG=$(echo "$BRANCH_NAME" | sed 's/\//-/g')
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          VERSION="dev-${BRANCH_TAG}-${SHORT_SHA}"
+
+          echo "branch=$BRANCH_TAG" >> $GITHUB_OUTPUT
+          echo "sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build agent binaries
+        run: |
+          mkdir -p dist
+          VERSION="${{ steps.meta.outputs.version }}"
+          LDFLAGS="-s -w -X main.version=$VERSION"
+
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/zfs-agent-linux-amd64 ./cmd/agent
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/zfs-agent-linux-arm64 ./cmd/agent
+
+          cd dist && sha256sum * > checksums.txt
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: zfs-manager-${{ steps.meta.outputs.version }}
+          path: zfs-manager/dist/
+          retention-days: 14
+
+      - name: Publish dev release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: zfs-manager-dev-${{ steps.meta.outputs.branch }}
+          name: "ZFS Manager Dev: ${{ steps.meta.outputs.branch }}"
+          body: |
+            Dev build from `${{ steps.meta.outputs.branch }}` branch (commit ${{ github.sha }}).
+
+            **Version:** `${{ steps.meta.outputs.version }}`
+          files: |
+            zfs-manager/dist/zfs-agent-linux-amd64
+            zfs-manager/dist/zfs-agent-linux-arm64
+            zfs-manager/dist/checksums.txt
+          prerelease: true
+          make_latest: false
+
+      - name: Build Manager image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.manager
+          push: true
+          build-args: VERSION=${{ steps.meta.outputs.version }}
+          tags: |
+            ${{ env.MANAGER_IMAGE }}:dev-${{ steps.meta.outputs.branch }}
+            ${{ env.MANAGER_IMAGE }}:dev-${{ steps.meta.outputs.branch }}-${{ steps.meta.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Agent (Alpine) image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.agent
+          push: true
+          build-args: VERSION=${{ steps.meta.outputs.version }}
+          tags: |
+            ${{ env.AGENT_IMAGE }}:dev-${{ steps.meta.outputs.branch }}-alpine
+            ${{ env.AGENT_IMAGE }}:dev-${{ steps.meta.outputs.branch }}-${{ steps.meta.outputs.sha }}-alpine
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Agent (Debian) image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.agent.debian
+          push: true
+          build-args: VERSION=${{ steps.meta.outputs.version }}
+          tags: |
+            ${{ env.AGENT_IMAGE }}:dev-${{ steps.meta.outputs.branch }}-debian
+            ${{ env.AGENT_IMAGE }}:dev-${{ steps.meta.outputs.branch }}-${{ steps.meta.outputs.sha }}-debian
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # LATEST BUILD - Main branch
+  # ─────────────────────────────────────────────────────────────────────────
+  build-latest:
+    name: Latest Build
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get short SHA
+        id: meta
+        run: echo "sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+
+      - name: Build Manager
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.manager
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=latest-${{ steps.meta.outputs.sha }}
+          tags: |
+            ${{ env.MANAGER_IMAGE }}:latest
+            ${{ env.MANAGER_IMAGE }}:sha-${{ steps.meta.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Agent (Alpine)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.agent
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=latest-${{ steps.meta.outputs.sha }}
+          tags: |
+            ${{ env.AGENT_IMAGE }}:latest
+            ${{ env.AGENT_IMAGE }}:latest-alpine
+            ${{ env.AGENT_IMAGE }}:sha-${{ steps.meta.outputs.sha }}-alpine
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Agent (Debian)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.agent.debian
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=latest-${{ steps.meta.outputs.sha }}
+          tags: |
+            ${{ env.AGENT_IMAGE }}:latest-debian
+            ${{ env.AGENT_IMAGE }}:sha-${{ steps.meta.outputs.sha }}-debian
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # RELEASE - Version tags (zfs-manager-v*)
+  # ─────────────────────────────────────────────────────────────────────────
+  release:
+    name: Release
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/zfs-manager-v')
+    permissions:
+      contents: write
+      packages: write
+    defaults:
+      run:
+        working-directory: zfs-manager
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/zfs-manager-v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "is_prerelease=${{ contains(github.ref, '-') }}" >> $GITHUB_OUTPUT
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: zfs-manager/go.sum
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Manager image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.manager
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ steps.version.outputs.version }}
+          tags: |
+            ${{ env.MANAGER_IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.MANAGER_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Agent (Alpine) image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.agent
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ steps.version.outputs.version }}
+          tags: |
+            ${{ env.AGENT_IMAGE }}:${{ steps.version.outputs.version }}-alpine
+            ${{ env.AGENT_IMAGE }}:latest-alpine
+            ${{ env.AGENT_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Agent (Debian) image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: zfs-manager/Dockerfile.agent.debian
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ steps.version.outputs.version }}
+          tags: |
+            ${{ env.AGENT_IMAGE }}:${{ steps.version.outputs.version }}-debian
+            ${{ env.AGENT_IMAGE }}:latest-debian
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build agent release binaries
+        run: |
+          mkdir -p dist
+          VERSION="${{ steps.version.outputs.version }}"
+          LDFLAGS="-s -w -X main.version=$VERSION"
+
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/zfs-agent-linux-amd64 ./cmd/agent
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/zfs-agent-linux-arm64 ./cmd/agent
+
+          cd dist && sha256sum * > checksums.txt
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | grep '^zfs-manager-v' | sed -n '2p')
+          if [ -z "$PREV_TAG" ]; then
+            echo "changes=Initial release" >> $GITHUB_OUTPUT
+          else
+            CHANGES=$(git log --pretty=format:"- %s" $PREV_TAG..HEAD -- zfs-manager/ shared/)
+            echo "changes<<EOF" >> $GITHUB_OUTPUT
+            echo "$CHANGES" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ZFS Manager Add-on v${{ steps.version.outputs.version }}
+          body: |
+            ## ZFS Manager Add-on v${{ steps.version.outputs.version }}
+
+            ### Changes
+            ${{ steps.changelog.outputs.changes }}
+
+            ---
+
+            ### Manager (Docker only)
+
+            | Image | Command |
+            |-------|---------|
+            | Manager | `docker pull ${{ env.MANAGER_IMAGE }}:${{ steps.version.outputs.version }}` |
+
+            ---
+
+            ### Agent
+
+            | Image | Command |
+            |-------|---------|
+            | Agent (Alpine) | `docker pull ${{ env.AGENT_IMAGE }}:${{ steps.version.outputs.version }}-alpine` |
+            | Agent (Debian) | `docker pull ${{ env.AGENT_IMAGE }}:${{ steps.version.outputs.version }}-debian` |
+
+            > Use the **Debian** image on Proxmox, Ubuntu, or Debian hosts for glibc compatibility.
+            > The **Alpine** image is the default (`latest` tag).
+
+            **Multi-Architecture:** Both images support `linux/amd64` and `linux/arm64`.
+
+            ---
+
+            ### Agent Binaries
+
+            ```bash
+            VERSION=${{ steps.version.outputs.version }}
+
+            # Agent (AMD64)
+            curl -sL https://github.com/${{ github.repository }}/releases/download/zfs-manager-v${VERSION}/zfs-agent-linux-amd64 -o zfs-agent
+            chmod +x zfs-agent
+
+            # Agent (ARM64)
+            curl -sL https://github.com/${{ github.repository }}/releases/download/zfs-manager-v${VERSION}/zfs-agent-linux-arm64 -o zfs-agent
+            chmod +x zfs-agent
+            ```
+
+            ### Verify Checksums
+
+            ```bash
+            curl -sL https://github.com/${{ github.repository }}/releases/download/zfs-manager-v${VERSION}/checksums.txt | sha256sum -c
+            ```
+          files: |
+            zfs-manager/dist/zfs-agent-linux-amd64
+            zfs-manager/dist/zfs-agent-linux-arm64
+            zfs-manager/dist/checksums.txt
+          draft: false
+          prerelease: ${{ steps.version.outputs.is_prerelease }}
+          make_latest: false

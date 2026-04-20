@@ -1,0 +1,30 @@
+# ZFS Manager Configuration
+# ───────────────────────────────────────────────────────────────────────
+# The Manager (hub) registers with the Vigil Server and aggregates
+# telemetry from one or more ZFS Agents.
+#
+# All values can be overridden via environment variables prefixed with
+# VIGIL_ZFS_MANAGER_ (e.g., VIGIL_ZFS_MANAGER_LISTEN_PORT=9500).
+# The Vigil connection uses the uniform VIGIL_URL / VIGIL_TOKEN env vars.
+# ───────────────────────────────────────────────────────────────────────
+
+# ── Listener ─────────────────────────────────────────────────────────
+listen:
+  port: 9500
+
+# ── Vigil Server Connection ─────────────────────────────────────────
+vigil:
+  server_url: "http://vigil.local:9080"
+
+  # One-time registration token generated in the Vigil UI → New Add-on.
+  token: ""
+
+# ── Data Persistence ────────────────────────────────────────────────
+data:
+  # JSON file where the Agent registry is persisted.
+  # Must be on a persistent volume in Docker deployments.
+  registry_path: "/data/agents.json"
+
+# ── Logging ─────────────────────────────────────────────────────────
+logging:
+  level: "info"

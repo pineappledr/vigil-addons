@@ -19,7 +19,7 @@ type RegisterRequest struct {
 
 // RegisterWithHub announces this agent to the Hub. It retries with exponential
 // backoff until the context is cancelled or registration succeeds.
-func RegisterWithHub(ctx context.Context, hubURL, agentID, hostname, advertiseAddr, version string, logger *slog.Logger) {
+func RegisterWithHub(ctx context.Context, hubURL, psk, agentID, hostname, advertiseAddr, version string, logger *slog.Logger) {
 	req := RegisterRequest{
 		ID:       agentID,
 		Hostname: hostname,
@@ -40,6 +40,7 @@ func RegisterWithHub(ctx context.Context, hubURL, agentID, hostname, advertiseAd
 			return
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+psk)
 
 		resp, err := http.DefaultClient.Do(httpReq)
 		if err == nil {

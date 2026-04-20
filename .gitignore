@@ -4,12 +4,10 @@
 *.dll
 *.so
 *.dylib
-burnin-hub
-burnin-agent
-snapraid-hub
-snapraid-agent
-agent
-hub
+# Built binaries at addon roots (anchored so internal/agent, cmd/agent, etc. are not matched)
+/*/agent
+/*/hub
+/*/manager
 
 # Build output
 burn-in/dist/
@@ -59,3 +57,4 @@ config.agent.yaml
 
 # Project-specific
 ROADMAP.md
+CLAUDE.md

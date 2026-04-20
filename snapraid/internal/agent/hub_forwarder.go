@@ -23,7 +23,7 @@ type LogIngestRequest struct {
 
 // SetupLogForwarding installs a LogSink on the Collector that POSTs each log
 // line to the Hub's /api/logs/ingest endpoint for real-time display.
-func SetupLogForwarding(ctx context.Context, collector *Collector, hubURL, agentID string, logger *slog.Logger) {
+func SetupLogForwarding(ctx context.Context, collector *Collector, hubURL, psk, agentID string, logger *slog.Logger) {
 	logIngestURL := hubURL + "/api/logs/ingest"
 
 	collector.SetLogSink(func(line LogLine) {
@@ -37,6 +37,7 @@ func SetupLogForwarding(ctx context.Context, collector *Collector, hubURL, agent
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+psk)
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -52,7 +53,7 @@ func SetupLogForwarding(ctx context.Context, collector *Collector, hubURL, agent
 //
 // In addition to the periodic ticker, it listens on the Collector's flush
 // channel for immediate sends (e.g. when a job starts or finishes).
-func StartHubForwarder(ctx context.Context, collector *Collector, hubURL, agentID string, interval time.Duration, logger *slog.Logger) {
+func StartHubForwarder(ctx context.Context, collector *Collector, hubURL, psk, agentID string, interval time.Duration, logger *slog.Logger) {
 	ingestURL := hubURL + "/api/telemetry/ingest"
 
 	logger.Info("hub telemetry forwarder started", "hub_url", hubURL, "interval", interval)
@@ -79,6 +80,7 @@ func StartHubForwarder(ctx context.Context, collector *Collector, hubURL, agentI
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+psk)
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {

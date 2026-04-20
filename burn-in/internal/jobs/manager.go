@@ -206,6 +206,56 @@ func (m *JobManager) GetJob(jobID string) (*JobRecord, bool) {
 	return &rec, true
 }
 
+// GetJobStatus returns a poll-shape payload for the given job id, matching
+// the smart-table progress-overlay contract:
+//
+//	{status, phase, message?, fail_reason?, elapsed_sec, progress_percent}
+//
+// Active jobs resolve via the in-memory map (so `elapsed_sec` ticks forward
+// each call); completed jobs fall through to the persistence layer. Returns
+// ok=false for unknown ids so the HTTP handler can emit a 404.
+// `message` is omitted for active jobs — live progress/message frames flow
+// over the telemetry WebSocket; the HTTP endpoint is a terminal-state poll.
+func (m *JobManager) GetJobStatus(jobID string) (map[string]any, bool) {
+	if rec, ok := m.GetJob(jobID); ok {
+		return jobRecordToStatus(*rec, false), true
+	}
+	if m.persist == nil {
+		return nil, false
+	}
+	for _, rec := range m.persist.AllRecords() {
+		if rec.JobID == jobID {
+			return jobRecordToStatus(rec, true), true
+		}
+	}
+	return nil, false
+}
+
+func jobRecordToStatus(rec JobRecord, finished bool) map[string]any {
+	end := time.Now().UTC()
+	if rec.CompletedAt != nil {
+		end = *rec.CompletedAt
+	}
+	elapsed := int64(end.Sub(rec.StartedAt).Seconds())
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	percent := 0
+	if finished || rec.Status == StatusCompleted || rec.Status == StatusFailed || rec.Status == StatusCancelled {
+		percent = 100
+	}
+	out := map[string]any{
+		"status":           string(rec.Status),
+		"phase":            rec.Phase,
+		"elapsed_sec":      elapsed,
+		"progress_percent": percent,
+	}
+	if rec.FailReason != "" {
+		out["fail_reason"] = rec.FailReason
+	}
+	return out
+}
+
 // ListJobs returns all tracked job records.
 func (m *JobManager) ListJobs() []JobRecord {
 	m.mu.Lock()

@@ -1,0 +1,2510 @@
+{
+  "name": "ZFS Manager",
+  "version": "0.6.0-dev",
+  "description": "ZFS pool, dataset, and snapshot management for homelab servers",
+  "author": "Vigil Add-ons",
+  "docker_image": "ghcr.io/pineappledr/vigil-addons-zfs-manager:latest",
+  "pages": [
+    {
+      "id": "pools",
+      "title": "Pools",
+      "icon": "database",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 60, "label": "1 Minute" },
+            { "value": 300, "label": "5 Minutes" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "discovery-card",
+          "id": "unused-disks",
+          "config": {
+            "source": "/api/disks",
+            "target_table": "pool-list",
+            "poll_interval_seconds": 60
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "pool-list",
+          "title": "ZFS Pools",
+          "config": {
+            "source": "/api/pools",
+            "columns": [
+              { "key": "name",   "label": "Pool",        "sortable": true },
+              { "key": "health", "label": "Health",      "sortable": true, "badge": {
+                "ONLINE":   "success",
+                "DEGRADED": "warning",
+                "FAULTED":  "danger",
+                "OFFLINE":  "muted",
+                "REMOVED":  "muted",
+                "UNAVAIL":  "danger"
+              }},
+              { "key": "size",  "label": "Size",        "sortable": true, "format": "bytes" },
+              { "key": "alloc", "label": "Used",        "sortable": true, "format": "bytes" },
+              { "key": "free",  "label": "Free",        "sortable": true, "format": "bytes" },
+              { "key": "frag",  "label": "Frag %",      "sortable": true, "suffix": "%" },
+              { "key": "dedup", "label": "Dedup",       "sortable": true, "suffix": "x" },
+              { "key": "last_scrub",   "label": "Last Scrub",   "sortable": false },
+              { "key": "scrub_status", "label": "Scrub Status", "sortable": false }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "name", "direction": "asc" },
+            "progress_indicator": {
+              "field": "scrub_status",
+              "busy_values": ["in_progress", "resilvering", "scanning"],
+              "interval_seconds": 5
+            },
+            "expandable": true,
+            "expand_key": "vdevs",
+            "child_columns": [
+              { "key": "name",   "label": "Vdev" },
+              { "key": "type",   "label": "Type" },
+              { "key": "health", "label": "Health", "badge": {
+                "ONLINE":   "success",
+                "DEGRADED": "warning",
+                "FAULTED":  "danger",
+                "OFFLINE":  "muted",
+                "UNAVAIL":  "danger",
+                "REMOVED":  "danger"
+              }},
+              { "key": "read",  "label": "READ",  "format": "error_count" },
+              { "key": "write", "label": "WRITE", "format": "error_count" },
+              { "key": "cksum", "label": "CKSUM", "format": "error_count" }
+            ],
+            "toolbar_actions": [
+              {
+                "id": "create-pool",
+                "label": "Create Pool",
+                "icon": "plus-square",
+                "safety_tier": "yellow",
+                "hidden": true,
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/pool/create",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "create_pool" }
+                  }
+                },
+                "form": {
+                  "title": "Create New Pool",
+                  "show_command": true,
+                  "sections": [
+                    {
+                      "title": "Identity",
+                      "fields": [
+                        {
+                          "key": "name",
+                          "label": "Pool Name",
+                          "type": "text",
+                          "required": true,
+                          "placeholder": "e.g. tank",
+                          "hint": "Letters, digits, underscore, hyphen. Cannot start with a digit or match a zpool keyword (mirror, raidz, log, cache, etc.)."
+                        }
+                      ]
+                    },
+                    {
+                      "title": "Data Vdev",
+                      "fields": [
+                        {
+                          "key": "data_type",
+                          "label": "Redundancy",
+                          "type": "select",
+                          "required": true,
+                          "options": [
+                            { "value": "mirror", "label": "Mirror — 2+ drives, highest durability, lose 50% capacity" },
+                            { "value": "raidz1", "label": "RAIDZ1 — 3+ drives, survive 1 failure" },
+                            { "value": "raidz2", "label": "RAIDZ2 — 4+ drives, survive 2 failures (recommended for 6+)" },
+                            { "value": "raidz3", "label": "RAIDZ3 — 5+ drives, survive 3 failures" },
+                            { "value": "stripe", "label": "Stripe — NO redundancy (data is lost on ANY device failure)" }
+                          ],
+                          "hint": "Pick the shape of the primary data vdev. Mirrors are easier to expand later; raidz is more space-efficient."
+                        },
+                        {
+                          "key": "data_devices",
+                          "label": "Data Devices",
+                          "type": "multi-select",
+                          "variant": "cards",
+                          "required": true,
+                          "options_from": "/api/disks",
+                          "option_value": "path",
+                          "option_label": "name",
+                          "option_detail": "model",
+                          "option_meta": { "size": "size-bytes" },
+                          "hint": "Only disks not already in a pool are shown. Use all drives of the same size for best results."
+                        },
+                        {
+                          "key": "__capacity_preview",
+                          "type": "capacity_preview",
+                          "label": "Capacity preview",
+                          "type_field": "data_type",
+                          "devices_field": "data_devices"
+                        }
+                      ]
+                    },
+                    {
+                      "title": "Optional Vdevs",
+                      "collapsed": true,
+                      "fields": [
+                        {
+                          "key": "log_devices",
+                          "label": "Log (SLOG) Devices",
+                          "type": "multi-select",
+                          "variant": "cards",
+                          "options_from": "/api/disks",
+                          "option_value": "path",
+                          "option_label": "name",
+                          "option_detail": "model",
+                          "hint": "Dedicated low-latency device for synchronous writes. Leave empty unless you know you need it."
+                        },
+                        {
+                          "key": "log_type",
+                          "label": "SLOG Layout",
+                          "type": "select",
+                          "options": [
+                            { "value": "mirror", "label": "Mirror (recommended — survives SLOG device loss)" },
+                            { "value": "stripe", "label": "Stripe (single SLOG or accepted risk)" }
+                          ],
+                          "hint": "Only used when at least one SLOG device is selected."
+                        },
+                        {
+                          "key": "cache_devices",
+                          "label": "Cache (L2ARC) Devices",
+                          "type": "multi-select",
+                          "variant": "cards",
+                          "options_from": "/api/disks",
+                          "option_value": "path",
+                          "option_label": "name",
+                          "option_detail": "model",
+                          "hint": "Reads accelerate on SSDs. Always striped — no redundancy needed since L2ARC data is regenerated from disk on loss."
+                        },
+                        {
+                          "key": "spare_devices",
+                          "label": "Hot Spares",
+                          "type": "multi-select",
+                          "variant": "cards",
+                          "options_from": "/api/disks",
+                          "option_value": "path",
+                          "option_label": "name",
+                          "option_detail": "model",
+                          "hint": "Spare drives that auto-replace on failure when autoreplace=on."
+                        }
+                      ]
+                    },
+                    {
+                      "title": "Defaults",
+                      "collapsed": true,
+                      "layout": "columns",
+                      "fields": [
+                        {
+                          "key": "ashift",
+                          "label": "ashift (sector size)",
+                          "type": "select",
+                          "options": [
+                            { "value": 12, "label": "12 (4K sectors — default, correct for most drives)" },
+                            { "value": 13, "label": "13 (8K sectors — some enterprise SSDs)" },
+                            { "value": 9,  "label": "9 (512B sectors — legacy)" }
+                          ],
+                          "hint": "Cannot be changed after pool creation. When in doubt, leave at 12."
+                        },
+                        {
+                          "key": "compression",
+                          "label": "Compression",
+                          "type": "select",
+                          "options": [
+                            { "value": "lz4",  "label": "LZ4 (recommended — negligible CPU cost)" },
+                            { "value": "zstd", "label": "ZSTD (better ratio, moderate CPU)" },
+                            { "value": "off",  "label": "Off" }
+                          ],
+                          "hint": "Applied to new data."
+                        },
+                        {
+                          "key": "atime",
+                          "label": "Access Time",
+                          "type": "select",
+                          "options": [
+                            { "value": "off", "label": "Off (recommended — avoids a metadata write on every read)" },
+                            { "value": "on",  "label": "On" }
+                          ]
+                        },
+                        {
+                          "key": "autotrim",
+                          "label": "Auto TRIM",
+                          "type": "select",
+                          "options": [
+                            { "value": "off", "label": "Off (default)" },
+                            { "value": "on",  "label": "On (recommended for all-SSD pools)" }
+                          ]
+                        },
+                        {
+                          "key": "mountpoint",
+                          "label": "Mountpoint",
+                          "type": "text",
+                          "placeholder": "/mnt/tank (leave empty for default /<pool name>)",
+                          "hint": "Absolute path. Overrides the default /pool-name mountpoint."
+                        }
+                      ]
+                    },
+                    {
+                      "title": "Force / Advanced",
+                      "collapsed": true,
+                      "fields": [
+                        {
+                          "key": "force",
+                          "label": "Force create (overwrite foreign labels)",
+                          "type": "checkbox",
+                          "safety_tier": "red",
+                          "hint": "RED TIER — reuses disks even when they carry existing zfs/lvm/md labels. Only enable if you have verified every selected disk is safe to overwrite."
+                        },
+                        {
+                          "key": "confirm",
+                          "label": "Type the pool name to confirm (force only)",
+                          "type": "text",
+                          "placeholder": "tank",
+                          "hint": "Required only when Force is checked. Ignored otherwise.",
+                          "visible_when": { "field": "force", "equals": true }
+                        }
+                      ]
+                    }
+                  ],
+                  "button_label": "Create Pool",
+                  "success_message": "Pool created",
+                  "error_message": "Create pool failed: {error}"
+                }
+              }
+            ],
+            "row_actions": [
+              {
+                "id": "edit-pool-properties",
+                "label": "Edit Properties",
+                "icon": "edit",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "PUT",
+                  "endpoint": "/api/pool/properties",
+                  "preview": {
+                    "endpoint": "/api/properties/preview-diff",
+                    "body": { "scope": "pool" },
+                    "body_map": { "name": "row.name" }
+                  }
+                },
+                "form": {
+                  "title": "Edit Pool Properties — {row.name}",
+                  "show_command": true,
+                  "fields": [
+                    { "key": "pool", "type": "hidden", "value_from": "row.name" },
+                    {
+                      "key": "properties.autotrim",
+                      "label": "Auto TRIM",
+                      "type": "select",
+                      "options": [
+                        { "value": "on", "label": "On" },
+                        { "value": "off", "label": "Off" }
+                      ],
+                      "hint": "Background TRIM on SSDs. Off by default; recommend on for all-SSD pools."
+                    },
+                    {
+                      "key": "properties.autoexpand",
+                      "label": "Auto Expand",
+                      "type": "select",
+                      "options": [
+                        { "value": "on", "label": "On" },
+                        { "value": "off", "label": "Off" }
+                      ],
+                      "hint": "Grow pool when all devices in a vdev are replaced with larger ones."
+                    },
+                    {
+                      "key": "properties.autoreplace",
+                      "label": "Auto Replace",
+                      "type": "select",
+                      "options": [
+                        { "value": "on", "label": "On" },
+                        { "value": "off", "label": "Off" }
+                      ],
+                      "hint": "Initiate replace when a hot spare kicks in. Requires configured spares."
+                    },
+                    {
+                      "key": "properties.failmode",
+                      "label": "Fail Mode",
+                      "type": "select",
+                      "safety_tier": "red",
+                      "options": [
+                        { "value": "wait", "label": "Wait (default — block I/O until device returns)" },
+                        { "value": "continue", "label": "Continue (return EIO on writes)" },
+                        { "value": "panic", "label": "Panic (kernel panic on I/O failure)" }
+                      ],
+                      "hint": "RED TIER — 'panic' will force a host reboot on the first pool I/O error."
+                    },
+                    {
+                      "key": "properties.delegation",
+                      "label": "Delegation",
+                      "type": "select",
+                      "options": [
+                        { "value": "on", "label": "On" },
+                        { "value": "off", "label": "Off" }
+                      ],
+                      "hint": "Whether 'zfs allow' delegations are honored."
+                    },
+                    {
+                      "key": "properties.comment",
+                      "label": "Comment",
+                      "type": "text",
+                      "placeholder": "Free-form note, shown in zpool list -o comment"
+                    }
+                  ],
+                  "button_label": "Apply Changes"
+                }
+              },
+              {
+                "id": "start-scrub",
+                "label": "Start Scrub",
+                "icon": "refresh-cw",
+                "safety_tier": "green",
+                "visible_when": { "field": "scrub_status", "not_in": ["in_progress", "paused", "resilvering"] },
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/scrub/start",
+                  "body_map": { "pool": "row.name" },
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "scrub", "scrub_op": "start" },
+                    "body_map": { "pool": "row.name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Start Scrub",
+                  "message": "Start a scrub on pool {row.name}?",
+                  "show_command": true,
+                  "button_label": "Start Scrub"
+                }
+              },
+              {
+                "id": "pause-scrub",
+                "label": "Pause Scrub",
+                "icon": "pause",
+                "safety_tier": "yellow",
+                "visible_when": { "field": "scrub_status", "starts_with": "in_progress" },
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/scrub/pause",
+                  "body_map": { "pool": "row.name" },
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "scrub", "scrub_op": "pause" },
+                    "body_map": { "pool": "row.name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Pause Scrub",
+                  "message": "Pause the running scrub on pool {row.name}?",
+                  "show_command": true,
+                  "button_label": "Pause"
+                }
+              },
+              {
+                "id": "resume-scrub",
+                "label": "Resume Scrub",
+                "icon": "play",
+                "safety_tier": "green",
+                "visible_when": { "field": "scrub_status", "equals": "paused" },
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/scrub/pause",
+                  "body_map": { "pool": "row.name" },
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "scrub", "scrub_op": "pause" },
+                    "body_map": { "pool": "row.name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Resume Scrub",
+                  "message": "Resume the paused scrub on pool {row.name}?",
+                  "show_command": true,
+                  "button_label": "Resume"
+                }
+              },
+              {
+                "id": "cancel-scrub",
+                "label": "Cancel Scrub",
+                "icon": "x-circle",
+                "safety_tier": "yellow",
+                "visible_when": { "field": "scrub_status", "in": ["paused", "in_progress"] },
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/scrub/cancel",
+                  "body_map": { "pool": "row.name" },
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "scrub", "scrub_op": "cancel" },
+                    "body_map": { "pool": "row.name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Cancel Scrub",
+                  "message": "Cancel the running scrub on pool {row.name}?",
+                  "show_command": true,
+                  "button_label": "Cancel Scrub"
+                }
+              },
+              {
+                "id": "export-pool",
+                "label": "Export Pool",
+                "icon": "log-out",
+                "safety_tier": "red",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/pool/export",
+                  "body_map": { "pool": "row.name" }
+                },
+                "form": {
+                  "title": "Export Pool — {row.name}",
+                  "show_command": true,
+                  "fields": [
+                    { "key": "pool", "type": "hidden", "value_from": "row.name" },
+                    {
+                      "key": "force",
+                      "label": "Force (tear down active I/O)",
+                      "type": "checkbox",
+                      "hint": "Required when background processes still hold the pool open. Running VMs or containers must be stopped first to avoid data loss."
+                    },
+                    {
+                      "key": "confirm",
+                      "label": "Type the pool name to confirm",
+                      "type": "text",
+                      "placeholder": "{row.name}",
+                      "hint": "RED TIER — exporting the pool unmounts every dataset. The pool stays on disk but disappears from this host until re-imported."
+                    }
+                  ],
+                  "button_label": "Export Pool"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "importable-pools",
+          "title": "Importable Pools",
+          "config": {
+            "source": "/api/pool/importable",
+            "columns": [
+              { "key": "name",    "label": "Pool",    "sortable": true },
+              { "key": "id",      "label": "ID",      "sortable": false },
+              { "key": "state",   "label": "State",   "sortable": true, "format": "badge", "badge_map": {
+                "ONLINE":   "success",
+                "DEGRADED": "warning",
+                "FAULTED":  "critical",
+                "UNAVAIL":  "critical",
+                "OFFLINE":  "muted"
+              }},
+              { "key": "status",  "label": "Status",  "sortable": false },
+              { "key": "action",  "label": "Action",  "sortable": false },
+              { "key": "comment", "label": "Comment", "sortable": false }
+            ],
+            "sortable": true,
+            "filterable": true,
+            "empty_message": "No importable pools detected. Pools that have been cleanly exported or were created on another host will appear here.",
+            "row_actions": [
+              {
+                "id": "import-pool",
+                "label": "Import",
+                "icon": "log-in",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/pool/import",
+                  "body_map": { "name": "row.name" }
+                },
+                "form": {
+                  "title": "Import Pool — {row.name}",
+                  "show_command": true,
+                  "fields": [
+                    { "key": "name", "type": "hidden", "value_from": "row.name" },
+                    {
+                      "key": "new_name",
+                      "label": "Import under a different name (optional)",
+                      "type": "text",
+                      "placeholder": "Leave empty to keep the original name",
+                      "hint": "Useful when the pool name collides with an already-imported pool."
+                    },
+                    {
+                      "key": "altroot",
+                      "label": "Alternate root (optional)",
+                      "type": "text",
+                      "placeholder": "e.g. /mnt/recovery",
+                      "hint": "Mount the pool under a temporary root instead of honoring its normal mountpoints. Leave empty for standard import."
+                    },
+                    {
+                      "key": "readonly",
+                      "label": "Import read-only",
+                      "type": "checkbox",
+                      "hint": "Safer for inspection. The pool is not writable until re-imported without this option."
+                    },
+                    {
+                      "key": "force",
+                      "label": "Force import (pool in use by another host)",
+                      "type": "checkbox",
+                      "safety_tier": "red",
+                      "hint": "RED TIER — force-importing a pool that is currently in use by another host corrupts it. Never use this in a cluster where the other host is still alive."
+                    },
+                    {
+                      "key": "confirm",
+                      "label": "Type the pool name to confirm (force only)",
+                      "type": "text",
+                      "placeholder": "{row.name}",
+                      "hint": "Required only when Force is checked. Ignored otherwise."
+                    }
+                  ],
+                  "button_label": "Import Pool"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "datasets",
+      "title": "Datasets",
+      "icon": "folder-tree",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 60, "label": "1 Minute" },
+            { "value": 300, "label": "5 Minutes" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "dataset-list",
+          "title": "Datasets",
+          "config": {
+            "source": "/api/datasets",
+            "columns": [
+              { "key": "name",        "label": "Dataset",     "sortable": true },
+              { "key": "used",        "label": "Used",        "sortable": true, "format": "bytes" },
+              { "key": "avail",       "label": "Available",   "sortable": true, "format": "bytes" },
+              { "key": "refer",       "label": "Referenced",  "sortable": true, "format": "bytes" },
+              { "key": "compress",    "label": "Compression", "sortable": true },
+              { "key": "record_size", "label": "Record Size", "sortable": true, "format": "bytes" },
+              { "key": "mountpoint",  "label": "Mountpoint",  "sortable": false },
+              { "key": "atime",       "label": "Atime",       "sortable": true },
+              { "key": "sync",        "label": "Sync",        "sortable": true }
+            ],
+            "sortable": true,
+            "filterable": true,
+            "tree": { "key": "name", "separator": "/" },
+            "default_sort": { "key": "name", "direction": "asc" },
+            "row_actions": [
+              {
+                "id": "edit-dataset",
+                "label": "Edit Properties",
+                "icon": "edit",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "PUT",
+                  "endpoint": "/api/datasets",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "set_properties" },
+                    "body_map": { "name": "row.name" }
+                  }
+                },
+                "form": {
+                  "title": "Edit Dataset Properties — {row.name}",
+                  "show_command": true,
+                  "fields": [
+                    { "key": "name", "type": "hidden", "value_from": "row.name" },
+                    {
+                      "key": "properties.compression",
+                      "label": "Compression",
+                      "type": "select",
+                      "options": [
+                        { "value": "lz4", "label": "LZ4 (recommended)" },
+                        { "value": "zstd", "label": "ZSTD" },
+                        { "value": "gzip", "label": "GZIP" },
+                        { "value": "off", "label": "Off" }
+                      ],
+                      "value_from": "row.compress"
+                    },
+                    {
+                      "key": "properties.recordsize",
+                      "label": "Record Size",
+                      "type": "select",
+                      "options": [
+                        { "value": "4K", "label": "4K" },
+                        { "value": "8K", "label": "8K" },
+                        { "value": "16K", "label": "16K (Database)" },
+                        { "value": "32K", "label": "32K" },
+                        { "value": "64K", "label": "64K (VM/App)" },
+                        { "value": "128K", "label": "128K (General)" },
+                        { "value": "256K", "label": "256K" },
+                        { "value": "512K", "label": "512K" },
+                        { "value": "1M", "label": "1M (Media)" }
+                      ],
+                      "hint": "Changing record size only affects new data, not existing blocks"
+                    },
+                    {
+                      "key": "properties.atime",
+                      "label": "Access Time (atime)",
+                      "type": "select",
+                      "options": [
+                        { "value": "off", "label": "Off (recommended)" },
+                        { "value": "on", "label": "On" }
+                      ],
+                      "value_from": "row.atime"
+                    },
+                    {
+                      "key": "properties.sync",
+                      "label": "Sync",
+                      "type": "select",
+                      "options": [
+                        { "value": "standard", "label": "Standard" },
+                        { "value": "always", "label": "Always (safest)" },
+                        { "value": "disabled", "label": "Disabled (fastest)" }
+                      ],
+                      "value_from": "row.sync"
+                    },
+                    {
+                      "key": "properties.xattr",
+                      "label": "Extended Attributes",
+                      "type": "select",
+                      "options": [
+                        { "value": "sa", "label": "SA (inline — ~10× faster on SELinux/ACL)" },
+                        { "value": "on", "label": "On (legacy directory-based)" },
+                        { "value": "off", "label": "Off" }
+                      ],
+                      "hint": "'sa' is the modern default; 'on' emulates the legacy format."
+                    },
+                    {
+                      "key": "properties.acltype",
+                      "label": "ACL Type",
+                      "type": "select",
+                      "options": [
+                        { "value": "off", "label": "Off" },
+                        { "value": "posix", "label": "POSIX ACLs" },
+                        { "value": "nfsv4", "label": "NFSv4 ACLs" }
+                      ]
+                    },
+                    {
+                      "key": "properties.logbias",
+                      "label": "Log Bias",
+                      "type": "select",
+                      "options": [
+                        { "value": "latency", "label": "Latency (default)" },
+                        { "value": "throughput", "label": "Throughput (bypass SLOG)" }
+                      ],
+                      "hint": "Only meaningful if this pool has a SLOG device."
+                    },
+                    {
+                      "key": "properties.primarycache",
+                      "label": "Primary Cache (ARC)",
+                      "type": "select",
+                      "options": [
+                        { "value": "all", "label": "All (data + metadata)" },
+                        { "value": "metadata", "label": "Metadata only" },
+                        { "value": "none", "label": "None (almost never what you want)" }
+                      ]
+                    },
+                    {
+                      "key": "properties.secondarycache",
+                      "label": "Secondary Cache (L2ARC)",
+                      "type": "select",
+                      "options": [
+                        { "value": "all", "label": "All" },
+                        { "value": "metadata", "label": "Metadata only" },
+                        { "value": "none", "label": "None" }
+                      ]
+                    },
+                    {
+                      "key": "properties.dedup",
+                      "label": "Deduplication",
+                      "type": "select",
+                      "safety_tier": "red",
+                      "options": [
+                        { "value": "off", "label": "Off (recommended)" },
+                        { "value": "on", "label": "On (SHA-256)" },
+                        { "value": "sha512", "label": "SHA-512" },
+                        { "value": "skein", "label": "Skein" }
+                      ],
+                      "hint": "RED TIER — dedup table lives in RAM (~320B/block). Effectively permanent: deduped blocks stay deduped even after dedup=off."
+                    },
+                    {
+                      "key": "properties.quota",
+                      "label": "Quota",
+                      "type": "text",
+                      "placeholder": "e.g. 100G, 1T, or none",
+                      "hint": "Maximum space this dataset can consume. Use 'none' to remove."
+                    },
+                    {
+                      "key": "properties.reservation",
+                      "label": "Reservation",
+                      "type": "text",
+                      "placeholder": "e.g. 50G, or none",
+                      "hint": "Guaranteed minimum space for this dataset. Use 'none' to remove."
+                    }
+                  ],
+                  "button_label": "Apply Changes"
+                }
+              },
+              {
+                "id": "take-snapshot",
+                "label": "Take Snapshot",
+                "icon": "camera",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/snapshots",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "create_snapshot" },
+                    "body_map": { "dataset": "row.name" }
+                  }
+                },
+                "form": {
+                  "title": "Take Snapshot of {row.name}",
+                  "show_command": true,
+                  "fields": [
+                    { "key": "dataset", "type": "hidden", "value_from": "row.name" },
+                    {
+                      "key": "name",
+                      "label": "Snapshot Name",
+                      "type": "text",
+                      "placeholder": "manual-2026-04-07-120000 (auto-generated if empty)",
+                      "hint": "Leave blank for auto-generated timestamp name"
+                    },
+                    {
+                      "key": "recursive",
+                      "label": "Recursive",
+                      "type": "checkbox",
+                      "hint": "Also snapshot all child datasets"
+                    }
+                  ],
+                  "button_label": "Take Snapshot"
+                }
+              },
+              {
+                "id": "delete-dataset",
+                "label": "Delete Dataset",
+                "icon": "trash-2",
+                "safety_tier": "red",
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/datasets",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "destroy_dataset" },
+                    "body_map": { "name": "row.name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Delete Dataset",
+                  "message": "This will permanently destroy the dataset {row.name} and all its data. This action cannot be undone.",
+                  "show_command": true,
+                  "require_type_confirm": true,
+                  "confirm_value": "{row.name}",
+                  "confirm_label": "Type the full dataset name to confirm",
+                  "confirm_key": "confirm",
+                  "button_label": "Delete Dataset",
+                  "button_variant": "danger",
+                  "extra_fields": [
+                    { "key": "name", "type": "hidden", "value_from": "row.name" },
+                    {
+                      "key": "recursive",
+                      "label": "Recursive (include children and snapshots)",
+                      "type": "checkbox"
+                    }
+                  ]
+                }
+              }
+            ],
+            "toolbar_actions": [
+              {
+                "id": "create-dataset",
+                "label": "Create Dataset",
+                "icon": "folder-plus",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/datasets",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "create_dataset" }
+                  }
+                },
+                "form": {
+                  "title": "Create Dataset",
+                  "show_command": true,
+                  "fields": [
+                    {
+                      "key": "parent",
+                      "label": "Parent Dataset",
+                      "type": "select",
+                      "options_from": "/api/datasets",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "name",
+                      "label": "Dataset Name",
+                      "type": "text",
+                      "placeholder": "my-dataset",
+                      "required": true,
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+                      "hint": "Only letters, numbers, dots, hyphens, underscores. No spaces."
+                    },
+                    {
+                      "key": "preset",
+                      "label": "Preset",
+                      "type": "select",
+                      "options": [
+                        { "value": "",        "label": "— No Preset (manual) —" },
+                        { "value": "general", "label": "General Purpose — good for most files and documents" },
+                        { "value": "media",   "label": "Media Storage — optimized for large video/music files" },
+                        { "value": "vm",      "label": "VM/App Storage — balanced for virtual machines and containers" },
+                        { "value": "db",      "label": "Database — tuned for databases that need data safety" }
+                      ],
+                      "hint": "Presets auto-configure record size, compression, atime, and sync"
+                    },
+                    {
+                      "key": "quota",
+                      "label": "Quota (optional)",
+                      "type": "text",
+                      "placeholder": "e.g. 100G, 1T",
+                      "hint": "Maximum space this dataset can consume"
+                    },
+                    {
+                      "key": "reservation",
+                      "label": "Reservation (optional)",
+                      "type": "text",
+                      "placeholder": "e.g. 50G",
+                      "hint": "Guaranteed minimum space for this dataset"
+                    }
+                  ],
+                  "button_label": "Create Dataset",
+                  "success_message": "Dataset {name} created"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "snapshots",
+      "title": "Snapshots",
+      "icon": "camera",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 60, "label": "1 Minute" },
+            { "value": 300, "label": "5 Minutes" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "snapshot-list",
+          "title": "Snapshots",
+          "config": {
+            "source": "/api/snapshots",
+            "columns": [
+              { "key": "dataset",     "label": "Dataset",    "sortable": true },
+              { "key": "snap_name",   "label": "Snapshot",   "sortable": true },
+              { "key": "creation",    "label": "Created",    "sortable": true, "format": "timestamp" },
+              { "key": "used",        "label": "Used",       "sortable": true, "format": "bytes" },
+              { "key": "referenced",  "label": "Referenced", "sortable": true, "format": "bytes" }
+            ],
+            "sortable": true,
+            "filterable": true,
+            "selectable": true,
+            "key_field": "full_name",
+            "bulk_actions": [
+              {
+                "id": "bulk-delete-snapshots",
+                "label": "Delete Selected",
+                "icon": "trash-2",
+                "safety_tier": "red",
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/snapshots",
+                  "body_map": { "name": "row.full_name" }
+                },
+                "confirm": {
+                  "title": "Delete {count} Snapshots",
+                  "message": "Permanently delete {count} snapshots? This cannot be undone.",
+                  "button_label": "Delete All",
+                  "button_variant": "danger"
+                },
+                "success_message": "Deleted {succeeded} of {total} snapshots",
+                "error_message": "Delete failed: {error}"
+              }
+            ],
+            "default_sort": { "key": "creation", "direction": "desc" },
+            "row_actions": [
+              {
+                "id": "rollback-snapshot",
+                "label": "Rollback",
+                "icon": "rotate-ccw",
+                "safety_tier": "red",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/snapshots/rollback",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "rollback" },
+                    "body_map": { "name": "row.full_name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Rollback to Snapshot",
+                  "message": "This will revert {row.dataset} to how it looked when snapshot {row.snap_name} was taken. Any data written after this snapshot will be permanently lost.",
+                  "show_command": true,
+                  "require_type_confirm": true,
+                  "confirm_value": "{row.dataset}",
+                  "confirm_label": "Type the dataset name to confirm",
+                  "confirm_key": "confirm",
+                  "button_label": "Rollback",
+                  "button_variant": "danger",
+                  "extra_fields": [
+                    { "key": "name", "type": "hidden", "value_from": "row.full_name" },
+                    {
+                      "key": "depth",
+                      "label": "Rollback Depth",
+                      "type": "select",
+                      "options": [
+                        { "value": "latest",       "label": "Just this snapshot (most recent only)" },
+                        { "value": "intermediate", "label": "This and newer snapshots (destroys intermediate snapshots)" },
+                        { "value": "all",          "label": "Everything after this (destroys all newer snapshots and bookmarks)" }
+                      ],
+                      "required": true
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "delete-snapshot",
+                "label": "Delete",
+                "icon": "trash-2",
+                "safety_tier": "red",
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/snapshots",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "destroy_snapshot" },
+                    "body_map": { "name": "row.full_name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Delete Snapshot",
+                  "message": "Permanently delete snapshot {row.full_name}? This cannot be undone.",
+                  "show_command": true,
+                  "require_type_confirm": true,
+                  "confirm_value": "{row.full_name}",
+                  "confirm_label": "Type the full snapshot name to confirm",
+                  "confirm_key": "confirm",
+                  "button_label": "Delete Snapshot",
+                  "button_variant": "danger",
+                  "extra_fields": [
+                    { "key": "name", "type": "hidden", "value_from": "row.full_name" }
+                  ]
+                }
+              }
+            ],
+            "toolbar_actions": [
+              {
+                "id": "take-snapshot",
+                "label": "Take Snapshot",
+                "icon": "camera",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/snapshots",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "create_snapshot" }
+                  }
+                },
+                "form": {
+                  "title": "Take Snapshot",
+                  "show_command": true,
+                  "fields": [
+                    {
+                      "key": "dataset",
+                      "label": "Dataset",
+                      "type": "select",
+                      "options_from": "/api/datasets",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "name",
+                      "label": "Snapshot Name",
+                      "type": "text",
+                      "placeholder": "auto-generated if empty",
+                      "hint": "Leave blank for auto-generated timestamp name (e.g. manual-2026-04-07-120000)"
+                    },
+                    {
+                      "key": "recursive",
+                      "label": "Recursive (include child datasets)",
+                      "type": "checkbox"
+                    }
+                  ],
+                  "button_label": "Take Snapshot"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "devices",
+      "title": "Devices",
+      "icon": "hard-drive",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 30, "label": "30 Seconds" },
+            { "value": 60, "label": "1 Minute" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "pool-devices",
+          "title": "Pool Devices",
+          "description": "Devices in your ZFS pools. Use row actions to manage individual devices.",
+          "config": {
+            "source": "/api/pools",
+            "columns": [
+              { "key": "name",   "label": "Pool",   "sortable": true },
+              { "key": "health", "label": "Health",  "sortable": true, "badge": {
+                "ONLINE":   "success",
+                "DEGRADED": "warning",
+                "FAULTED":  "danger",
+                "OFFLINE":  "muted",
+                "UNAVAIL":  "danger"
+              }},
+              { "key": "size",  "label": "Size",  "sortable": true, "format": "bytes" },
+              { "key": "alloc", "label": "Used",   "sortable": true, "format": "bytes" },
+              { "key": "free",  "label": "Free",   "sortable": true, "format": "bytes" }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "name", "direction": "asc" },
+            "expandable": true,
+            "expand_key": "vdevs",
+            "child_columns": [
+              { "key": "name",   "label": "Vdev" },
+              { "key": "type",   "label": "Type" },
+              { "key": "health", "label": "Health", "badge": {
+                "ONLINE":   "success",
+                "DEGRADED": "warning",
+                "FAULTED":  "danger",
+                "OFFLINE":  "muted",
+                "UNAVAIL":  "danger",
+                "REMOVED":  "danger"
+              }},
+              { "key": "read",  "label": "READ",  "format": "error_count" },
+              { "key": "write", "label": "WRITE", "format": "error_count" },
+              { "key": "cksum", "label": "CKSUM", "format": "error_count" }
+            ],
+            "row_actions": [
+              {
+                "id": "clear-errors",
+                "label": "Clear Errors",
+                "icon": "eraser",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/pool/clear",
+                  "body_map": { "pool": "row.name" },
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "clear_errors" },
+                    "body_map": { "pool": "row.name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Clear Error Counters",
+                  "message": "Reset all error counters (READ/WRITE/CKSUM) for pool {row.name}?",
+                  "show_command": true,
+                  "button_label": "Clear Errors"
+                }
+              }
+            ],
+            "toolbar_actions": [
+              {
+                "id": "replace-device",
+                "label": "Replace Device",
+                "icon": "refresh-cw",
+                "safety_tier": "red",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/pool/replace",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "replace_device" }
+                  }
+                },
+                "form": {
+                  "title": "Replace Device",
+                  "show_command": true,
+                  "fields": [
+                    {
+                      "key": "pool",
+                      "label": "Pool",
+                      "type": "select",
+                      "options_from": "/api/pools",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true,
+                      "hint": "The pool containing the device to replace"
+                    },
+                    {
+                      "key": "old_device",
+                      "label": "Device to Replace",
+                      "type": "text",
+                      "required": true,
+                      "placeholder": "e.g. sda, /dev/disk/by-id/...",
+                      "hint": "The failed or degraded device name as shown in pool status"
+                    },
+                    {
+                      "key": "new_device",
+                      "label": "Replacement Device",
+                      "type": "select",
+                      "options_from": "/api/disks",
+                      "option_value": "path",
+                      "option_label": "name",
+                      "option_detail": "model",
+                      "required": true,
+                      "hint": "Select an unused disk to replace the failed device"
+                    }
+                  ],
+                  "confirm": {
+                    "require_type_confirm": true,
+                    "confirm_label": "Type the pool name to confirm",
+                    "confirm_key": "confirm"
+                  },
+                  "button_label": "Replace Device",
+                  "button_variant": "danger"
+                }
+              },
+              {
+                "id": "add-vdev",
+                "label": "Expand Pool",
+                "icon": "plus-circle",
+                "safety_tier": "red",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/pool/add-vdev",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "add_vdev" }
+                  }
+                },
+                "form": {
+                  "title": "Add Vdev to Pool",
+                  "show_command": true,
+                  "fields": [
+                    {
+                      "key": "pool",
+                      "label": "Pool",
+                      "type": "select",
+                      "options_from": "/api/pools",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "vdev_type",
+                      "label": "Vdev Type",
+                      "type": "select",
+                      "options": [
+                        { "value": "mirror", "label": "Mirror — 2+ drives, safest, lose 50% capacity" },
+                        { "value": "raidz1", "label": "RAIDZ1 — 3+ drives, survive 1 failure, lose 1 drive capacity" },
+                        { "value": "raidz2", "label": "RAIDZ2 — 4+ drives, survive 2 failures, lose 2 drives capacity" },
+                        { "value": "raidz3", "label": "RAIDZ3 — 5+ drives, survive 3 failures, lose 3 drives capacity" },
+                        { "value": "stripe", "label": "Stripe — NO redundancy (not recommended)" }
+                      ],
+                      "required": true,
+                      "hint": "Should match the existing vdev type in your pool for best results"
+                    },
+                    {
+                      "key": "devices",
+                      "label": "Devices",
+                      "type": "multi-select",
+                      "variant": "cards",
+                      "options_from": "/api/disks",
+                      "option_value": "path",
+                      "option_label": "name",
+                      "option_detail": "model",
+                      "option_meta": { "size": "size-bytes" },
+                      "required": true,
+                      "hint": "Select the drives for the new vdev"
+                    }
+                  ],
+                  "confirm": {
+                    "require_type_confirm": true,
+                    "confirm_label": "Type the pool name to confirm expansion",
+                    "confirm_key": "confirm"
+                  },
+                  "button_label": "Add Vdev",
+                  "button_variant": "danger"
+                }
+              },
+              {
+                "id": "offline-device",
+                "label": "Offline Device",
+                "icon": "power-off",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/devices/offline",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "offline_device" }
+                  }
+                },
+                "form": {
+                  "title": "Offline Device",
+                  "show_command": true,
+                  "fields": [
+                    {
+                      "key": "pool",
+                      "label": "Pool",
+                      "type": "select",
+                      "options_from": "/api/pools",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "device",
+                      "label": "Device",
+                      "type": "text",
+                      "required": true,
+                      "placeholder": "e.g. sda",
+                      "hint": "The device name as shown in pool topology. This will reduce redundancy while offline."
+                    }
+                  ],
+                  "button_label": "Offline Device"
+                }
+              },
+              {
+                "id": "online-device",
+                "label": "Online Device",
+                "icon": "power",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/devices/online",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "online_device" }
+                  }
+                },
+                "form": {
+                  "title": "Online Device",
+                  "show_command": true,
+                  "fields": [
+                    {
+                      "key": "pool",
+                      "label": "Pool",
+                      "type": "select",
+                      "options_from": "/api/pools",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "device",
+                      "label": "Device",
+                      "type": "text",
+                      "required": true,
+                      "placeholder": "e.g. sda",
+                      "hint": "Bring a previously offlined device back into the pool"
+                    }
+                  ],
+                  "button_label": "Online Device"
+                }
+              },
+              {
+                "id": "identify-device",
+                "label": "Identify Drive (LED)",
+                "icon": "lightbulb",
+                "safety_tier": "green",
+                "capability": "led_identify",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/devices/identify",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "identify_device" }
+                  }
+                },
+                "form": {
+                  "title": "Identify Drive Bay LED",
+                  "show_command": true,
+                  "description": "Use ledctl to blink the drive bay LED so you can locate the physical drive in the chassis. Requires an SES-capable backplane and ledctl on the agent host.",
+                  "fields": [
+                    {
+                      "key": "device",
+                      "label": "Device",
+                      "type": "text",
+                      "required": true,
+                      "placeholder": "e.g. sda",
+                      "hint": "The device name as shown in pool topology — short name or absolute path"
+                    },
+                    {
+                      "key": "mode",
+                      "label": "Action",
+                      "type": "select",
+                      "options": [
+                        { "value": "locate", "label": "Locate — turn the drive bay LED on" },
+                        { "value": "off",    "label": "Off — return the drive bay LED to normal" }
+                      ],
+                      "default": "locate",
+                      "required": true
+                    }
+                  ],
+                  "button_label": "Identify"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "available-disks",
+          "title": "Available Disks",
+          "description": "Disks not currently used by any ZFS pool. These can be used for device replacement or pool expansion.",
+          "config": {
+            "source": "/api/disks",
+            "columns": [
+              { "key": "name",   "label": "Name",   "sortable": true },
+              { "key": "path",   "label": "Path",   "sortable": false },
+              { "key": "size",   "label": "Size",   "sortable": true, "format": "bytes" },
+              { "key": "model",  "label": "Model",  "sortable": true },
+              { "key": "serial", "label": "Serial", "sortable": true },
+              { "key": "type",   "label": "Type",   "sortable": true }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "name", "direction": "asc" }
+          }
+        }
+      ]
+    },
+    {
+      "id": "scheduled-tasks",
+      "title": "Scheduled Tasks",
+      "icon": "clock",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 30, "label": "30 Seconds" },
+            { "value": 60, "label": "1 Minute" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "task-list",
+          "title": "Scheduled Tasks",
+          "config": {
+            "source": "/api/tasks",
+            "columns": [
+              { "key": "id",        "label": "ID",        "sortable": true },
+              { "key": "task_type", "label": "Type",      "sortable": true, "badge": {
+                "snapshot":    "info",
+                "scrub":       "warning",
+                "replication": "info"
+              }},
+              { "key": "target",    "label": "Target",    "sortable": true },
+              { "key": "schedule",  "label": "Schedule",  "sortable": false },
+              { "key": "prefix",    "label": "Prefix",    "sortable": false },
+              { "key": "retention", "label": "Retention",  "sortable": true, "suffix": " snapshots" },
+              { "key": "recursive", "label": "Recursive", "sortable": false, "format": "boolean" },
+              { "key": "enabled",   "label": "Enabled",   "sortable": true, "badge": {
+                "true":  "success",
+                "false": "muted"
+              }},
+              { "key": "next_run",  "label": "Next Run",  "sortable": true, "format": "timestamp" }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "id", "direction": "asc" },
+            "row_actions": [
+              {
+                "id": "task-history",
+                "label": "History",
+                "icon": "history",
+                "safety_tier": "green",
+                "action": {
+                  "method": "GET",
+                  "endpoint": "/api/tasks/{row.id}/history"
+                },
+                "result_view": {
+                  "title": "Run History — Task #{row.id} ({row.task_type})",
+                  "type": "table",
+                  "columns": [
+                    { "key": "id",            "label": "Job ID",   "sortable": true },
+                    { "key": "trigger",       "label": "Trigger",  "sortable": true },
+                    { "key": "started_at",    "label": "Started",  "sortable": true, "format": "timestamp" },
+                    { "key": "finished_at",   "label": "Finished", "sortable": true, "format": "timestamp" },
+                    { "key": "duration_secs", "label": "Duration", "sortable": true, "format": "duration" },
+                    { "key": "status",        "label": "Status",   "sortable": true, "badge": {
+                      "success": "success",
+                      "error":   "danger",
+                      "running": "warning"
+                    }},
+                    { "key": "message",       "label": "Message",  "sortable": false }
+                  ],
+                  "default_sort": { "key": "started_at", "direction": "desc" }
+                }
+              },
+              {
+                "id": "edit-task",
+                "label": "Edit",
+                "icon": "edit",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "PUT",
+                  "endpoint": "/api/tasks/{row.id}"
+                },
+                "form": {
+                  "title": "Edit Scheduled Task #{row.id}",
+                  "fields": [
+                    {
+                      "key": "target",
+                      "label": "Target",
+                      "type": "text",
+                      "value_from": "row.target",
+                      "required": true,
+                      "hint": "Dataset name (for snapshots) or pool name (for scrubs)"
+                    },
+                    {
+                      "key": "schedule",
+                      "label": "Schedule",
+                      "type": "select",
+                      "options": [
+                        { "value": "0 * * * *",     "label": "Every hour" },
+                        { "value": "0 */6 * * *",   "label": "Every 6 hours" },
+                        { "value": "0 0 * * *",     "label": "Daily at midnight" },
+                        { "value": "0 0 * * 0",     "label": "Weekly on Sunday" },
+                        { "value": "0 0 1 * *",     "label": "Monthly (1st)" },
+                        { "value": "0 0 1,15 * *",  "label": "Bi-weekly (1st & 15th)" }
+                      ],
+                      "allow_custom": true,
+                      "custom_label": "Custom (cron expression)",
+                      "custom_input_type": "cron",
+                      "value_from": "row.schedule",
+                      "required": true,
+                      "hint": "Standard 5-field cron expression (minute hour day month weekday)"
+                    },
+                    {
+                      "key": "prefix",
+                      "label": "Naming Prefix",
+                      "type": "text",
+                      "value_from": "row.prefix",
+                      "hint": "Snapshots will be named: prefix-2026-04-07-120000"
+                    },
+                    {
+                      "key": "retention",
+                      "label": "Retention (snapshots to keep)",
+                      "type": "number",
+                      "value_from": "row.retention",
+                      "hint": "0 = unlimited. Older snapshots matching this prefix are automatically deleted."
+                    },
+                    {
+                      "key": "recursive",
+                      "label": "Recursive",
+                      "type": "checkbox",
+                      "value_from": "row.recursive"
+                    },
+                    {
+                      "key": "enabled",
+                      "label": "Enabled",
+                      "type": "checkbox",
+                      "value_from": "row.enabled"
+                    }
+                  ],
+                  "button_label": "Save Changes"
+                }
+              },
+              {
+                "id": "delete-task",
+                "label": "Delete",
+                "icon": "trash-2",
+                "safety_tier": "red",
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/tasks/{row.id}"
+                },
+                "confirm": {
+                  "title": "Delete Scheduled Task",
+                  "message": "Delete the {row.task_type} task for {row.target}? Existing snapshots will not be removed.",
+                  "button_label": "Delete Task",
+                  "button_variant": "danger"
+                }
+              }
+            ],
+            "toolbar_actions": [
+              {
+                "id": "create-snapshot-task",
+                "label": "Add Snapshot Task",
+                "icon": "camera",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/tasks"
+                },
+                "form": {
+                  "title": "Create Periodic Snapshot Task",
+                  "fields": [
+                    { "key": "task_type", "type": "hidden", "value": "snapshot" },
+                    {
+                      "key": "target",
+                      "label": "Dataset",
+                      "type": "select",
+                      "options_from": "/api/datasets",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "schedule",
+                      "label": "Schedule",
+                      "type": "select",
+                      "options": [
+                        { "value": "0 * * * *",     "label": "Every hour" },
+                        { "value": "0 */6 * * *",   "label": "Every 6 hours" },
+                        { "value": "0 0 * * *",     "label": "Daily at midnight" },
+                        { "value": "0 0 * * 0",     "label": "Weekly on Sunday" },
+                        { "value": "0 0 1 * *",     "label": "Monthly (1st)" }
+                      ],
+                      "allow_custom": true,
+                      "custom_label": "Custom (cron expression)",
+                      "custom_input_type": "cron",
+                      "required": true,
+                      "hint": "Standard 5-field cron expression"
+                    },
+                    {
+                      "key": "prefix",
+                      "label": "Naming Prefix",
+                      "type": "text",
+                      "placeholder": "auto",
+                      "hint": "Snapshots named: prefix-2026-04-07-120000"
+                    },
+                    {
+                      "key": "retention",
+                      "label": "Retention",
+                      "type": "select",
+                      "options": [
+                        { "value": 0,  "label": "Unlimited (no auto-delete)" },
+                        { "value": 24, "label": "Keep last 24 snapshots" },
+                        { "value": 7,  "label": "Keep last 7 snapshots" },
+                        { "value": 4,  "label": "Keep last 4 snapshots" },
+                        { "value": 12, "label": "Keep last 12 snapshots" }
+                      ],
+                      "allow_custom": true,
+                      "custom_label": "Custom count",
+                      "hint": "Older snapshots matching this prefix are automatically deleted"
+                    },
+                    {
+                      "key": "recursive",
+                      "label": "Recursive (include child datasets)",
+                      "type": "checkbox"
+                    }
+                  ],
+                  "button_label": "Create Task"
+                }
+              },
+              {
+                "id": "create-scrub-task",
+                "label": "Add Scrub Task",
+                "icon": "refresh-cw",
+                "safety_tier": "green",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/tasks"
+                },
+                "form": {
+                  "title": "Create Scheduled Scrub Task",
+                  "fields": [
+                    { "key": "task_type", "type": "hidden", "value": "scrub" },
+                    {
+                      "key": "target",
+                      "label": "Pool",
+                      "type": "select",
+                      "options_from": "/api/pools",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true
+                    },
+                    {
+                      "key": "schedule",
+                      "label": "Schedule",
+                      "type": "select",
+                      "options": [
+                        { "value": "0 2 * * 0",     "label": "Weekly (Sunday 2 AM)" },
+                        { "value": "0 2 1,15 * *",  "label": "Bi-weekly (1st & 15th, 2 AM)" },
+                        { "value": "0 2 1 * *",     "label": "Monthly (1st, 2 AM)" }
+                      ],
+                      "allow_custom": true,
+                      "custom_label": "Custom (cron expression)",
+                      "custom_input_type": "cron",
+                      "required": true,
+                      "hint": "Standard 5-field cron expression"
+                    }
+                  ],
+                  "button_label": "Create Task"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "job-history",
+          "title": "Job History",
+          "config": {
+            "source": "/api/jobs",
+            "columns": [
+              { "key": "id",          "label": "ID",        "sortable": true },
+              { "key": "job_type",    "label": "Type",      "sortable": true, "badge": {
+                "snapshot":    "info",
+                "scrub":       "warning",
+                "replication": "info"
+              }},
+              { "key": "trigger",       "label": "Trigger",  "sortable": true },
+              { "key": "started_at",    "label": "Started",  "sortable": true, "format": "timestamp" },
+              { "key": "finished_at",   "label": "Finished", "sortable": true, "format": "timestamp" },
+              { "key": "duration_secs", "label": "Duration", "sortable": true, "format": "duration" },
+              { "key": "status",        "label": "Status",   "sortable": true, "badge": {
+                "success": "success",
+                "error":   "danger",
+                "running": "warning"
+              }},
+              { "key": "message",       "label": "Message",  "sortable": false }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "started_at", "direction": "desc" }
+          }
+        }
+      ]
+    },
+    {
+      "id": "retention",
+      "title": "Retention",
+      "icon": "pie-chart",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 60, "label": "1 Minute" },
+            { "value": 300, "label": "5 Minutes" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "retention-stats",
+          "title": "Snapshot Retention by Dataset",
+          "config": {
+            "source": "/api/retention",
+            "columns": [
+              { "key": "dataset",         "label": "Dataset",           "sortable": true },
+              { "key": "snapshot_count",  "label": "Snapshots",        "sortable": true },
+              { "key": "total_used",      "label": "Space Used",       "sortable": true, "format": "bytes" },
+              { "key": "oldest_snapshot", "label": "Oldest Snapshot",  "sortable": true, "format": "timestamp" },
+              { "key": "newest_snapshot", "label": "Newest Snapshot",  "sortable": true, "format": "timestamp" }
+            ],
+            "sortable": true,
+            "filterable": true,
+            "default_sort": { "key": "snapshot_count", "direction": "desc" },
+            "row_actions": [
+              {
+                "id": "cleanup-snapshots",
+                "label": "Cleanup Old Snapshots",
+                "icon": "trash",
+                "safety_tier": "red",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/retention/cleanup"
+                },
+                "confirm": {
+                  "title": "Cleanup Old Snapshots",
+                  "message": "Delete all snapshots older than the specified number of days for dataset {row.dataset}.",
+                  "show_command": false,
+                  "require_type_confirm": true,
+                  "confirm_value": "{row.dataset}",
+                  "confirm_label": "Type the dataset name to confirm",
+                  "confirm_key": "confirm",
+                  "button_label": "Delete Old Snapshots",
+                  "button_variant": "danger",
+                  "extra_fields": [
+                    { "key": "dataset", "type": "hidden", "value_from": "row.dataset" },
+                    {
+                      "key": "older_than_days",
+                      "label": "Delete snapshots older than (days)",
+                      "type": "number",
+                      "placeholder": "30",
+                      "required": true,
+                      "hint": "All snapshots for this dataset created more than this many days ago will be deleted"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "replication",
+      "title": "Replication",
+      "icon": "copy",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 60,  "label": "1 Minute" },
+            { "value": 300, "label": "5 Minutes" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "replication-tasks",
+          "title": "Replication Tasks",
+          "description": "Periodic zfs send | zfs receive between two datasets on this host. Destinations are receive-owned — do not point them at a live dataset (zfs receive -F will roll back conflicting state).",
+          "config": {
+            "source": "/api/replication/tasks",
+            "columns": [
+              { "key": "id",               "label": "ID",           "sortable": true },
+              { "key": "replication_mode", "label": "Mode",         "sortable": true, "badge": {
+                "local":  "info",
+                "remote": "warning"
+              }},
+              { "key": "target",           "label": "Source",       "sortable": true },
+              { "key": "dest_target",      "label": "Destination",  "sortable": true },
+              { "key": "schedule",         "label": "Schedule",     "sortable": false },
+              { "key": "prefix",           "label": "Prefix",       "sortable": false },
+              { "key": "retention",        "label": "Retention",    "sortable": true, "suffix": " snapshots" },
+              { "key": "recursive",        "label": "Recursive",    "sortable": false, "format": "boolean" },
+              { "key": "last_sent_snap",   "label": "Last Sent",    "sortable": false },
+              { "key": "enabled",          "label": "Enabled",      "sortable": true, "badge": {
+                "true":  "success",
+                "false": "muted"
+              }},
+              { "key": "next_run",         "label": "Next Run",     "sortable": true, "format": "timestamp" }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "id", "direction": "asc" },
+            "row_actions": [
+              {
+                "id": "run-replication-now",
+                "label": "Run Now",
+                "icon": "play",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/replication/tasks/{row.id}/run",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "replication" },
+                    "body_map": {
+                      "target":      "row.target",
+                      "dest_target": "row.dest_target"
+                    }
+                  }
+                },
+                "confirm": {
+                  "title": "Run Replication Now",
+                  "message": "Trigger a manual replication from {row.target} to {row.dest_target}? A fresh source snapshot will be taken before the send.",
+                  "show_command": true,
+                  "button_label": "Run Now"
+                }
+              },
+              {
+                "id": "edit-replication-task",
+                "label": "Edit",
+                "icon": "edit",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "PUT",
+                  "endpoint": "/api/replication/tasks/{row.id}"
+                },
+                "form": {
+                  "title": "Edit Replication Task #{row.id}",
+                  "fields": [
+                    {
+                      "key": "target",
+                      "label": "Source Dataset",
+                      "type": "select",
+                      "options_from": "/api/datasets",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "value_from": "row.target",
+                      "required": true
+                    },
+                    {
+                      "key": "dest_target",
+                      "label": "Destination Dataset",
+                      "type": "select",
+                      "options_from": "/api/datasets",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "value_from": "row.dest_target",
+                      "required": true,
+                      "hint": "Must be different from the source"
+                    },
+                    {
+                      "key": "schedule",
+                      "label": "Schedule",
+                      "type": "select",
+                      "options": [
+                        { "value": "0 * * * *",     "label": "Every hour" },
+                        { "value": "0 */6 * * *",   "label": "Every 6 hours" },
+                        { "value": "0 0 * * *",     "label": "Daily at midnight" },
+                        { "value": "0 0 * * 0",     "label": "Weekly on Sunday" },
+                        { "value": "0 0 1 * *",     "label": "Monthly (1st)" }
+                      ],
+                      "allow_custom": true,
+                      "custom_label": "Custom (cron expression)",
+                      "custom_input_type": "cron",
+                      "value_from": "row.schedule",
+                      "required": true
+                    },
+                    {
+                      "key": "prefix",
+                      "label": "Snapshot Prefix",
+                      "type": "text",
+                      "value_from": "row.prefix",
+                      "hint": "Source snapshots are named: prefix-2026-04-07-120000"
+                    },
+                    {
+                      "key": "retention",
+                      "label": "Retention",
+                      "type": "select",
+                      "options": [
+                        { "value": 0,  "label": "Unlimited (no auto-delete)" },
+                        { "value": 24, "label": "Keep last 24 snapshots" },
+                        { "value": 7,  "label": "Keep last 7 snapshots" },
+                        { "value": 4,  "label": "Keep last 4 snapshots" }
+                      ],
+                      "allow_custom": true,
+                      "custom_label": "Custom count",
+                      "value_from": "row.retention",
+                      "hint": "Applied on both source and destination after a successful run"
+                    },
+                    {
+                      "key": "recursive",
+                      "label": "Recursive (include child datasets)",
+                      "type": "checkbox",
+                      "value_from": "row.recursive"
+                    },
+                    {
+                      "key": "bandwidth_kbps",
+                      "label": "Bandwidth Limit (kB/s) — remote only",
+                      "type": "number",
+                      "placeholder": "0",
+                      "value_from": "row.bandwidth_kbps",
+                      "hint": "0 or blank = unlimited. Ignored for local replication."
+                    },
+                    {
+                      "key": "manage_remote_retention",
+                      "label": "Manage Retention on Remote (remote mode only)",
+                      "type": "checkbox",
+                      "value_from": "row.manage_remote_retention",
+                      "hint": "Destroys old snapshots on the remote host after each successful receive, keeping the same count as source retention. Requires 'destroy,mount' zfs permissions for the SSH user on the destination dataset."
+                    },
+                    {
+                      "key": "use_bookmarks",
+                      "label": "Use Bookmarks for Incrementals (remote mode only)",
+                      "type": "checkbox",
+                      "value_from": "row.use_bookmarks",
+                      "hint": "Creates a zfs bookmark of each sent snapshot so source retention can prune aggressively without breaking the incremental chain."
+                    },
+                    {
+                      "key": "enabled",
+                      "label": "Enabled",
+                      "type": "checkbox",
+                      "value_from": "row.enabled"
+                    }
+                  ],
+                  "button_label": "Save Changes"
+                }
+              },
+              {
+                "id": "replication-history",
+                "label": "History",
+                "icon": "history",
+                "safety_tier": "green",
+                "action": {
+                  "method": "GET",
+                  "endpoint": "/api/replication/tasks/{row.id}/history"
+                },
+                "result_view": {
+                  "title": "Replication History — Task #{row.id}",
+                  "type": "table",
+                  "columns": [
+                    { "key": "id",            "label": "Job ID",   "sortable": true },
+                    { "key": "trigger",       "label": "Trigger",  "sortable": true },
+                    { "key": "started_at",    "label": "Started",  "sortable": true, "format": "timestamp" },
+                    { "key": "finished_at",   "label": "Finished", "sortable": true, "format": "timestamp" },
+                    { "key": "duration_secs", "label": "Duration", "sortable": true, "format": "duration" },
+                    { "key": "status",        "label": "Status",   "sortable": true, "badge": {
+                      "success": "success",
+                      "error":   "danger",
+                      "running": "warning"
+                    }},
+                    { "key": "message",       "label": "Message",  "sortable": false }
+                  ],
+                  "default_sort": { "key": "started_at", "direction": "desc" }
+                }
+              },
+              {
+                "id": "show-replication-key",
+                "label": "Show Public Key",
+                "icon": "key",
+                "safety_tier": "green",
+                "capability": "remote_replication",
+                "visible_when": { "field": "row.replication_mode", "equals": "remote" },
+                "action": {
+                  "method": "GET",
+                  "endpoint": "/api/replication/keys/{row.ssh_key_name}/public"
+                },
+                "result_view": {
+                  "title": "Public Key — {row.ssh_key_name}",
+                  "type": "text",
+                  "field": "public_key",
+                  "description": "Append this single line to ~/.ssh/authorized_keys on the destination host's SSH user so the agent can connect."
+                }
+              },
+              {
+                "id": "rotate-replication-key",
+                "label": "Rotate SSH Key",
+                "icon": "refresh-cw",
+                "safety_tier": "red",
+                "capability": "remote_replication",
+                "visible_when": { "field": "row.replication_mode", "equals": "remote" },
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/replication/keys/{row.ssh_key_name}/rotate"
+                },
+                "confirm": {
+                  "title": "Rotate SSH Key — {row.ssh_key_name}",
+                  "message": "Rotating deletes the existing keypair and generates a new Ed25519 one. Until you copy the new public line into ~/.ssh/authorized_keys on every host that currently trusts this key, scheduled replications using it will fail with permission denied.",
+                  "require_type_confirm": true,
+                  "confirm_value": "rotate",
+                  "confirm_label": "Type 'rotate' to confirm",
+                  "confirm_key": "confirm",
+                  "button_label": "Rotate Key",
+                  "button_variant": "danger"
+                },
+                "result_view": {
+                  "title": "New Public Key — {row.ssh_key_name}",
+                  "type": "text",
+                  "field": "public_key",
+                  "description": "Old key is gone. Copy this line into ~/.ssh/authorized_keys on every host that needs to trust this agent."
+                }
+              },
+              {
+                "id": "delete-replication-task",
+                "label": "Delete",
+                "icon": "trash-2",
+                "safety_tier": "red",
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/replication/tasks/{row.id}"
+                },
+                "confirm": {
+                  "title": "Delete Replication Task",
+                  "message": "Delete the replication task from {row.target} to {row.dest_target}? Existing snapshots on source and destination will not be removed.",
+                  "button_label": "Delete Task",
+                  "button_variant": "danger"
+                }
+              }
+            ],
+            "toolbar_actions": [
+              {
+                "id": "add-local-replication",
+                "label": "Add Local Replication",
+                "icon": "copy-plus",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/replication/tasks",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "replication" }
+                  }
+                },
+                "form": {
+                  "title": "Create Local Replication Task",
+                  "description": "Replicate snapshots between two datasets on the same host with zfs send | zfs receive. First run is a full send; subsequent runs are incremental based on the most recent common snapshot.",
+                  "show_command": true,
+                  "fields": [
+                    { "key": "replication_mode", "type": "hidden", "value": "local" },
+                    {
+                      "key": "target",
+                      "label": "Source Dataset",
+                      "type": "select",
+                      "options_from": "/api/datasets",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true,
+                      "hint": "The dataset whose snapshots will be sent"
+                    },
+                    {
+                      "key": "dest_target",
+                      "label": "Destination Dataset",
+                      "type": "select",
+                      "options_from": "/api/datasets",
+                      "option_value": "name",
+                      "option_label": "name",
+                      "required": true,
+                      "hint": "The dataset that will receive the stream. Must already exist and must be different from the source. Use a dedicated receive-only dataset — zfs receive -F will roll back conflicting snapshots."
+                    },
+                    {
+                      "key": "schedule",
+                      "label": "Schedule",
+                      "type": "select",
+                      "options": [
+                        { "value": "0 * * * *",     "label": "Every hour" },
+                        { "value": "0 */6 * * *",   "label": "Every 6 hours" },
+                        { "value": "0 0 * * *",     "label": "Daily at midnight" },
+                        { "value": "0 0 * * 0",     "label": "Weekly on Sunday" }
+                      ],
+                      "allow_custom": true,
+                      "custom_label": "Custom (cron expression)",
+                      "custom_input_type": "cron",
+                      "required": true
+                    },
+                    {
+                      "key": "prefix",
+                      "label": "Snapshot Prefix",
+                      "type": "text",
+                      "placeholder": "repl",
+                      "hint": "Source snapshots will be named: prefix-2026-04-07-120000"
+                    },
+                    {
+                      "key": "retention",
+                      "label": "Retention",
+                      "type": "select",
+                      "options": [
+                        { "value": 0,  "label": "Unlimited (no auto-delete)" },
+                        { "value": 24, "label": "Keep last 24 snapshots" },
+                        { "value": 7,  "label": "Keep last 7 snapshots" },
+                        { "value": 4,  "label": "Keep last 4 snapshots" }
+                      ],
+                      "allow_custom": true,
+                      "custom_label": "Custom count",
+                      "hint": "Applied on both source and destination after a successful run"
+                    },
+                    {
+                      "key": "recursive",
+                      "label": "Recursive (include child datasets)",
+                      "type": "checkbox"
+                    }
+                  ],
+                  "button_label": "Create Task"
+                }
+              },
+              {
+                "id": "add-remote-replication",
+                "label": "Add Remote Replication",
+                "icon": "cloud-upload",
+                "safety_tier": "yellow",
+                "capability": "remote_replication",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/replication/tasks",
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "replication", "replication_mode": "remote" }
+                  }
+                },
+                "form": {
+                  "title": "Create Remote Replication Task",
+                  "description": "Send snapshots over SSH to a remote host's `zfs receive`. The agent auto-generates an Ed25519 keypair; copy its public line into ~/.ssh/authorized_keys on the remote user, then use Test Connection to pin the host key and verify access. First run is a full send; subsequent runs are incremental.",
+                  "show_command": true,
+                  "sections": [
+                    {
+                      "title": "Source",
+                      "fields": [
+                        { "key": "replication_mode", "type": "hidden", "value": "remote" },
+                        {
+                          "key": "target",
+                          "label": "Source Dataset",
+                          "type": "select",
+                          "options_from": "/api/datasets",
+                          "option_value": "name",
+                          "option_label": "name",
+                          "required": true,
+                          "hint": "The local dataset whose snapshots will be sent"
+                        },
+                        {
+                          "key": "prefix",
+                          "label": "Snapshot Prefix",
+                          "type": "text",
+                          "placeholder": "repl",
+                          "hint": "Source snapshots will be named: prefix-2026-04-07-120000"
+                        }
+                      ]
+                    },
+                    {
+                      "title": "Destination",
+                      "fields": [
+                        {
+                          "key": "dest_target",
+                          "label": "Remote Destination Dataset",
+                          "type": "text",
+                          "placeholder": "tank/backups/incoming",
+                          "required": true,
+                          "hint": "Full ZFS path on the remote host, e.g. pool/dataset. Must already exist — use a dedicated receive-only dataset (zfs receive -F will roll back conflicts)."
+                        },
+                        {
+                          "key": "dest_host",
+                          "label": "Remote Host",
+                          "type": "text",
+                          "placeholder": "backup.lan or 192.168.1.50",
+                          "required": true
+                        },
+                        {
+                          "key": "dest_port",
+                          "label": "SSH Port",
+                          "type": "number",
+                          "placeholder": "22",
+                          "hint": "Leave blank for the default 22"
+                        },
+                        {
+                          "key": "dest_user",
+                          "label": "Remote User",
+                          "type": "text",
+                          "placeholder": "zfs-recv",
+                          "required": true,
+                          "hint": "SSH user on the remote host. Needs `zfs receive` permission — grant via `zfs allow -u <user> receive,create,mount <dataset>`."
+                        },
+                        {
+                          "key": "ssh_key_name",
+                          "label": "SSH Key Name",
+                          "type": "text",
+                          "placeholder": "backup-target",
+                          "required": true,
+                          "hint": "Identifier (letters, digits, '-', '_') for the Ed25519 keypair. The public key appears below once you enter a name — append it to ~/.ssh/authorized_keys on the remote user."
+                        },
+                        {
+                          "key": "ssh_public_key",
+                          "type": "remote_value",
+                          "label": "Public Key (add this to the remote host's authorized_keys)",
+                          "depends_on": "ssh_key_name",
+                          "endpoint": "/api/replication/keys/{form.ssh_key_name}/public",
+                          "method": "GET",
+                          "validate_regex": "^[A-Za-z0-9_-]{1,64}$",
+                          "value_path": "public_key",
+                          "copy_button": true,
+                          "rows": 3,
+                          "placeholder": "Enter an SSH Key Name above to generate and display the public key",
+                          "hint": "Paste this single line into ~/.ssh/authorized_keys on the remote user account, then click Test Connection below."
+                        },
+                        {
+                          "key": "test_connection",
+                          "type": "test_button",
+                          "label": "Verify SSH Access",
+                          "button_label": "Test Connection",
+                          "endpoint": "/api/replication/test-connection",
+                          "method": "POST",
+                          "require_fields": ["dest_host", "dest_user", "ssh_key_name", "dest_target"],
+                          "hint": "Pins the remote host key on first use and runs `zfs list` on the destination dataset to confirm the SSH user has receive permission. Copy the public key to ~/.ssh/authorized_keys first."
+                        }
+                      ]
+                    },
+                    {
+                      "title": "Schedule",
+                      "fields": [
+                        {
+                          "key": "schedule",
+                          "label": "Schedule",
+                          "type": "select",
+                          "options": [
+                            { "value": "0 * * * *",     "label": "Every hour" },
+                            { "value": "0 */6 * * *",   "label": "Every 6 hours" },
+                            { "value": "0 0 * * *",     "label": "Daily at midnight" },
+                            { "value": "0 0 * * 0",     "label": "Weekly on Sunday" }
+                          ],
+                          "allow_custom": true,
+                          "custom_label": "Custom (cron expression)",
+                          "custom_input_type": "cron",
+                          "required": true
+                        }
+                      ]
+                    },
+                    {
+                      "title": "Retention",
+                      "collapsed": true,
+                      "fields": [
+                        {
+                          "key": "retention",
+                          "label": "Source Retention",
+                          "type": "select",
+                          "options": [
+                            { "value": 0,  "label": "Unlimited (no auto-delete)" },
+                            { "value": 24, "label": "Keep last 24 snapshots" },
+                            { "value": 7,  "label": "Keep last 7 snapshots" },
+                            { "value": 4,  "label": "Keep last 4 snapshots" }
+                          ],
+                          "allow_custom": true,
+                          "custom_label": "Custom count",
+                          "hint": "Applied on the source after a successful run. Also applied on the remote destination when 'Manage Retention on Remote' is enabled below."
+                        },
+                        {
+                          "key": "manage_remote_retention",
+                          "label": "Manage Retention on Remote",
+                          "type": "checkbox",
+                          "hint": "Destroys old snapshots on the remote host after each successful receive, keeping the same count as source retention. Requires 'destroy,mount' zfs permissions for the SSH user on the destination dataset."
+                        }
+                      ]
+                    },
+                    {
+                      "title": "Advanced",
+                      "collapsed": true,
+                      "fields": [
+                        {
+                          "key": "bandwidth_kbps",
+                          "label": "Bandwidth Limit (kB/s)",
+                          "type": "number",
+                          "placeholder": "0",
+                          "hint": "0 or blank = unlimited. Requires `pv` installed on the agent host."
+                        },
+                        {
+                          "key": "use_bookmarks",
+                          "label": "Use Bookmarks for Incrementals",
+                          "type": "checkbox",
+                          "hint": "Creates a zfs bookmark of each sent snapshot. Future incrementals use the bookmark as their base so aggressive source retention cannot break the incremental chain."
+                        },
+                        {
+                          "key": "recursive",
+                          "label": "Recursive (include child datasets)",
+                          "type": "checkbox"
+                        }
+                      ]
+                    }
+                  ],
+                  "button_label": "Create Task"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "agents",
+      "title": "Agents",
+      "icon": "server",
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "agent-list",
+          "title": "Registered Agents",
+          "config": {
+            "source": "addon_agents",
+            "columns": [
+              { "key": "status",        "label": "Status",    "format": "status_dot" },
+              { "key": "agent_id",      "label": "Agent ID",  "sortable": true },
+              { "key": "hostname",      "label": "Hostname",  "sortable": true },
+              { "key": "address",       "label": "Address",   "sortable": false },
+              { "key": "arch",          "label": "Arch",      "sortable": true },
+              { "key": "version",       "label": "Version",   "sortable": false },
+              { "key": "last_seen_at",  "label": "Last Seen", "sortable": true, "format": "relative_time" }
+            ],
+            "sortable": true,
+            "default_sort": { "key": "agent_id", "direction": "asc" },
+            "row_actions": [
+              {
+                "id": "delete-agent",
+                "label": "Delete",
+                "icon": "trash-2",
+                "safety_tier": "red",
+                "action": {
+                  "method": "DELETE",
+                  "endpoint": "/api/agents/{row.agent_id}"
+                },
+                "confirm": {
+                  "title": "Delete Agent",
+                  "message": "Remove agent {row.agent_id} ({row.hostname}) from the registry? This only drops the manager-side record — the agent process will re-register itself on its next heartbeat unless you also stop it.",
+                  "button_label": "Delete Agent",
+                  "button_variant": "danger"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "deploy-wizard",
+          "id": "add-zfs-agent",
+          "title": "Add ZFS Agent",
+          "config": {
+            "target_label": "Agent",
+            "docker": {
+              "image": "ghcr.io/pineappledr/vigil-addons-zfs-agent",
+              "default_tag": "latest",
+              "container_name": "zfs-agent",
+              "privileged": true,
+              "ports": ["9600:9600"],
+              "volumes": [
+                "zfs-agent-data:/data",
+                "/dev:/dev",
+                "/run/udev:/run/udev:ro",
+                "/sbin/zpool:/sbin/zpool:ro",
+                "/sbin/zfs:/sbin/zfs:ro",
+                "/lib:/lib:ro",
+                "/lib64:/lib64:ro",
+                "/usr/lib:/usr/lib:ro"
+              ],
+              "named_volumes": ["zfs-agent-data"],
+              "environment": {
+                "VIGIL_ZFS_AGENT_HUB_URL":        { "source": "prefill",    "key": "hub_url", "label": "Manager URL" },
+                "VIGIL_ZFS_AGENT_HUB_PSK":        { "source": "prefill",    "key": "hub_psk", "label": "Hub PSK", "secret": true, "rotate_action": "rotate-psk" },
+                "VIGIL_ZFS_AGENT_ID":             { "source": "user_input", "label": "Agent ID", "placeholder": "nas-01" },
+                "VIGIL_ZFS_AGENT_ADVERTISE_ADDR": { "source": "user_input", "label": "Advertise Address", "placeholder": "http://192.168.1.100:9600", "hint": "URL where the Manager can reach this agent" },
+                "VIGIL_ZFS_AGENT_LISTEN_PORT":    { "source": "literal",    "value": "9600" },
+                "TZ":                             { "source": "literal",    "value": "${TZ:-UTC}" }
+              },
+              "platforms": {
+                "linux": {
+                  "label": "Standard Linux",
+                  "hint": "Deploy on any Linux host with ZFS installed. The agent mounts host ZFS binaries — use the Debian image for Proxmox/Ubuntu/Debian hosts."
+                }
+              }
+            },
+            "prefill_endpoint": "/api/deploy-info"
+          }
+        }
+      ]
+    },
+    {
+      "id": "performance",
+      "title": "Performance",
+      "icon": "activity",
+      "page_config": {
+        "agent_selector": true,
+        "refresh": {
+          "manual": true,
+          "auto_options": [
+            { "value": 30, "label": "30 Seconds" },
+            { "value": 60, "label": "1 Minute" },
+            { "value": 300, "label": "5 Minutes" }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "smart-table",
+          "id": "arc-metrics",
+          "title": "ARC & L2ARC Performance",
+          "config": {
+            "source": "/api/arc/metrics",
+            "columns": [
+              { "key": "category", "label": "Category", "sortable": true },
+              { "key": "metric",   "label": "Metric",   "sortable": true },
+              { "key": "value",    "label": "Value",    "sortable": false },
+              { "key": "help",     "label": "What it means", "sortable": false }
+            ],
+            "sortable": true,
+            "filterable": true,
+            "default_sort": { "key": "category", "direction": "asc" }
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "arc-recommendations",
+          "title": "Recommendations",
+          "config": {
+            "source": "/api/arc/recommendations",
+            "columns": [
+              { "key": "message", "label": "Suggestion", "sortable": false }
+            ],
+            "sortable": false,
+            "filterable": false
+          }
+        },
+        {
+          "type": "smart-table",
+          "id": "iostat-rows",
+          "title": "I/O — Pools, Vdevs & Disks",
+          "description": "Per-second read/write rates derived from zpool iostat. Rates are blank on the first frame after agent start; refresh once more to see them.",
+          "config": {
+            "source": "/api/iostat/rows",
+            "columns": [
+              { "key": "scope",             "label": "Scope",   "sortable": true, "badge": {
+                "pool": "info",
+                "vdev": "warning",
+                "disk": "muted"
+              }},
+              { "key": "name",              "label": "Name",    "sortable": true },
+              { "key": "vdev_type",         "label": "Type",    "sortable": true },
+              { "key": "parent",            "label": "Parent",  "sortable": true },
+              { "key": "read_ops_per_s",    "label": "Read Ops/s",   "sortable": true, "format": "number" },
+              { "key": "write_ops_per_s",   "label": "Write Ops/s",  "sortable": true, "format": "number" },
+              { "key": "read_bytes_per_s",  "label": "Read/s",       "sortable": true, "format": "bytes" },
+              { "key": "write_bytes_per_s", "label": "Write/s",      "sortable": true, "format": "bytes" },
+              { "key": "alloc",             "label": "Allocated",    "sortable": true, "format": "bytes" },
+              { "key": "free",              "label": "Free",         "sortable": true, "format": "bytes" }
+            ],
+            "sortable": true,
+            "filterable": true,
+            "default_sort": { "key": "scope", "direction": "asc" }
+          }
+        }
+      ]
+    },
+    {
+      "id": "logs",
+      "title": "Logs",
+      "icon": "scroll-text",
+      "page_config": {
+        "agent_selector": true
+      },
+      "components": [
+        {
+          "id": "live_log_viewer",
+          "type": "log-viewer",
+          "title": "Live Output",
+          "config": {
+            "auto_scroll": true
+          }
+        }
+      ]
+    }
+  ]
+}

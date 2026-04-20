@@ -1,0 +1,74 @@
+package agent
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"runtime"
+	"time"
+)
+
+// RegisterRequest is the payload sent to the Hub's /api/agents/register endpoint.
+type RegisterRequest struct {
+	AgentID       string `json:"agent_id"`
+	Hostname      string `json:"hostname"`
+	Arch          string `json:"arch"`
+	AdvertiseAddr string `json:"advertise_addr"`
+	Version       string `json:"version"`
+}
+
+// RegisterWithHub announces this agent to the Hub. It retries with exponential
+// backoff until the context is cancelled or registration succeeds.
+func RegisterWithHub(ctx context.Context, hubURL, psk, agentID, hostname, advertiseAddr, version string, logger *slog.Logger) {
+	req := RegisterRequest{
+		AgentID:       agentID,
+		Hostname:      hostname,
+		Arch:          runtime.GOARCH,
+		AdvertiseAddr: advertiseAddr,
+		Version:       version,
+	}
+
+	body, _ := json.Marshal(req)
+	url := hubURL + "/api/agents/register"
+
+	backoff := 2 * time.Second
+	maxBackoff := 60 * time.Second
+
+	for {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			logger.Error("failed to create registration request", "error", err)
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+psk)
+
+		resp, err := http.DefaultClient.Do(httpReq)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				logger.Info("registered with hub", "hub_url", hubURL, "agent_id", agentID)
+				return
+			}
+			logger.Warn("hub registration returned non-OK", "status", resp.StatusCode)
+		} else {
+			if ctx.Err() != nil {
+				return
+			}
+			logger.Warn("hub registration failed, retrying", "error", err, "backoff", backoff)
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+}

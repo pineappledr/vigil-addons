@@ -30,7 +30,7 @@ The Hub is lightweight and stateless aside from a JSON-persisted Agent registry.
 
 The Hub connects to the Vigil Server using the same two-phase pattern as all Vigil add-ons:
 
-1. **Registration** — On startup, the Hub sends `POST /api/addons/connect` with its embedded manifest and the one-time registration token (generated in the Vigil UI "Add Add-on" dialog). The server responds with an `addon_id`.
+1. **Registration** — On startup, the Hub sends `POST /api/addons/connect` with its embedded manifest and the one-time registration token (generated in the Vigil UI "New Add-on" dialog). The server responds with an `addon_id`.
 2. **Telemetry** — The Hub opens a persistent WebSocket to `/api/addons/ws?addon_id=N` and forwards aggregated Agent telemetry upstream. Heartbeats are sent every 30 seconds. The connection auto-reconnects with exponential backoff on failure.
 
 If no `vigil.token` is configured, the Hub runs in standalone mode without upstream connectivity.
@@ -114,19 +114,25 @@ Deploy the Hub on any host that can reach both the Vigil Server and your Agent(s
 ```yaml
 services:
   snapraid-hub:
-    container_name: Snapraid-Hub
+    container_name: snapraid-hub
     image: ghcr.io/pineappledr/vigil-addons-snapraid-hub:latest
     restart: unless-stopped
     ports:
       - "9300:9300"
-    command: ["-config", "/etc/snapraid-hub/config.hub.yaml"]
+    environment:
+      VIGIL_URL: http://vigil-server:9080
+      VIGIL_TOKEN: your-addon-token-here
+      VIGIL_SERVER_PUBKEY: your-server-public-key
+      VIGIL_SNAPRAID_HUB_DATA_REGISTRY_PATH: "/data"
+      TZ: ${TZ:-UTC}
     volumes:
       - hub-data:/data
-      - ./config.hub.yaml:/etc/snapraid-hub/config.hub.yaml:ro
 
 volumes:
   hub-data:
 ```
+
+> **Tip:** You can also use a YAML config file instead of environment variables. Mount `config.hub.yaml` and pass `-config /etc/snapraid-hub/config.hub.yaml`. See [config.hub.example.yaml](config.hub.example.yaml) for all options.
 
 #### Agent (via Deploy Wizard)
 
@@ -144,7 +150,7 @@ services:
       - "9400:9400"
     environment:
       VIGIL_SNAPRAID_AGENT_HUB_URL: http://snapraid-hub:9300
-      VIGIL_SNAPRAID_AGENT_HUB_TOKEN: <auto-filled from Hub>
+      VIGIL_SNAPRAID_AGENT_HUB_PSK: <auto-filled from Hub>
       VIGIL_SNAPRAID_AGENT_ID: snapraid-agent-nas01
       VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR: http://192.168.1.100:9400
       VIGIL_SNAPRAID_AGENT_LISTEN_PORT: 9400
@@ -168,7 +174,7 @@ volumes:
   agent-data:
 ```
 
-The Agent **does not require a YAML config file** — all settings are provided via environment variables. The Hub URL and Token are pre-filled by the deploy wizard from the Hub's `/api/deploy-info` endpoint.
+The Agent **does not require a YAML config file** — all settings are provided via environment variables. The Hub URL and PSK are pre-filled by the deploy wizard from the Hub's `/api/deploy-info` endpoint.
 
 > **Important:** Data, parity, and content file volumes must be mounted **read-write** (no `:ro` flag). SnapRAID needs write access to parity disks for `sync`, content files for `sync`/`scrub`, and data disks for `touch`/`fix`. Content files **must** be mounted as a directory, not as individual files (see the EBUSY warning above).
 
@@ -204,14 +210,72 @@ chmod +x snapraid-agent-linux-amd64
 
 ## Configuration
 
-Copy the example files and adjust for your environment:
+### When do you need YAML config files?
+
+**Hub:** Always requires a YAML file — it needs at minimum the Vigil server URL and registration token, which cannot be auto-discovered.
+
+**Agent:** Optional. The Agent can start with zero config files using only environment variables and built-in defaults. The YAML file is useful when you want to commit your configuration to source control or prefer not to use long environment variable lists.
+
+### config.hub.yaml
+
+Copy the example and edit the two required fields:
 
 ```bash
 cp config.hub.example.yaml config.hub.yaml
+```
+
+```yaml
+vigil:
+  server_url: "http://192.168.1.10:9080"   # your Vigil server address
+  token: "your-registration-token"          # generated in Vigil UI → Add Add-on
+```
+
+Mount it into the Hub container:
+
+```yaml
+services:
+  snapraid-hub:
+    image: ghcr.io/pineappledr/vigil-addons-snapraid-hub:latest
+    command: ["-config", "/etc/snapraid-hub/config.hub.yaml"]
+    volumes:
+      - hub-data:/data
+      - ./config.hub.yaml:/etc/snapraid-hub/config.hub.yaml:ro
+```
+
+The Hub generates its agent PSK automatically on first boot and saves it to `/data/hub.psk` — you do not need to configure this manually.
+
+### config.agent.yaml
+
+Copy the example and edit the hub connection section:
+
+```bash
 cp config.agent.example.yaml config.agent.yaml
 ```
 
-See the example files for comprehensive documentation of every option.
+```yaml
+hub:
+  url: "http://192.168.1.10:9300"   # Hub address
+  psk: "your-hub-psk"               # from: docker exec snapraid-hub cat /data/hub.psk
+
+snapraid:
+  config_path: "/etc/snapraid.conf"
+```
+
+Mount it into the Agent container and remove the corresponding environment variables — the YAML takes over:
+
+```yaml
+services:
+  snapraid-agent:
+    image: ghcr.io/pineappledr/vigil-addons-snapraid-agent:latest
+    command: ["-config", "/etc/snapraid-agent/config.agent.yaml"]
+    volumes:
+      - ./config.agent.yaml:/etc/snapraid-agent/config.agent.yaml:ro
+      # ... disk mounts
+```
+
+> **Note:** You can mix both approaches. Any value set via environment variable overrides the YAML. Any value changed from the Vigil UI overrides both.
+
+See the example files for full documentation of every available option.
 
 ### Environment Variable Overrides
 
@@ -222,6 +286,19 @@ All configuration values can be overridden via environment variables. The Agent 
 | `VIGIL_SNAPRAID_HUB_` | Hub |
 | `VIGIL_SNAPRAID_AGENT_` | Agent |
 
+The Vigil connection uses the **uniform** `VIGIL_URL` and `VIGIL_TOKEN` environment variables (shared across all Vigil add-ons). These override the YAML `vigil.server_url` and `vigil.token` fields respectively.
+
+#### Hub Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VIGIL_SNAPRAID_HUB_LISTEN_PORT` | `9300` | Port the Hub listens on |
+| `VIGIL_URL` | `http://vigil.local:9080` | Vigil server URL |
+| `VIGIL_TOKEN` | — | Add-on registration token from Vigil UI |
+| `VIGIL_SERVER_PUBKEY` | — | Base64-encoded Ed25519 public key for command signature verification |
+| `VIGIL_SNAPRAID_HUB_DATA_REGISTRY_PATH` | `/data/agents.json` | Agent registry file path |
+| `VIGIL_SNAPRAID_HUB_LOGGING_LEVEL` | `info` | Log level (debug, info, warn, error) |
+
 #### Agent Environment Variables
 
 | Variable | Default | Description |
@@ -230,22 +307,30 @@ All configuration values can be overridden via environment variables. The Agent 
 | `VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR` | `http://<hostname>:<port>` | URL where the Hub can reach this agent. Set to host LAN IP for Docker. |
 | `VIGIL_SNAPRAID_AGENT_LISTEN_PORT` | `9400` | Port the agent listens on |
 | `VIGIL_SNAPRAID_AGENT_HUB_URL` | `http://snapraid-hub:9300` | Hub URL for registration and telemetry |
-| `VIGIL_SNAPRAID_AGENT_HUB_TOKEN` | — | Token for agent registration with the Hub |
+| `VIGIL_SNAPRAID_AGENT_HUB_PSK` | — | Pre-shared key for authenticating with the Hub (auto-generated by Hub on first boot, shown in deploy wizard) |
 | `VIGIL_SNAPRAID_AGENT_SNAPRAID_CONFIG_PATH` | `/etc/snapraid.conf` | Path to snapraid.conf |
 | `VIGIL_SNAPRAID_AGENT_SNAPRAID_BINARY_PATH` | — | Path to snapraid binary (auto-detected if on PATH) |
-| `VIGIL_SNAPRAID_AGENT_SCHEDULER_MAINTENANCE_CRON` | `0 3 * * *` | Maintenance schedule |
-| `VIGIL_SNAPRAID_AGENT_SCHEDULER_SCRUB_CRON` | `0 4 * * 0` | Scrub schedule |
+| `VIGIL_SNAPRAID_AGENT_SCHEDULER_MAINTENANCE_CRON` | `0 2 * * *` | Maintenance schedule |
+| `VIGIL_SNAPRAID_AGENT_SCHEDULER_SCRUB_CRON` | `0 6 1 * *` | Scrub schedule |
 | `VIGIL_SNAPRAID_AGENT_SCHEDULER_SMART_CRON` | `0 */6 * * *` | SMART check schedule |
-| `VIGIL_SNAPRAID_AGENT_THRESHOLDS_MAX_DELETED` | `50` | Deletion threshold |
-| `VIGIL_SNAPRAID_AGENT_THRESHOLDS_MAX_UPDATED` | `-1` | Update threshold (-1 = disabled) |
+| `VIGIL_SNAPRAID_AGENT_THRESHOLDS_MAX_DELETED` | `250` | Deletion threshold |
+| `VIGIL_SNAPRAID_AGENT_THRESHOLDS_MAX_UPDATED` | `3000` | Update threshold (-1 = disabled) |
 | `VIGIL_SNAPRAID_AGENT_SCRUB_PLAN` | `8` | Scrub plan (bad, new, full, or percentage) |
 | `VIGIL_SNAPRAID_AGENT_SCRUB_OLDER_THAN_DAYS` | `10` | Min age for scrub blocks |
-| `VIGIL_SNAPRAID_AGENT_SCRUB_AUTO_FIX_BAD_BLOCKS` | `false` | Auto-fix bad blocks |
-| `VIGIL_SNAPRAID_AGENT_SYNC_PRE_HASH` | `false` | Enable pre-hash |
+| `VIGIL_SNAPRAID_AGENT_SCRUB_AUTO_FIX_BAD_BLOCKS` | `true` | Auto-fix bad blocks |
+| `VIGIL_SNAPRAID_AGENT_SYNC_PRE_HASH` | `true` | Enable pre-hash |
 | `VIGIL_SNAPRAID_AGENT_HOOKS_PRE_SYNC` | — | Pre-sync hook command |
 | `VIGIL_SNAPRAID_AGENT_HOOKS_POST_SYNC` | — | Post-sync hook command |
 | `VIGIL_SNAPRAID_AGENT_DOCKER_PAUSE_CONTAINERS` | — | Comma-separated containers to pause during sync |
 | `VIGIL_SNAPRAID_AGENT_DOCKER_STOP_CONTAINERS` | — | Comma-separated containers to stop during sync |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_TOUCH` | `5` | Timeout in minutes for touch command |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_STATUS` | `5` | Timeout in minutes for status command |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_DIFF` | `5` | Timeout in minutes for diff command |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_SMART` | `5` | Timeout in minutes for smart command |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_SYNC` | `60` | Timeout in minutes for sync command |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_SCRUB` | `480` | Timeout in minutes for scrub command (8 hours) |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_FIX` | `60` | Timeout in minutes for fix command |
+| `VIGIL_SNAPRAID_AGENT_TIMEOUTS_DEFAULT` | `10` | Fallback timeout in minutes for any other command |
 
 Example:
 
@@ -292,15 +377,15 @@ All schedule and threshold settings are configured per-Agent from the Automation
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| **Maintenance Schedule** | Preset / Custom cron | Daily at 3:00 AM | Runs `touch` → `diff` → safety gates → `sync` → `scrub` |
-| **Scrub Schedule** | Preset / Custom cron | Sundays at 4:00 AM | Standalone scrub to verify data integrity |
+| **Maintenance Schedule** | Preset / Custom cron | Daily at 2:00 AM | Runs `touch` → `diff` → safety gates → `sync` → `scrub` |
+| **Scrub Schedule** | Preset / Custom cron | Monthly on the 1st at 6:00 AM | Standalone scrub to verify data integrity |
 | **SMART Check Schedule** | Preset / Custom cron | Every 6 hours | Polls drive health and reports failures |
-| **Deletion Threshold** | Number | 50 | Abort sync if more files deleted than this limit (0 = no limit) |
-| **Update Threshold** | Number | -1 | Abort sync if more files updated than this limit (-1 = disabled) |
-| **Enable Pre-Hash** | Toggle | Off | Hash files before sync to detect silent corruption (slower but safer) |
+| **Deletion Threshold** | Number | 250 | Abort sync if more files deleted than this limit (0 = no limit) |
+| **Update Threshold** | Number | 3000 | Abort sync if more files updated than this limit (-1 = disabled) |
+| **Enable Pre-Hash** | Toggle | On | Hash files before sync to detect silent corruption (slower but safer) |
 | **Default Scrub Plan** | Select | 8% | How much data to verify per scrub run (bad, new, full, or percentage) |
 | **Scrub Min Age (days)** | Number | 10 | Only scrub blocks older than this many days since last check |
-| **Auto-Fix Bad Blocks** | Toggle | Off | Automatically attempt to repair bad blocks detected during scrub |
+| **Auto-Fix Bad Blocks** | Toggle | On | Automatically attempt to repair bad blocks detected during scrub |
 | **Pre-Sync Hook** | Text | — | Shell command to run before each sync (e.g. stop services, flush caches) |
 | **Post-Sync Hook** | Text | — | Shell command to run after each sync (e.g. restart services, send reports) |
 | **Pause Containers Before Sync** | Text | — | Comma-separated Docker container names to pause during sync and unpause after |
@@ -508,21 +593,31 @@ The Hub emits notification frames upstream to the Vigil Server for dispatch thro
 - **SMART failures** are detected during periodic health checks and emit `smart_warning` with the affected disk name and device.
 - **Command failures** (e.g., network errors routing to an Agent) emit `job_failed` with the error details.
 
-### Token Rotation
+### PSK Rotation
 
-The Hub token used for agent registration can be rotated from the Vigil UI:
+The Hub PSK used for agent authentication can be rotated from the Vigil UI:
 
 1. Navigate to **SnapRAID → Agents → Add SnapRAID Agent**.
-2. Click the **rotate** button (↻) next to the Hub Token field.
+2. Click the **rotate** button (↻) next to the Hub PSK field.
 3. Confirm the rotation when prompted.
 
-The Hub generates a new 32-byte cryptographic token, persists it to `hub.token` in the data directory, and updates the in-memory value immediately. **Existing agents are not affected** — they only use the token during initial registration. New agents must use the updated token.
+The Hub generates a new 32-byte cryptographic PSK, persists it to `hub.psk` in the data directory, and updates the in-memory value immediately. **All existing agents will stop authenticating** until they are redeployed with the new PSK — redeploy them via the deploy wizard which auto-fills the new value.
 
-The rotated token survives Hub restarts (loaded from disk on startup).
+The PSK survives Hub restarts (loaded from disk on startup). On first boot, if no `hub.psk` file exists, the Hub generates one automatically.
 
 ### Setup
 
 Notifications are dispatched through the Vigil Server's notification system. Configure your notification channels (Discord webhook, Telegram bot, email, etc.) in the Vigil Server settings. The SnapRAID Hub automatically forwards all events upstream — no additional configuration is needed on the Hub or Agent side.
+
+## Security Model
+
+| Layer | Mechanism |
+|-------|-----------|
+| **Vigil ↔ Hub** | Bearer token (`VIGIL_TOKEN`) over WebSocket |
+| **Hub ↔ Agent** | Pre-shared key (PSK) via `Authorization: Bearer` header |
+| **Command integrity** | Ed25519 signature verification on commands routed through the Hub. The Vigil server signs commands with its private key; the Hub verifies using `VIGIL_SERVER_PUBKEY`. |
+
+> **Note:** If `VIGIL_SERVER_PUBKEY` is not configured, signature verification is disabled. This is acceptable for development but **not recommended for production**.
 
 ## API Reference
 
@@ -541,15 +636,15 @@ Notifications are dispatched through the Vigil Server's notification system. Con
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
-| `GET` | `/api/deploy-info` | Returns Hub URL and token for the deploy-wizard prefill |
-| `POST` | `/api/agents/register` | Agent self-registration |
+| `GET` | `/api/deploy-info` | Returns Hub URL and PSK for the deploy-wizard prefill |
+| `POST` | `/api/agents/register` | Agent self-registration (requires `Authorization: Bearer <psk>`) |
 | `GET` | `/api/agents` | List registered Agents |
 | `DELETE` | `/api/agents/{id}` | Remove an Agent from the registry |
 | `POST` | `/api/command` | Route a command to a target Agent |
-| `POST` | `/api/telemetry/ingest` | Receive Agent telemetry |
+| `POST` | `/api/telemetry/ingest` | Receive Agent telemetry (requires `Authorization: Bearer <psk>`) |
 | `POST` | `/api/config/{agentID}` | Forward config update to Agent |
 | `POST` | `/api/config` | Forward config update (agent_id in body, used by Vigil proxy) |
-| `POST` | `/api/rotate-token` | Rotate the Hub token (requires `{"confirm":"ROTATE"}`) |
+| `POST` | `/api/rotate-psk` | Rotate the Hub PSK (requires `{"confirm":"ROTATE"}`) |
 
 ## Troubleshooting
 
@@ -564,7 +659,7 @@ The `.content` file is bind-mounted directly into the container. SnapRAID writes
 The Hub retries registration with exponential backoff (2s to 60s). Check:
 
 1. `vigil.server_url` in `config.hub.yaml` points to the correct Vigil Server HTTP address (e.g., `http://192.168.1.10:9080`).
-2. `vigil.token` matches a token generated in the Vigil UI "Add Add-on" dialog. Tokens expire after 1 hour.
+2. `vigil.token` matches a token generated in the Vigil UI "New Add-on" dialog. Tokens expire after 1 hour.
 3. The token must be bound to an add-on in the Vigil UI before the Hub can connect. If you see `"Token not yet bound"` errors, complete the registration form in the Vigil UI first.
 4. If the Hub starts without a token (`vigil.token: ""`), it runs in standalone mode and logs a warning.
 

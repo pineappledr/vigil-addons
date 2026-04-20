@@ -86,7 +86,7 @@ func LogAgentConfig(logger *slog.Logger, cfg *AgentConfig) {
 	logger.Info("agent configuration loaded",
 		"listen_port", cfg.Listen.Port,
 		"hub_url", cfg.Hub.URL,
-		"hub_token", RedactedToken(cfg.Hub.Token),
+		"hub_psk", RedactedToken(cfg.Hub.PSK),
 		"agent_id", cfg.Identity.AgentID,
 		"advertise_addr", cfg.Identity.AdvertiseAddr,
 		"snapraid_binary", cfg.SnapRAID.BinaryPath,

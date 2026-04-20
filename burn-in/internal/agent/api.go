@@ -37,6 +37,10 @@ type JobDispatcher interface {
 // JobHistoryFunc returns all job records (active + completed) as a JSON-marshalable slice.
 type JobHistoryFunc func() any
 
+// JobStatusFunc returns a single job's poll-shape payload (see
+// `handleJobStatus` for the wire contract) or false if the id is unknown.
+type JobStatusFunc func(jobID string) (map[string]any, bool)
+
 // JobCommand is the inbound command for job dispatch.
 // Mirrors the structure expected by the job manager.
 type JobCommand struct {
@@ -52,6 +56,7 @@ type AgentAPI struct {
 	logger       *slog.Logger
 	dispatcher   JobDispatcher
 	historyFn    JobHistoryFunc
+	statusFn     JobStatusFunc
 
 	mu         sync.Mutex
 	activeJobs map[string]JobCancelFunc
@@ -67,6 +72,12 @@ func (a *AgentAPI) SetJobDispatcher(d JobDispatcher) {
 // SetJobHistoryFunc injects the function used to retrieve all job records.
 func (a *AgentAPI) SetJobHistoryFunc(fn JobHistoryFunc) {
 	a.historyFn = fn
+}
+
+// SetJobStatusFunc injects the function used to retrieve a single job's
+// poll-shape payload, served via GET /api/jobs/{id}.
+func (a *AgentAPI) SetJobStatusFunc(fn JobStatusFunc) {
+	a.statusFn = fn
 }
 
 // NewAgentAPI creates the agent API server.
@@ -98,6 +109,7 @@ func (a *AgentAPI) Handler() http.Handler {
 	mux.HandleFunc("GET /health", a.handleHealth)
 	mux.HandleFunc("POST /api/execute", a.handleExecute)
 	mux.HandleFunc("GET /api/jobs/history", a.handleJobHistory)
+	mux.HandleFunc("GET /api/jobs/{id}", a.handleJobStatus)
 	mux.HandleFunc("DELETE /api/jobs/{id}", a.handleAbortJob)
 	return mux
 }
@@ -118,6 +130,33 @@ func (a *AgentAPI) UnregisterJob(jobID string) {
 
 func (a *AgentAPI) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleJobStatus serves GET /api/jobs/{id} with a body shaped to match the
+// smart-table progress-overlay poll contract:
+//
+//	{status, phase, phase_detail?, progress_percent?, message?, fail_reason?,
+//	 elapsed_sec, eta_sec?}
+//
+// Finished jobs are served from persisted history; in-memory records take
+// precedence so a running job's `elapsed_sec` increments each poll.
+// Returns 404 for unknown ids — the overlay treats 404 as terminal.
+func (a *AgentAPI) handleJobStatus(w http.ResponseWriter, r *http.Request) {
+	jobID := r.PathValue("id")
+	if jobID == "" {
+		addonutil.WriteJSON(w, http.StatusBadRequest, addonutil.ErrorResponse{Error: "job id required"})
+		return
+	}
+	if a.statusFn == nil {
+		addonutil.WriteJSON(w, http.StatusInternalServerError, addonutil.ErrorResponse{Error: "job status provider not configured"})
+		return
+	}
+	payload, ok := a.statusFn(jobID)
+	if !ok {
+		addonutil.WriteJSON(w, http.StatusNotFound, addonutil.ErrorResponse{Error: fmt.Sprintf("job %q not found", jobID)})
+		return
+	}
+	addonutil.WriteJSON(w, http.StatusOK, payload)
 }
 
 func (a *AgentAPI) handleJobHistory(w http.ResponseWriter, _ *http.Request) {

@@ -41,9 +41,11 @@ Vigil add-ons follow a fully decoupled architecture. The Vigil server and each a
 
 ## Available Add-ons
 
-| Add-on | Description | Documentation |
-|--------|-------------|---------------|
-| **Disk Burn-in & Pre-clear** | Production-grade drive qualification tool with SMART testing, destructive badblocks, automated GPT partitioning, and ext4 formatting. | [burn-in/README.md](burn-in/README.md) |
+| Add-on | Description | Status | Documentation |
+| ------ | ----------- | ------ | ------------- |
+| **Disk Burn-in & Pre-clear** | Production-grade drive qualification tool with SMART testing, destructive badblocks, automated GPT partitioning, and ext4 formatting. | Stable | [burn-in/README.md](burn-in/README.md) |
+| **SnapRAID** | Full lifecycle management of local SnapRAID arrays — native Go scheduling engine, safety gates, job history, and real-time log streaming. Replaces `snapraid-runner` and cron wrappers. | Stable | [snapraid/README.md](snapraid/README.md) |
+| **ZFS Manager** | Visual ZFS pool, dataset, and snapshot management for Proxmox, Debian, Ubuntu, and bare-metal Linux hosts. Multi-agent: one manager, many ZFS hosts. | Phase 1 (v0.1.0) | [zfs-manager/README.md](zfs-manager/README.md) |
 
 ---
 
@@ -82,27 +84,57 @@ See the **[Developer Guide](DEVELOPER_GUIDE.md)** for a complete walkthrough cov
 
 ```
 vigil-addons/
-├── README.md                  # This file
-├── DEVELOPER_GUIDE.md         # How to build a new add-on
+├── README.md                       # This file
+├── DEVELOPER_GUIDE.md              # How to build a new add-on
+├── ROADMAP.md                      # Planned add-ons and features
 ├── LICENSE
+├── shared/                         # Shared Go libraries
+│   ├── addonutil/                  # HTTP helpers (WriteJSON, etc.)
+│   └── vigilclient/                # Vigil registration + telemetry client
 ├── .github/
 │   └── workflows/
-│       └── burnin.yml         # CI/CD for the burn-in add-on
-└── burn-in/                   # Disk Burn-in & Pre-clear add-on
-    ├── README.md              # Tool-specific documentation
-    ├── Dockerfile.hub
-    ├── Dockerfile.agent
+│       ├── burnin.yml              # CI/CD for burn-in
+│       ├── snapraid.yml            # CI/CD for snapraid
+│       └── zfs-manager.yml        # CI/CD for zfs-manager
+├── burn-in/                        # Disk Burn-in & Pre-clear add-on
+│   ├── README.md
+│   ├── Dockerfile.hub
+│   ├── Dockerfile.agent
+│   ├── go.mod
+│   ├── cmd/
+│   │   ├── hub/                    # Hub binary
+│   │   └── agent/                  # Agent binary
+│   └── internal/
+│       ├── config/
+│       ├── hub/
+│       ├── agent/
+│       ├── drive/
+│       └── jobs/
+├── snapraid/                       # SnapRAID add-on
+│   ├── README.md
+│   ├── Dockerfile.hub
+│   ├── Dockerfile.agent
+│   ├── go.mod
+│   ├── cmd/
+│   │   ├── hub/
+│   │   └── agent/
+│   └── internal/
+│       ├── config/
+│       ├── hub/
+│       └── agent/
+└── zfs-manager/                    # ZFS Manager add-on
+    ├── README.md
+    ├── Dockerfile.manager
+    ├── Dockerfile.agent            # Alpine (default)
+    ├── Dockerfile.agent.debian     # Debian/glibc for Proxmox hosts
     ├── go.mod
     ├── cmd/
-    │   ├── hub/               # Hub binary (Tier 2)
-    │   └── agent/             # Agent binary (Tier 3)
-    ├── internal/
-    │   ├── config/            # Configuration loaders
-    │   ├── hub/               # Hub server, registry, router, aggregator
-    │   ├── agent/             # Agent API, telemetry, discovery
-    │   ├── drive/             # Drive identification, SMART, badblocks, partitioning
-    │   └── jobs/              # Job orchestrators, manager, persistence
-    └── manifest.json          # UI manifest (symlink)
+    │   ├── manager/                # Manager binary + manifest.json
+    │   └── agent/                  # Agent binary
+    └── internal/
+        ├── config/
+        ├── manager/
+        └── agent/
 ```
 
 ---

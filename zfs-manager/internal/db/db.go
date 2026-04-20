@@ -1,0 +1,430 @@
+package db
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+const timeFmt = "2006-01-02 15:04:05"
+
+// Open initializes the SQLite database and runs migrations.
+func Open(dbPath string) (*sql.DB, error) {
+	dir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		return nil, fmt.Errorf("create db directory %s: %w", dir, err)
+	}
+
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_pragma=foreign_keys(1)")
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite %s: %w", dbPath, err)
+	}
+
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping sqlite: %w", err)
+	}
+
+	if err := os.Chmod(dbPath, 0600); err != nil && !os.IsNotExist(err) {
+		db.Close()
+		return nil, fmt.Errorf("chmod db file: %w", err)
+	}
+
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+
+	return db, nil
+}
+
+func migrate(db *sql.DB) error {
+	const schema = `
+	CREATE TABLE IF NOT EXISTS scheduled_tasks (
+		id               INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_type        TEXT    NOT NULL,  -- 'snapshot', 'scrub', or 'replication'
+		target           TEXT    NOT NULL,  -- dataset or pool name
+		schedule         TEXT    NOT NULL,  -- cron expression (5-field)
+		recursive        BOOLEAN NOT NULL DEFAULT 0,
+		enabled          BOOLEAN NOT NULL DEFAULT 1,
+		prefix           TEXT    NOT NULL DEFAULT 'auto',
+		retention        INTEGER NOT NULL DEFAULT 0,  -- max snapshots to keep (0 = unlimited)
+		created_at       DATETIME NOT NULL DEFAULT (datetime('now')),
+		updated_at       DATETIME NOT NULL DEFAULT (datetime('now')),
+		-- Phase 5: replication columns (nullable)
+		dest_target      TEXT,
+		replication_mode TEXT,     -- 'local' or 'remote'
+		last_sent_snap   TEXT,
+		-- Phase 5.2: remote replication fields (only set when replication_mode='remote')
+		dest_host        TEXT,
+		dest_port        INTEGER,
+		dest_user        TEXT,
+		ssh_key_name     TEXT,
+		bandwidth_kbps   INTEGER,
+		-- v0.5.1: opt-in replication features
+		manage_remote_retention BOOLEAN NOT NULL DEFAULT 0,
+		use_bookmarks           BOOLEAN NOT NULL DEFAULT 0
+	);
+
+	CREATE TABLE IF NOT EXISTS job_history (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_id     INTEGER,
+		job_type    TEXT    NOT NULL,
+		trigger     TEXT    NOT NULL,  -- 'scheduled' or 'manual'
+		started_at  DATETIME NOT NULL,
+		finished_at DATETIME,
+		status      TEXT    NOT NULL DEFAULT 'running',
+		message     TEXT,
+		FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id) ON DELETE SET NULL
+	);
+	`
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Additive migration for existing databases that lack the replication columns.
+	for _, stmt := range []string{
+		`ALTER TABLE scheduled_tasks ADD COLUMN dest_target     TEXT`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN replication_mode TEXT`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN last_sent_snap  TEXT`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN dest_host       TEXT`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN dest_port       INTEGER`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN dest_user       TEXT`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN ssh_key_name    TEXT`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN bandwidth_kbps  INTEGER`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN manage_remote_retention BOOLEAN NOT NULL DEFAULT 0`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN use_bookmarks           BOOLEAN NOT NULL DEFAULT 0`,
+	} {
+		// Ignore "duplicate column" errors — idempotent.
+		_, _ = db.Exec(stmt)
+	}
+
+	return nil
+}
+
+// --- Scheduled Tasks ---
+
+// ScheduledTask represents a periodic snapshot, scrub, or replication task.
+type ScheduledTask struct {
+	ID        int64  `json:"id"`
+	TaskType  string `json:"task_type"`
+	Target    string `json:"target"`
+	Schedule  string `json:"schedule"`
+	Recursive bool   `json:"recursive"`
+	Enabled   bool   `json:"enabled"`
+	Prefix    string `json:"prefix"`
+	Retention int    `json:"retention"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+
+	// Replication-specific fields (nullable — only set when task_type='replication').
+	DestTarget      *string `json:"dest_target,omitempty"`
+	ReplicationMode *string `json:"replication_mode,omitempty"` // "local" | "remote"
+	LastSentSnap    *string `json:"last_sent_snap,omitempty"`
+
+	// Remote replication (only set when replication_mode='remote').
+	DestHost      *string `json:"dest_host,omitempty"`
+	DestPort      *int    `json:"dest_port,omitempty"`
+	DestUser      *string `json:"dest_user,omitempty"`
+	SSHKeyName    *string `json:"ssh_key_name,omitempty"`
+	BandwidthKbps *int    `json:"bandwidth_kbps,omitempty"`
+
+	// v0.5.1 opt-in features.
+	// ManageRemoteRetention: when true on a remote-mode task, the scheduler
+	// destroys old snapshots on the remote host after a successful receive,
+	// same count as Retention. Requires the SSH user to have
+	// `destroy,mount` permissions on the destination dataset.
+	// UseBookmarks: create a zfs bookmark of each sent snapshot and use it as
+	// the incremental base next run, so source snapshots can be pruned
+	// aggressively without breaking the common-point chain.
+	ManageRemoteRetention bool `json:"manage_remote_retention"`
+	UseBookmarks          bool `json:"use_bookmarks"`
+}
+
+// InsertTask creates a new scheduled task.
+func InsertTask(db *sql.DB, t ScheduledTask) (int64, error) {
+	now := time.Now().UTC().Format(timeFmt)
+	res, err := db.Exec(
+		`INSERT INTO scheduled_tasks (
+			task_type, target, schedule, recursive, enabled, prefix, retention,
+			dest_target, replication_mode, last_sent_snap,
+			dest_host, dest_port, dest_user, ssh_key_name, bandwidth_kbps,
+			manage_remote_retention, use_bookmarks,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.TaskType, t.Target, t.Schedule, t.Recursive, t.Enabled, t.Prefix, t.Retention,
+		t.DestTarget, t.ReplicationMode, t.LastSentSnap,
+		t.DestHost, t.DestPort, t.DestUser, t.SSHKeyName, t.BandwidthKbps,
+		t.ManageRemoteRetention, t.UseBookmarks,
+		now, now,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert task: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// UpdateTask modifies an existing scheduled task.
+func UpdateTask(db *sql.DB, t ScheduledTask) error {
+	now := time.Now().UTC().Format(timeFmt)
+	_, err := db.Exec(
+		`UPDATE scheduled_tasks SET
+			target = ?, schedule = ?, recursive = ?, enabled = ?, prefix = ?, retention = ?,
+			dest_target = ?, replication_mode = ?, last_sent_snap = ?,
+			dest_host = ?, dest_port = ?, dest_user = ?, ssh_key_name = ?, bandwidth_kbps = ?,
+			manage_remote_retention = ?, use_bookmarks = ?,
+			updated_at = ?
+		WHERE id = ?`,
+		t.Target, t.Schedule, t.Recursive, t.Enabled, t.Prefix, t.Retention,
+		t.DestTarget, t.ReplicationMode, t.LastSentSnap,
+		t.DestHost, t.DestPort, t.DestUser, t.SSHKeyName, t.BandwidthKbps,
+		t.ManageRemoteRetention, t.UseBookmarks,
+		now, t.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update task %d: %w", t.ID, err)
+	}
+	return nil
+}
+
+// UpdateLastSentSnap updates only the last_sent_snap column for a replication task.
+func UpdateLastSentSnap(db *sql.DB, taskID int64, snap string) error {
+	_, err := db.Exec(`UPDATE scheduled_tasks SET last_sent_snap = ? WHERE id = ?`, snap, taskID)
+	return err
+}
+
+// DeleteTask removes a scheduled task.
+func DeleteTask(db *sql.DB, id int64) error {
+	_, err := db.Exec(`DELETE FROM scheduled_tasks WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete task %d: %w", id, err)
+	}
+	return nil
+}
+
+const taskColumns = `id, task_type, target, schedule, recursive, enabled, prefix, retention, created_at, updated_at,
+	COALESCE(dest_target,''), COALESCE(replication_mode,''), COALESCE(last_sent_snap,''),
+	COALESCE(dest_host,''), COALESCE(dest_port,0), COALESCE(dest_user,''), COALESCE(ssh_key_name,''), COALESCE(bandwidth_kbps,0),
+	COALESCE(manage_remote_retention,0), COALESCE(use_bookmarks,0)`
+
+// GetTask returns a single task by ID.
+func GetTask(db *sql.DB, id int64) (*ScheduledTask, error) {
+	row := db.QueryRow(`SELECT `+taskColumns+` FROM scheduled_tasks WHERE id = ?`, id)
+	return scanTask(row)
+}
+
+// ListTasks returns all scheduled tasks.
+func ListTasks(db *sql.DB) ([]ScheduledTask, error) {
+	rows, err := db.Query(`SELECT ` + taskColumns + ` FROM scheduled_tasks ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("query tasks: %w", err)
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+// ListEnabledTasks returns all enabled scheduled tasks.
+func ListEnabledTasks(db *sql.DB) ([]ScheduledTask, error) {
+	rows, err := db.Query(`SELECT ` + taskColumns + ` FROM scheduled_tasks WHERE enabled = 1 ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("query enabled tasks: %w", err)
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+func scanTask(row *sql.Row) (*ScheduledTask, error) {
+	t, err := scanTaskFields(func(dest ...any) error { return row.Scan(dest...) })
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("scan task: %w", err)
+	}
+	return t, nil
+}
+
+func scanTasks(rows *sql.Rows) ([]ScheduledTask, error) {
+	var tasks []ScheduledTask
+	for rows.Next() {
+		t, err := scanTaskFields(rows.Scan)
+		if err != nil {
+			return nil, fmt.Errorf("scan task: %w", err)
+		}
+		tasks = append(tasks, *t)
+	}
+	return tasks, rows.Err()
+}
+
+func scanTaskFields(scan func(dest ...any) error) (*ScheduledTask, error) {
+	var t ScheduledTask
+	var destTarget, replMode, lastSnap, destHost, destUser, sshKeyName string
+	var destPort, bandwidthKbps int
+	if err := scan(
+		&t.ID, &t.TaskType, &t.Target, &t.Schedule, &t.Recursive, &t.Enabled,
+		&t.Prefix, &t.Retention, &t.CreatedAt, &t.UpdatedAt,
+		&destTarget, &replMode, &lastSnap,
+		&destHost, &destPort, &destUser, &sshKeyName, &bandwidthKbps,
+		&t.ManageRemoteRetention, &t.UseBookmarks,
+	); err != nil {
+		return nil, err
+	}
+	if destTarget != "" {
+		t.DestTarget = &destTarget
+	}
+	if replMode != "" {
+		t.ReplicationMode = &replMode
+	}
+	if lastSnap != "" {
+		t.LastSentSnap = &lastSnap
+	}
+	if destHost != "" {
+		t.DestHost = &destHost
+	}
+	if destPort != 0 {
+		t.DestPort = &destPort
+	}
+	if destUser != "" {
+		t.DestUser = &destUser
+	}
+	if sshKeyName != "" {
+		t.SSHKeyName = &sshKeyName
+	}
+	if bandwidthKbps != 0 {
+		t.BandwidthKbps = &bandwidthKbps
+	}
+	return &t, nil
+}
+
+// --- Job History ---
+
+// JobRecord represents a row in the job_history table.
+type JobRecord struct {
+	ID         int64  `json:"id"`
+	TaskID     *int64 `json:"task_id,omitempty"`
+	JobType    string `json:"job_type"`
+	Trigger    string `json:"trigger"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at,omitempty"`
+	Status     string `json:"status"`
+	Message    string `json:"message,omitempty"`
+	// DurationSecs is computed at scan time from started_at/finished_at so
+	// the smart-table duration formatter can render it directly. Zero for
+	// running jobs (no finished_at yet).
+	DurationSecs int64 `json:"duration_secs,omitempty"`
+}
+
+// InsertJob creates a new running job record.
+func InsertJob(db *sql.DB, taskID *int64, jobType, trigger string) (int64, error) {
+	now := time.Now().UTC().Format(timeFmt)
+	res, err := db.Exec(
+		`INSERT INTO job_history (task_id, job_type, trigger, started_at, status) VALUES (?, ?, ?, ?, 'running')`,
+		taskID, jobType, trigger, now,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert job: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// CompleteJob finalizes a job record.
+func CompleteJob(db *sql.DB, id int64, status, message string) error {
+	now := time.Now().UTC().Format(timeFmt)
+	_, err := db.Exec(
+		`UPDATE job_history SET finished_at = ?, status = ?, message = ? WHERE id = ?`,
+		now, status, message, id,
+	)
+	if err != nil {
+		return fmt.Errorf("complete job %d: %w", id, err)
+	}
+	return nil
+}
+
+// RecentJobs returns job history ordered by start time descending.
+func RecentJobs(db *sql.DB, limit int) ([]JobRecord, error) {
+	rows, err := db.Query(
+		`SELECT id, task_id, job_type, trigger, started_at, COALESCE(finished_at, ''), status, COALESCE(message, '')
+		 FROM job_history ORDER BY started_at DESC LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query recent jobs: %w", err)
+	}
+	defer rows.Close()
+	return scanJobs(rows)
+}
+
+// JobsForTask returns job history for a specific task.
+func JobsForTask(db *sql.DB, taskID int64, limit int) ([]JobRecord, error) {
+	rows, err := db.Query(
+		`SELECT id, task_id, job_type, trigger, started_at, COALESCE(finished_at, ''), status, COALESCE(message, '')
+		 FROM job_history WHERE task_id = ? ORDER BY started_at DESC LIMIT ?`, taskID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query jobs for task %d: %w", taskID, err)
+	}
+	defer rows.Close()
+	return scanJobs(rows)
+}
+
+func scanJobs(rows *sql.Rows) ([]JobRecord, error) {
+	var jobs []JobRecord
+	for rows.Next() {
+		var j JobRecord
+		if err := rows.Scan(&j.ID, &j.TaskID, &j.JobType, &j.Trigger, &j.StartedAt, &j.FinishedAt, &j.Status, &j.Message); err != nil {
+			return nil, fmt.Errorf("scan job: %w", err)
+		}
+		if j.FinishedAt != "" {
+			if start, err1 := time.Parse(timeFmt, j.StartedAt); err1 == nil {
+				if finish, err2 := time.Parse(timeFmt, j.FinishedAt); err2 == nil {
+					if d := finish.Sub(start); d > 0 {
+						j.DurationSecs = int64(d.Seconds())
+					}
+				}
+			}
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs, rows.Err()
+}
+
+// PruneJobs deletes job records older than the given retention.
+func PruneJobs(db *sql.DB, retention time.Duration) (int64, error) {
+	cutoff := time.Now().UTC().Add(-retention).Format(timeFmt)
+	res, err := db.Exec(`DELETE FROM job_history WHERE started_at < ?`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune jobs: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// StartPruneLoop runs a daily background prune of old job records.
+func StartPruneLoop(ctx context.Context, database *sql.DB, retention time.Duration, logger *slog.Logger) {
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+
+		prune := func() {
+			if n, err := PruneJobs(database, retention); err != nil {
+				logger.Error("job history prune failed", "error", err)
+			} else if n > 0 {
+				logger.Info("pruned old job history records", "deleted", n)
+			}
+		}
+		prune()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				prune()
+			}
+		}
+	}()
+}

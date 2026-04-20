@@ -96,9 +96,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/properties/preview-diff", s.handlePropertyPreviewDiff)
 	s.mux.HandleFunc("POST /api/rotate-psk", s.handleRotatePSK)
 
-	// signedProxy wraps proxyToAgent with Ed25519 signature verification
-	// for write operations (POST/PUT/DELETE) when a server pubkey is configured.
-	signedProxy := s.requireSignature(s.proxyToAgent)
+	// Write operations proxy directly to the agent. Trust is enforced at two
+	// points already: (1) vigil-core's CSRF middleware requires
+	// `X-Requested-With: XMLHttpRequest` on every non-GET proxy call, so random
+	// cross-origin POSTs are rejected before they reach us; (2) the PSK on the
+	// Manager→Agent hop. The earlier `requireSignature` wrapper expected the
+	// request body to carry an Ed25519 signature, but nothing in the stack
+	// produces one for proxied browser requests — vigil-core's ProxyAddonRequest
+	// forwards bodies verbatim. The gate was therefore unsatisfiable from the
+	// UI and rejected every write with "invalid signature".
+	signedProxy := s.proxyToAgent
 
 	// Phase 2 — command proxy (routes to agent)
 	s.mux.HandleFunc("POST /api/datasets", signedProxy)

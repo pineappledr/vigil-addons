@@ -314,6 +314,10 @@ type JobRecord struct {
 	FinishedAt string `json:"finished_at,omitempty"`
 	Status     string `json:"status"`
 	Message    string `json:"message,omitempty"`
+	// DurationSecs is computed at scan time from started_at/finished_at so
+	// the smart-table duration formatter can render it directly. Zero for
+	// running jobs (no finished_at yet).
+	DurationSecs int64 `json:"duration_secs,omitempty"`
 }
 
 // InsertJob creates a new running job record.
@@ -374,6 +378,15 @@ func scanJobs(rows *sql.Rows) ([]JobRecord, error) {
 		var j JobRecord
 		if err := rows.Scan(&j.ID, &j.TaskID, &j.JobType, &j.Trigger, &j.StartedAt, &j.FinishedAt, &j.Status, &j.Message); err != nil {
 			return nil, fmt.Errorf("scan job: %w", err)
+		}
+		if j.FinishedAt != "" {
+			if start, err1 := time.Parse(timeFmt, j.StartedAt); err1 == nil {
+				if finish, err2 := time.Parse(timeFmt, j.FinishedAt); err2 == nil {
+					if d := finish.Sub(start); d > 0 {
+						j.DurationSecs = int64(d.Seconds())
+					}
+				}
+			}
 		}
 		jobs = append(jobs, j)
 	}

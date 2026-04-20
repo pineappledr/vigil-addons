@@ -1458,6 +1458,34 @@
             "default_sort": { "key": "id", "direction": "asc" },
             "row_actions": [
               {
+                "id": "task-history",
+                "label": "History",
+                "icon": "history",
+                "safety_tier": "green",
+                "action": {
+                  "method": "GET",
+                  "endpoint": "/api/tasks/{row.id}/history"
+                },
+                "result_view": {
+                  "title": "Run History — Task #{row.id} ({row.task_type})",
+                  "type": "table",
+                  "columns": [
+                    { "key": "id",            "label": "Job ID",   "sortable": true },
+                    { "key": "trigger",       "label": "Trigger",  "sortable": true },
+                    { "key": "started_at",    "label": "Started",  "sortable": true, "format": "timestamp" },
+                    { "key": "finished_at",   "label": "Finished", "sortable": true, "format": "timestamp" },
+                    { "key": "duration_secs", "label": "Duration", "sortable": true, "format": "duration" },
+                    { "key": "status",        "label": "Status",   "sortable": true, "badge": {
+                      "success": "success",
+                      "error":   "danger",
+                      "running": "warning"
+                    }},
+                    { "key": "message",       "label": "Message",  "sortable": false }
+                  ],
+                  "default_sort": { "key": "started_at", "direction": "desc" }
+                }
+              },
+              {
                 "id": "edit-task",
                 "label": "Edit",
                 "icon": "edit",
@@ -1671,15 +1699,16 @@
                 "scrub":       "warning",
                 "replication": "info"
               }},
-              { "key": "trigger",     "label": "Trigger",   "sortable": true },
-              { "key": "started_at",  "label": "Started",   "sortable": true, "format": "timestamp" },
-              { "key": "finished_at", "label": "Finished",  "sortable": true, "format": "timestamp" },
-              { "key": "status",      "label": "Status",    "sortable": true, "badge": {
+              { "key": "trigger",       "label": "Trigger",  "sortable": true },
+              { "key": "started_at",    "label": "Started",  "sortable": true, "format": "timestamp" },
+              { "key": "finished_at",   "label": "Finished", "sortable": true, "format": "timestamp" },
+              { "key": "duration_secs", "label": "Duration", "sortable": true, "format": "duration" },
+              { "key": "status",        "label": "Status",   "sortable": true, "badge": {
                 "success": "success",
                 "error":   "danger",
                 "running": "warning"
               }},
-              { "key": "message",     "label": "Message",   "sortable": false }
+              { "key": "message",       "label": "Message",  "sortable": false }
             ],
             "sortable": true,
             "default_sort": { "key": "started_at", "direction": "desc" }
@@ -1947,16 +1976,17 @@
                   "title": "Replication History — Task #{row.id}",
                   "type": "table",
                   "columns": [
-                    { "key": "id",          "label": "Job ID",     "sortable": true },
-                    { "key": "trigger",     "label": "Trigger",    "sortable": true },
-                    { "key": "started_at",  "label": "Started",    "sortable": true, "format": "timestamp" },
-                    { "key": "finished_at", "label": "Finished",   "sortable": true, "format": "timestamp" },
-                    { "key": "status",      "label": "Status",     "sortable": true, "badge": {
+                    { "key": "id",            "label": "Job ID",   "sortable": true },
+                    { "key": "trigger",       "label": "Trigger",  "sortable": true },
+                    { "key": "started_at",    "label": "Started",  "sortable": true, "format": "timestamp" },
+                    { "key": "finished_at",   "label": "Finished", "sortable": true, "format": "timestamp" },
+                    { "key": "duration_secs", "label": "Duration", "sortable": true, "format": "duration" },
+                    { "key": "status",        "label": "Status",   "sortable": true, "badge": {
                       "success": "success",
                       "error":   "danger",
                       "running": "warning"
                     }},
-                    { "key": "message",     "label": "Message",    "sortable": false }
+                    { "key": "message",       "label": "Message",  "sortable": false }
                   ],
                   "default_sort": { "key": "started_at", "direction": "desc" }
                 }

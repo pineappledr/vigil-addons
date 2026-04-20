@@ -54,68 +54,96 @@ func NewServer(cfg *config.AgentConfig, engine *Engine, collector *Collector, da
 	return s
 }
 
+// requirePSK gates every /api/* handler on the hub PSK supplied by the
+// manager during registration (cfg.Hub.PSK). The manager forwards it as
+// Authorization: Bearer <psk> on every proxied request. Falls open when
+// no PSK is configured so unit tests and dev loops work against a bare
+// Server without passing an auth header on every request.
+func (s *Server) requirePSK(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg == nil || s.cfg.Hub.PSK == "" {
+			next(w, r)
+			return
+		}
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			addonutil.WriteJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing authorization header"})
+			return
+		}
+		if strings.TrimPrefix(auth, "Bearer ") != s.cfg.Hub.PSK {
+			addonutil.WriteJSON(w, http.StatusForbidden, map[string]string{"error": "invalid pre-shared key"})
+			return
+		}
+		next(w, r)
+	}
+}
+
 func (s *Server) routes() {
-	// Read-only (telemetry)
+	req := s.requirePSK
+
+	// Health is always public for liveness probes.
 	s.mux.HandleFunc("GET /health", s.handleHealth)
-	s.mux.HandleFunc("GET /api/telemetry", s.handleTelemetry)
-	s.mux.HandleFunc("GET /api/pools", s.handlePools)
-	s.mux.HandleFunc("GET /api/datasets", s.handleDatasets)
-	s.mux.HandleFunc("GET /api/snapshots", s.handleSnapshots)
-	s.mux.HandleFunc("GET /api/presets", s.handlePresets)
-	s.mux.HandleFunc("GET /api/arc", s.handleARC)
-	s.mux.HandleFunc("GET /api/iostat", s.handleIOStat)
-	s.mux.HandleFunc("GET /api/properties/catalog", s.handlePropertyCatalog)
-	s.mux.HandleFunc("GET /api/dataset/properties", s.handleGetDatasetProperties)
-	s.mux.HandleFunc("GET /api/pool/properties", s.handleGetPoolProperties)
-	s.mux.HandleFunc("PUT /api/pool/properties", s.handleSetPoolProperties)
+
+	// Read-only (telemetry)
+	s.mux.HandleFunc("GET /api/telemetry", req(s.handleTelemetry))
+	s.mux.HandleFunc("GET /api/pools", req(s.handlePools))
+	s.mux.HandleFunc("GET /api/datasets", req(s.handleDatasets))
+	s.mux.HandleFunc("GET /api/snapshots", req(s.handleSnapshots))
+	s.mux.HandleFunc("GET /api/presets", req(s.handlePresets))
+	s.mux.HandleFunc("GET /api/arc", req(s.handleARC))
+	s.mux.HandleFunc("GET /api/iostat", req(s.handleIOStat))
+	s.mux.HandleFunc("GET /api/properties/catalog", req(s.handlePropertyCatalog))
+	s.mux.HandleFunc("GET /api/dataset/properties", req(s.handleGetDatasetProperties))
+	s.mux.HandleFunc("GET /api/pool/properties", req(s.handleGetPoolProperties))
+	s.mux.HandleFunc("PUT /api/pool/properties", req(s.handleSetPoolProperties))
 
 	// Write operations (Phase 2)
-	s.mux.HandleFunc("POST /api/datasets", s.handleCreateDataset)
-	s.mux.HandleFunc("PUT /api/datasets", s.handleEditDataset)
-	s.mux.HandleFunc("DELETE /api/datasets", s.handleDeleteDataset)
-	s.mux.HandleFunc("POST /api/snapshots", s.handleCreateSnapshot)
-	s.mux.HandleFunc("DELETE /api/snapshots", s.handleDeleteSnapshot)
-	s.mux.HandleFunc("POST /api/snapshots/rollback", s.handleRollbackSnapshot)
-	s.mux.HandleFunc("POST /api/scrub/start", s.handleStartScrub)
-	s.mux.HandleFunc("POST /api/scrub/pause", s.handlePauseScrub)
-	s.mux.HandleFunc("POST /api/scrub/cancel", s.handleCancelScrub)
+	s.mux.HandleFunc("POST /api/datasets", req(s.handleCreateDataset))
+	s.mux.HandleFunc("PUT /api/datasets", req(s.handleEditDataset))
+	s.mux.HandleFunc("DELETE /api/datasets", req(s.handleDeleteDataset))
+	s.mux.HandleFunc("POST /api/snapshots", req(s.handleCreateSnapshot))
+	s.mux.HandleFunc("DELETE /api/snapshots", req(s.handleDeleteSnapshot))
+	s.mux.HandleFunc("POST /api/snapshots/rollback", req(s.handleRollbackSnapshot))
+	s.mux.HandleFunc("POST /api/scrub/start", req(s.handleStartScrub))
+	s.mux.HandleFunc("POST /api/scrub/pause", req(s.handlePauseScrub))
+	s.mux.HandleFunc("POST /api/scrub/cancel", req(s.handleCancelScrub))
 
 	// Command preview (returns the CLI command without executing)
-	s.mux.HandleFunc("POST /api/preview", s.handlePreview)
+	s.mux.HandleFunc("POST /api/preview", req(s.handlePreview))
 
 	// Phase 4 — Disk & Pool Operations
-	s.mux.HandleFunc("GET /api/disks", s.handleListDisks)
-	s.mux.HandleFunc("POST /api/pool/replace", s.handleReplaceDevice)
-	s.mux.HandleFunc("POST /api/pool/add-vdev", s.handleAddVdev)
-	s.mux.HandleFunc("POST /api/devices/offline", s.handleOfflineDevice)
-	s.mux.HandleFunc("POST /api/devices/online", s.handleOnlineDevice)
-	s.mux.HandleFunc("POST /api/devices/identify", s.handleIdentifyDevice)
-	s.mux.HandleFunc("POST /api/pool/clear", s.handleClearErrors)
-	s.mux.HandleFunc("GET /api/pool/importable", s.handleListImportablePools)
-	s.mux.HandleFunc("POST /api/pool/import", s.handleImportPool)
-	s.mux.HandleFunc("POST /api/pool/export", s.handleExportPool)
-	s.mux.HandleFunc("POST /api/pool/create", s.handleCreatePool)
+	s.mux.HandleFunc("GET /api/disks", req(s.handleListDisks))
+	s.mux.HandleFunc("POST /api/pool/replace", req(s.handleReplaceDevice))
+	s.mux.HandleFunc("POST /api/pool/add-vdev", req(s.handleAddVdev))
+	s.mux.HandleFunc("POST /api/devices/offline", req(s.handleOfflineDevice))
+	s.mux.HandleFunc("POST /api/devices/online", req(s.handleOnlineDevice))
+	s.mux.HandleFunc("POST /api/devices/identify", req(s.handleIdentifyDevice))
+	s.mux.HandleFunc("POST /api/pool/clear", req(s.handleClearErrors))
+	s.mux.HandleFunc("GET /api/pool/importable", req(s.handleListImportablePools))
+	s.mux.HandleFunc("POST /api/pool/import", req(s.handleImportPool))
+	s.mux.HandleFunc("POST /api/pool/export", req(s.handleExportPool))
+	s.mux.HandleFunc("POST /api/pool/create", req(s.handleCreatePool))
 
 	// Phase 3 — Scheduled Tasks
-	s.mux.HandleFunc("GET /api/tasks", s.handleListTasks)
-	s.mux.HandleFunc("POST /api/tasks", s.handleCreateTask)
-	s.mux.HandleFunc("PUT /api/tasks/{id}", s.handleUpdateTask)
-	s.mux.HandleFunc("DELETE /api/tasks/{id}", s.handleDeleteTask)
-	s.mux.HandleFunc("GET /api/tasks/{id}/history", s.handleTaskHistory)
-	s.mux.HandleFunc("GET /api/jobs", s.handleJobHistory)
-	s.mux.HandleFunc("GET /api/retention", s.handleRetentionStats)
-	s.mux.HandleFunc("POST /api/retention/cleanup", s.handleRetentionCleanup)
+	s.mux.HandleFunc("GET /api/tasks", req(s.handleListTasks))
+	s.mux.HandleFunc("POST /api/tasks", req(s.handleCreateTask))
+	s.mux.HandleFunc("PUT /api/tasks/{id}", req(s.handleUpdateTask))
+	s.mux.HandleFunc("DELETE /api/tasks/{id}", req(s.handleDeleteTask))
+	s.mux.HandleFunc("GET /api/tasks/{id}/history", req(s.handleTaskHistory))
+	s.mux.HandleFunc("GET /api/jobs", req(s.handleJobHistory))
+	s.mux.HandleFunc("GET /api/retention", req(s.handleRetentionStats))
+	s.mux.HandleFunc("POST /api/retention/cleanup", req(s.handleRetentionCleanup))
 
 	// Phase 5 — Replication (local + remote)
-	s.mux.HandleFunc("GET /api/replication/tasks", s.handleListReplicationTasks)
-	s.mux.HandleFunc("POST /api/replication/tasks", s.handleCreateReplicationTask)
-	s.mux.HandleFunc("PUT /api/replication/tasks/{id}", s.handleUpdateReplicationTask)
-	s.mux.HandleFunc("DELETE /api/replication/tasks/{id}", s.handleDeleteReplicationTask)
-	s.mux.HandleFunc("POST /api/replication/tasks/{id}/run", s.handleRunReplicationTask)
-	s.mux.HandleFunc("GET /api/replication/tasks/{id}/history", s.handleReplicationTaskHistory)
-	s.mux.HandleFunc("POST /api/replication/test-connection", s.handleTestRemoteConnection)
-	s.mux.HandleFunc("GET /api/replication/keys/{name}/public", s.handleGetReplicationKeyPublic)
-	s.mux.HandleFunc("POST /api/replication/keys/{name}/rotate", s.handleRotateReplicationKey)
+	s.mux.HandleFunc("GET /api/replication/tasks", req(s.handleListReplicationTasks))
+	s.mux.HandleFunc("POST /api/replication/tasks", req(s.handleCreateReplicationTask))
+	s.mux.HandleFunc("PUT /api/replication/tasks/{id}", req(s.handleUpdateReplicationTask))
+	s.mux.HandleFunc("DELETE /api/replication/tasks/{id}", req(s.handleDeleteReplicationTask))
+	s.mux.HandleFunc("POST /api/replication/tasks/{id}/run", req(s.handleRunReplicationTask))
+	s.mux.HandleFunc("GET /api/replication/tasks/{id}/history", req(s.handleReplicationTaskHistory))
+	s.mux.HandleFunc("POST /api/replication/test-connection", req(s.handleTestRemoteConnection))
+	s.mux.HandleFunc("GET /api/replication/keys/{name}/public", req(s.handleGetReplicationKeyPublic))
+	s.mux.HandleFunc("POST /api/replication/keys/{name}/rotate", req(s.handleRotateReplicationKey))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

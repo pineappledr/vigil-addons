@@ -35,6 +35,50 @@ func TestDetectPoolTransitions_ResilverStillRunning(t *testing.T) {
 	}
 }
 
+func TestDetectPoolTransitions_ScrubCompleted(t *testing.T) {
+	cases := []struct {
+		name, prev string
+	}{
+		{"plain", "in_progress"},
+		{"with progress", "in_progress (47.2% done)"},
+		{"paused then completed", "paused"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prev := map[string]trackedPool{"tank": {ScrubStatus: tc.prev, NumDataVdevs: 2}}
+			curr := map[string]trackedPool{"tank": {ScrubStatus: "completed", NumDataVdevs: 2}}
+			events := detectPoolTransitions(prev, curr)
+			if len(events) != 1 {
+				t.Fatalf("expected 1 event, got %d: %+v", len(events), events)
+			}
+			if events[0].EventType != "scrub_completed" {
+				t.Errorf("event type = %q, want scrub_completed", events[0].EventType)
+			}
+			if events[0].PoolName != "tank" {
+				t.Errorf("pool name = %q, want tank", events[0].PoolName)
+			}
+		})
+	}
+}
+
+func TestDetectPoolTransitions_ScrubStillRunning(t *testing.T) {
+	prev := map[string]trackedPool{"tank": {ScrubStatus: "in_progress (10% done)", NumDataVdevs: 2}}
+	curr := map[string]trackedPool{"tank": {ScrubStatus: "in_progress (30% done)", NumDataVdevs: 2}}
+	if events := detectPoolTransitions(prev, curr); len(events) != 0 {
+		t.Errorf("expected no events while scrub still running, got %+v", events)
+	}
+}
+
+func TestDetectPoolTransitions_ScrubToNoneDoesNotFire(t *testing.T) {
+	// "none" means no scrub was recorded — treating that as completion would
+	// fire on canceled/aborted runs too. Only `completed` should trigger.
+	prev := map[string]trackedPool{"tank": {ScrubStatus: "in_progress", NumDataVdevs: 2}}
+	curr := map[string]trackedPool{"tank": {ScrubStatus: "canceled", NumDataVdevs: 2}}
+	if events := detectPoolTransitions(prev, curr); len(events) != 0 {
+		t.Errorf("expected no events on scrub cancel, got %+v", events)
+	}
+}
+
 func TestDetectPoolTransitions_PoolExpansion(t *testing.T) {
 	prev := map[string]trackedPool{"tank": {ScrubStatus: "none", NumDataVdevs: 2}}
 	curr := map[string]trackedPool{"tank": {ScrubStatus: "none", NumDataVdevs: 3}}

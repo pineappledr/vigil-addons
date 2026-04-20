@@ -20,26 +20,24 @@ import (
 
 // Server is the manager HTTP server.
 type Server struct {
-	cfg         *config.ManagerConfig
-	registry    *Registry
-	aggregator  *Aggregator
-	sigVerifier *addonutil.SignatureVerifier
-	mux         *http.ServeMux
-	logger      *slog.Logger
-	pskMu       sync.RWMutex
-	psk         string
+	cfg        *config.ManagerConfig
+	registry   *Registry
+	aggregator *Aggregator
+	mux        *http.ServeMux
+	logger     *slog.Logger
+	pskMu      sync.RWMutex
+	psk        string
 }
 
 // NewServer creates the manager HTTP server.
-func NewServer(cfg *config.ManagerConfig, registry *Registry, aggregator *Aggregator, psk string, sigVerifier *addonutil.SignatureVerifier, logger *slog.Logger) *Server {
+func NewServer(cfg *config.ManagerConfig, registry *Registry, aggregator *Aggregator, psk string, logger *slog.Logger) *Server {
 	s := &Server{
-		cfg:         cfg,
-		registry:    registry,
-		aggregator:  aggregator,
-		sigVerifier: sigVerifier,
-		mux:         http.NewServeMux(),
-		logger:      logger,
-		psk:         psk,
+		cfg:        cfg,
+		registry:   registry,
+		aggregator: aggregator,
+		mux:        http.NewServeMux(),
+		logger:     logger,
+		psk:        psk,
 	}
 	s.routes()
 	return s
@@ -69,93 +67,114 @@ func (s *Server) requirePSK(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// requireAddonToken gates requests on the registration token shared with
+// vigil-core. Vigil-core attaches the token via ProxyAddonRequest; without
+// this gate any host with network access to the manager could issue writes
+// directly. Falls open when no token is configured (standalone mode) so
+// local tooling against an unconnected manager still works.
+func (s *Server) requireAddonToken(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		expected := s.cfg.Vigil.Token
+		if expected == "" {
+			next(w, r)
+			return
+		}
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			addonutil.WriteJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing authorization header"})
+			return
+		}
+		if strings.TrimPrefix(auth, "Bearer ") != expected {
+			addonutil.WriteJSON(w, http.StatusForbidden, map[string]string{"error": "invalid addon token"})
+			return
+		}
+		next(w, r)
+	}
+}
+
 func (s *Server) routes() {
+	// Public endpoints: /health for liveness; /api/deploy-info hands the
+	// hub_psk to a newly installed agent during first-run registration
+	// (bootstrap trust relies on the operator pasting the endpoint into the
+	// agent config — no secret to check yet).
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/deploy-info", s.handleDeployInfo)
-	s.mux.HandleFunc("POST /api/agents/register", s.requirePSK(s.handleAgentRegister))
-	s.mux.HandleFunc("GET /api/agents", s.handleAgentList)
-	s.mux.HandleFunc("POST /api/agents/{id}/alias", s.handleAgentSetAlias)
-	s.mux.HandleFunc("DELETE /api/agents/{id}", s.handleAgentDelete)
-	s.mux.HandleFunc("POST /api/telemetry/ingest", s.requirePSK(s.handleTelemetryIngest))
-	s.mux.HandleFunc("GET /api/telemetry/{agentID}", s.handleTelemetryGet)
-	s.mux.HandleFunc("GET /api/pools", s.handlePools)
-	s.mux.HandleFunc("GET /api/datasets", s.handleDatasets)
-	s.mux.HandleFunc("GET /api/snapshots", s.handleSnapshots)
-	s.mux.HandleFunc("GET /api/presets", s.handlePresets)
-	s.mux.HandleFunc("GET /api/arc", s.handleARC)
-	s.mux.HandleFunc("GET /api/arc/metrics", s.handleARCMetrics)
-	s.mux.HandleFunc("GET /api/arc/recommendations", s.handleARCRecommendations)
-	s.mux.HandleFunc("GET /api/iostat", s.handleIOStat)
-	s.mux.HandleFunc("GET /api/iostat/rows", s.handleIOStatRows)
-	// Property editor (Phase 6.4). Catalog + current-value reads are pure
-	// GETs; pool property writes go through signedProxy so the signature
-	// verifier applies the same gate we use for other write operations.
-	s.mux.HandleFunc("GET /api/properties/catalog", s.proxyToAgent)
-	s.mux.HandleFunc("GET /api/dataset/properties", s.proxyToAgent)
-	s.mux.HandleFunc("GET /api/pool/properties", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/properties/preview-diff", s.handlePropertyPreviewDiff)
-	s.mux.HandleFunc("POST /api/rotate-psk", s.handleRotatePSK)
 
-	// Write operations proxy directly to the agent. Trust is enforced at two
-	// points already: (1) vigil-core's CSRF middleware requires
-	// `X-Requested-With: XMLHttpRequest` on every non-GET proxy call, so random
-	// cross-origin POSTs are rejected before they reach us; (2) the PSK on the
-	// Manager→Agent hop. The earlier `requireSignature` wrapper expected the
-	// request body to carry an Ed25519 signature, but nothing in the stack
-	// produces one for proxied browser requests — vigil-core's ProxyAddonRequest
-	// forwards bodies verbatim. The gate was therefore unsatisfiable from the
-	// UI and rejected every write with "invalid signature".
-	signedProxy := s.proxyToAgent
+	// Agent-facing endpoints gated on the hub_psk (manager↔agent shared
+	// secret). These never carry the vigil-core addon token because agents
+	// don't know it.
+	s.mux.HandleFunc("POST /api/agents/register", s.requirePSK(s.handleAgentRegister))
+	s.mux.HandleFunc("POST /api/telemetry/ingest", s.requirePSK(s.handleTelemetryIngest))
+
+	// Vigil-core-facing endpoints gated on the addon registration token. The
+	// proxy in vigil-core attaches it as Authorization: Bearer <token>.
+	req := s.requireAddonToken
+
+	s.mux.HandleFunc("GET /api/agents", req(s.handleAgentList))
+	s.mux.HandleFunc("POST /api/agents/{id}/alias", req(s.handleAgentSetAlias))
+	s.mux.HandleFunc("DELETE /api/agents/{id}", req(s.handleAgentDelete))
+	s.mux.HandleFunc("GET /api/telemetry/{agentID}", req(s.handleTelemetryGet))
+	s.mux.HandleFunc("GET /api/pools", req(s.handlePools))
+	s.mux.HandleFunc("GET /api/datasets", req(s.handleDatasets))
+	s.mux.HandleFunc("GET /api/snapshots", req(s.handleSnapshots))
+	s.mux.HandleFunc("GET /api/presets", req(s.handlePresets))
+	s.mux.HandleFunc("GET /api/arc", req(s.handleARC))
+	s.mux.HandleFunc("GET /api/arc/metrics", req(s.handleARCMetrics))
+	s.mux.HandleFunc("GET /api/arc/recommendations", req(s.handleARCRecommendations))
+	s.mux.HandleFunc("GET /api/iostat", req(s.handleIOStat))
+	s.mux.HandleFunc("GET /api/iostat/rows", req(s.handleIOStatRows))
+	s.mux.HandleFunc("GET /api/properties/catalog", req(s.proxyToAgent))
+	s.mux.HandleFunc("GET /api/dataset/properties", req(s.proxyToAgent))
+	s.mux.HandleFunc("GET /api/pool/properties", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/properties/preview-diff", req(s.handlePropertyPreviewDiff))
+	s.mux.HandleFunc("POST /api/rotate-psk", req(s.handleRotatePSK))
 
 	// Phase 2 — command proxy (routes to agent)
-	s.mux.HandleFunc("POST /api/datasets", signedProxy)
-	s.mux.HandleFunc("PUT /api/datasets", signedProxy)
-	s.mux.HandleFunc("DELETE /api/datasets", signedProxy)
-	s.mux.HandleFunc("POST /api/snapshots", signedProxy)
-	s.mux.HandleFunc("DELETE /api/snapshots", signedProxy)
-	s.mux.HandleFunc("POST /api/snapshots/rollback", signedProxy)
-	s.mux.HandleFunc("POST /api/scrub/start", signedProxy)
-	s.mux.HandleFunc("POST /api/scrub/pause", signedProxy)
-	s.mux.HandleFunc("POST /api/scrub/cancel", signedProxy)
-	s.mux.HandleFunc("POST /api/preview", s.proxyToAgent) // read-only preview, no signature needed
+	s.mux.HandleFunc("POST /api/datasets", req(s.proxyToAgent))
+	s.mux.HandleFunc("PUT /api/datasets", req(s.proxyToAgent))
+	s.mux.HandleFunc("DELETE /api/datasets", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/snapshots", req(s.proxyToAgent))
+	s.mux.HandleFunc("DELETE /api/snapshots", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/snapshots/rollback", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/scrub/start", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/scrub/pause", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/scrub/cancel", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/preview", req(s.proxyToAgent))
 
 	// Phase 4 — disk & pool operations proxy (routes to agent)
-	s.mux.HandleFunc("GET /api/disks", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/pool/replace", signedProxy)
-	s.mux.HandleFunc("POST /api/pool/add-vdev", signedProxy)
-	s.mux.HandleFunc("POST /api/devices/offline", signedProxy)
-	s.mux.HandleFunc("POST /api/devices/online", signedProxy)
-	s.mux.HandleFunc("POST /api/devices/identify", signedProxy)
-	s.mux.HandleFunc("POST /api/pool/clear", signedProxy)
-	s.mux.HandleFunc("PUT /api/pool/properties", signedProxy)
-	s.mux.HandleFunc("GET /api/pool/importable", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/pool/import", signedProxy)
-	s.mux.HandleFunc("POST /api/pool/export", signedProxy)
-	s.mux.HandleFunc("POST /api/pool/create", signedProxy)
+	s.mux.HandleFunc("GET /api/disks", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/pool/replace", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/pool/add-vdev", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/devices/offline", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/devices/online", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/devices/identify", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/pool/clear", req(s.proxyToAgent))
+	s.mux.HandleFunc("PUT /api/pool/properties", req(s.proxyToAgent))
+	s.mux.HandleFunc("GET /api/pool/importable", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/pool/import", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/pool/export", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/pool/create", req(s.proxyToAgent))
 
 	// Phase 3 — scheduled tasks proxy (routes to agent)
-	s.mux.HandleFunc("GET /api/tasks", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/tasks", signedProxy)
-	s.mux.HandleFunc("PUT /api/tasks/{id}", signedProxy)
-	s.mux.HandleFunc("DELETE /api/tasks/{id}", signedProxy)
-	s.mux.HandleFunc("GET /api/tasks/{id}/history", s.proxyToAgent)
-	s.mux.HandleFunc("GET /api/jobs", s.proxyToAgent)
-	s.mux.HandleFunc("GET /api/retention", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/retention/cleanup", signedProxy)
+	s.mux.HandleFunc("GET /api/tasks", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/tasks", req(s.proxyToAgent))
+	s.mux.HandleFunc("PUT /api/tasks/{id}", req(s.proxyToAgent))
+	s.mux.HandleFunc("DELETE /api/tasks/{id}", req(s.proxyToAgent))
+	s.mux.HandleFunc("GET /api/tasks/{id}/history", req(s.proxyToAgent))
+	s.mux.HandleFunc("GET /api/jobs", req(s.proxyToAgent))
+	s.mux.HandleFunc("GET /api/retention", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/retention/cleanup", req(s.proxyToAgent))
 
 	// Phase 5 — replication proxy (routes to agent)
-	s.mux.HandleFunc("GET /api/replication/tasks", s.proxyToAgent)
-	s.mux.HandleFunc("POST /api/replication/tasks", signedProxy)
-	s.mux.HandleFunc("PUT /api/replication/tasks/{id}", signedProxy)
-	s.mux.HandleFunc("DELETE /api/replication/tasks/{id}", signedProxy)
-	s.mux.HandleFunc("POST /api/replication/tasks/{id}/run", signedProxy)
-	s.mux.HandleFunc("GET /api/replication/tasks/{id}/history", s.proxyToAgent)
-	// Remote replication helpers — test-connection writes to the agent's
-	// known_hosts file (host key pinning on first use), so it's signed.
-	// keys/{name}/public lazy-creates the keypair on the agent, also a write.
-	s.mux.HandleFunc("POST /api/replication/test-connection", signedProxy)
-	s.mux.HandleFunc("GET /api/replication/keys/{name}/public", signedProxy)
-	s.mux.HandleFunc("POST /api/replication/keys/{name}/rotate", signedProxy)
+	s.mux.HandleFunc("GET /api/replication/tasks", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/replication/tasks", req(s.proxyToAgent))
+	s.mux.HandleFunc("PUT /api/replication/tasks/{id}", req(s.proxyToAgent))
+	s.mux.HandleFunc("DELETE /api/replication/tasks/{id}", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/replication/tasks/{id}/run", req(s.proxyToAgent))
+	s.mux.HandleFunc("GET /api/replication/tasks/{id}/history", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/replication/test-connection", req(s.proxyToAgent))
+	s.mux.HandleFunc("GET /api/replication/keys/{name}/public", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/replication/keys/{name}/rotate", req(s.proxyToAgent))
 }
 
 // resolveAgentID returns the agent_id from the query string, falling back to
@@ -347,40 +366,6 @@ func (s *Server) handlePresets(w http.ResponseWriter, _ *http.Request) {
 	addonutil.WriteJSON(w, http.StatusOK, presets)
 }
 
-// requireSignature wraps a handler with Ed25519 signature verification
-// for write operations when a server public key is configured.
-// GET requests are passed through without verification.
-func (s *Server) requireSignature(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.sigVerifier.Enabled() || r.Method == http.MethodGet {
-			next(w, r)
-			return
-		}
-
-		// Read the body to verify signature, then restore it for the proxy.
-		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil {
-			addonutil.WriteError(w, http.StatusBadRequest, "failed to read request body")
-			return
-		}
-
-		if err := s.sigVerifier.VerifyJSON(body); err != nil {
-			s.logger.Warn("command signature verification failed",
-				"method", r.Method,
-				"path", r.URL.Path,
-				"error", err,
-			)
-			addonutil.WriteError(w, http.StatusUnauthorized, "invalid signature")
-			return
-		}
-		s.logger.Info("command signature verified", "path", r.URL.Path)
-
-		// Restore the body so proxyToAgent can read it.
-		r.Body = io.NopCloser(bytes.NewReader(body))
-		next(w, r)
-	}
-}
-
 // proxyToAgent forwards a request to the resolved agent's HTTP API.
 // The agent is selected via the ?agent_id= query parameter (or first online agent).
 func (s *Server) proxyToAgent(w http.ResponseWriter, r *http.Request) {
@@ -434,6 +419,12 @@ func (s *Server) proxyToAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxyReq.Header.Set("Content-Type", "application/json")
+	// Forward the hub PSK so the agent can authenticate the hop. Without
+	// this, an agent's /api/* endpoints would have to accept unauthenticated
+	// requests on its LAN interface.
+	if psk := s.getPSK(); psk != "" {
+		proxyReq.Header.Set("Authorization", "Bearer "+psk)
+	}
 
 	// #nosec G107 G704 -- see targetURL construction above.
 	resp, err := http.DefaultClient.Do(proxyReq)

@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/pineappledr/vigil-addons/zfs-manager/internal/agent"
 	agentdb "github.com/pineappledr/vigil-addons/zfs-manager/internal/db"
 	_ "modernc.org/sqlite"
 )
@@ -163,3 +165,86 @@ func TestInvalidCronExpression(t *testing.T) {
 		t.Errorf("bad cron should not be registered, got %d entries", len(s.NextRunTimes()))
 	}
 }
+
+// newSchedulerWithCollector wires a Scheduler to a real (but unstarted)
+// Collector so event-emission assertions can inspect Collector.LastEvent.
+// Engine is nil — these tests only exercise paths that don't touch it.
+func newSchedulerWithCollector(t *testing.T) (*Scheduler, *agent.Collector) {
+	t.Helper()
+	db := openTestDB(t)
+	coll := agent.NewCollector("agent-test", "test-host", nil, testLogger())
+	return New(nil, coll, db, testLogger()), coll
+}
+
+func TestEmitFailureEvent_Snapshot(t *testing.T) {
+	s, coll := newSchedulerWithCollector(t)
+	s.emitFailureEvent(agentdb.ScheduledTask{ID: 7, TaskType: "snapshot", Target: "tank/data"},
+		errNewf("zfs snapshot: permission denied"))
+	evt := coll.LastEvent()
+	if evt == nil {
+		t.Fatal("expected LastEvent to be set")
+	}
+	if evt.Type != "snapshot_task_failed" {
+		t.Errorf("type = %q, want snapshot_task_failed", evt.Type)
+	}
+	if evt.Severity != "critical" {
+		t.Errorf("severity = %q, want critical", evt.Severity)
+	}
+	if !strings.Contains(evt.Message, "tank/data") || !strings.Contains(evt.Message, "permission denied") {
+		t.Errorf("message should mention dataset and underlying error, got %q", evt.Message)
+	}
+}
+
+func TestEmitFailureEvent_Scrub(t *testing.T) {
+	s, coll := newSchedulerWithCollector(t)
+	s.emitFailureEvent(agentdb.ScheduledTask{ID: 8, TaskType: "scrub", Target: "tank"},
+		errNewf("pool is suspended"))
+	evt := coll.LastEvent()
+	if evt == nil || evt.Type != "scrub_task_failed" {
+		t.Fatalf("want scrub_task_failed, got %+v", evt)
+	}
+}
+
+func TestEmitFailureEvent_ReplicationCarriesDest(t *testing.T) {
+	s, coll := newSchedulerWithCollector(t)
+	dest := "backup/tank"
+	s.emitFailureEvent(agentdb.ScheduledTask{
+		ID: 9, TaskType: "replication", Target: "tank/data", DestTarget: &dest,
+	}, errNewf("ssh: connection refused"))
+	evt := coll.LastEvent()
+	if evt == nil || evt.Type != "replication_failed" {
+		t.Fatalf("want replication_failed, got %+v", evt)
+	}
+	if !strings.Contains(evt.Message, "tank/data") || !strings.Contains(evt.Message, "backup/tank") {
+		t.Errorf("replication failure should name source and dest, got %q", evt.Message)
+	}
+}
+
+func TestEmitFailureEvent_UnknownTaskTypeEmitsNothing(t *testing.T) {
+	s, coll := newSchedulerWithCollector(t)
+	s.emitFailureEvent(agentdb.ScheduledTask{ID: 1, TaskType: "mystery", Target: "tank"},
+		errNewf("unknown"))
+	if evt := coll.LastEvent(); evt != nil {
+		t.Errorf("expected no event for unknown task type, got %+v", evt)
+	}
+}
+
+func TestEmitEvent_NilCollectorDoesNotPanic(t *testing.T) {
+	// Tests that construct Scheduler with collector=nil must still be able
+	// to traverse executeTask without a nil dereference.
+	s := New(nil, nil, openTestDB(t), testLogger())
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("emitEvent on nil collector panicked: %v", r)
+		}
+	}()
+	s.emitEvent(agent.AgentEvent{Type: "snapshot_task_succeeded"})
+	s.requestFlush()
+}
+
+// errNewf is a tiny helper so tests stay readable without importing errors.
+func errNewf(msg string) error { return &schedErr{msg} }
+
+type schedErr struct{ msg string }
+
+func (e *schedErr) Error() string { return e.msg }

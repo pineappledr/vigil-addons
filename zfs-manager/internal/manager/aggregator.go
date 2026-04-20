@@ -211,6 +211,7 @@ func (a *Aggregator) evaluateAgentEvent(tc *vigilclient.TelemetryClient, agentID
 //
 // Detected transitions:
 //   - resilver_completed: prev.ScrubStatus == "resilvering" and curr is not
+//   - scrub_completed: prev was `in_progress[…]` and curr is `completed`
 //   - pool_expansion_completed: curr.NumDataVdevs > prev.NumDataVdevs
 func detectPoolTransitions(prev, curr map[string]trackedPool) []poolEvent {
 	var events []poolEvent
@@ -226,6 +227,14 @@ func detectPoolTransitions(prev, curr map[string]trackedPool) []poolEvent {
 				Severity:  "info",
 				PoolName:  name,
 				Message:   fmt.Sprintf("Resilver completed on pool %s", name),
+			})
+		}
+		if isScrubRunning(p.ScrubStatus) && c.ScrubStatus == "completed" {
+			events = append(events, poolEvent{
+				EventType: "scrub_completed",
+				Severity:  "info",
+				PoolName:  name,
+				Message:   fmt.Sprintf("Scrub completed on pool %s", name),
 			})
 		}
 		if c.NumDataVdevs > p.NumDataVdevs {
@@ -265,6 +274,14 @@ func countDataVdevs(vdevs []vdevMin) int {
 // in case the parser is extended later.
 func isResilvering(status string) bool {
 	return strings.HasPrefix(status, "resilvering")
+}
+
+// isScrubRunning reports whether the given scrub_status indicates a scrub in
+// progress. The agent emits "in_progress" or "in_progress (X% done)", plus
+// the transient "paused" state — both count as running for the purpose of
+// detecting a completion transition.
+func isScrubRunning(status string) bool {
+	return strings.HasPrefix(status, "in_progress") || status == "paused"
 }
 
 // emitNotification looks up the agent hostname from the registry and sends a

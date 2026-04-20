@@ -137,26 +137,68 @@ func (s *Scheduler) executeTask(ctx context.Context, task agentdb.ScheduledTask)
 	if err != nil {
 		s.logger.Error("scheduled task failed", "task_id", task.ID, "error", err)
 		agentdb.CompleteJob(s.db, jobID, "error", err.Error())
-
-		// Emit failure event for replication tasks.
-		if task.TaskType == "replication" {
-			dest := ""
-			if task.DestTarget != nil {
-				dest = *task.DestTarget
-			}
-			s.collector.EmitEvent(agent.AgentEvent{
-				ID:        fmt.Sprintf("repl-fail-%d-%d", task.ID, time.Now().UnixMilli()),
-				Type:      "replication_failed",
-				Severity:  "critical",
-				Message:   fmt.Sprintf("replication %s → %s failed: %s", task.Target, dest, err),
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-			})
-		}
+		s.emitFailureEvent(task, err)
 		return
 	}
 
 	agentdb.CompleteJob(s.db, jobID, "success", "")
 	s.logger.Info("scheduled task completed", "task_id", task.ID)
+}
+
+// emitEvent is a nil-safe wrapper around Collector.EmitEvent so scheduler
+// unit tests can construct a Scheduler without a real Collector.
+func (s *Scheduler) emitEvent(evt agent.AgentEvent) {
+	if s.collector == nil {
+		return
+	}
+	s.collector.EmitEvent(evt)
+}
+
+// requestFlush mirrors emitEvent's nil guard so test scaffolding without a
+// Collector can run the executeTask path.
+func (s *Scheduler) requestFlush() {
+	if s.collector == nil {
+		return
+	}
+	s.collector.RequestFlush()
+}
+
+// emitFailureEvent maps a scheduled task failure onto a typed agent event.
+// Snapshot / scrub failures surface as "*_task_failed" with critical severity;
+// replication failures keep their existing richer message (source → dest).
+func (s *Scheduler) emitFailureEvent(task agentdb.ScheduledTask, err error) {
+	now := time.Now()
+	ts := now.UTC().Format(time.RFC3339)
+	switch task.TaskType {
+	case "snapshot":
+		s.emitEvent(agent.AgentEvent{
+			ID:        fmt.Sprintf("snap-fail-%d-%d", task.ID, now.UnixMilli()),
+			Type:      "snapshot_task_failed",
+			Severity:  "critical",
+			Message:   fmt.Sprintf("snapshot of %s failed: %s", task.Target, err),
+			Timestamp: ts,
+		})
+	case "scrub":
+		s.emitEvent(agent.AgentEvent{
+			ID:        fmt.Sprintf("scrub-fail-%d-%d", task.ID, now.UnixMilli()),
+			Type:      "scrub_task_failed",
+			Severity:  "critical",
+			Message:   fmt.Sprintf("scrub of %s failed: %s", task.Target, err),
+			Timestamp: ts,
+		})
+	case "replication":
+		dest := ""
+		if task.DestTarget != nil {
+			dest = *task.DestTarget
+		}
+		s.emitEvent(agent.AgentEvent{
+			ID:        fmt.Sprintf("repl-fail-%d-%d", task.ID, now.UnixMilli()),
+			Type:      "replication_failed",
+			Severity:  "critical",
+			Message:   fmt.Sprintf("replication %s → %s failed: %s", task.Target, dest, err),
+			Timestamp: ts,
+		})
+	}
 }
 
 // runSnapshotTask takes a snapshot and applies retention.
@@ -170,20 +212,46 @@ func (s *Scheduler) runSnapshotTask(ctx context.Context, task agentdb.ScheduledT
 
 	s.logger.Info("snapshot created", "dataset", task.Target, "snap", snapName)
 
-	// Apply retention policy
+	retentionDeleted := 0
 	if task.Retention > 0 {
-		if err := s.applyRetention(ctx, task); err != nil {
-			s.logger.Error("retention cleanup failed", "task_id", task.ID, "error", err)
+		n, rerr := s.applyRetention(ctx, task)
+		retentionDeleted = n
+		if rerr != nil {
+			s.logger.Error("retention cleanup failed", "task_id", task.ID, "error", rerr)
 			// Don't fail the task — the snapshot was taken successfully
 		}
 	}
 
-	// Refresh telemetry
-	go s.collector.RequestFlush()
+	now := time.Now()
+	s.emitEvent(agent.AgentEvent{
+		ID:        fmt.Sprintf("snap-ok-%d-%d", task.ID, now.UnixMilli()),
+		Type:      "snapshot_task_succeeded",
+		Severity:  "info",
+		Message:   fmt.Sprintf("snapshot %s@%s created", task.Target, snapName),
+		Timestamp: now.UTC().Format(time.RFC3339),
+	})
+	if retentionDeleted > 0 {
+		noun := "snapshot"
+		if retentionDeleted != 1 {
+			noun = "snapshots"
+		}
+		s.emitEvent(agent.AgentEvent{
+			ID:        fmt.Sprintf("ret-%d-%d", task.ID, now.UnixMilli()),
+			Type:      "retention_cleanup_completed",
+			Severity:  "info",
+			Message:   fmt.Sprintf("retention on %s (prefix %q): deleted %d %s", task.Target, task.Prefix, retentionDeleted, noun),
+			Timestamp: now.UTC().Format(time.RFC3339),
+		})
+	}
+
+	go s.requestFlush()
 	return nil
 }
 
-// runScrubTask starts a scrub on the target pool.
+// runScrubTask starts a scrub on the target pool. The zpool command returns
+// as soon as the scrub is scheduled, so this emits `scrub_task_started`
+// rather than a completion event. `scrub_completed` is detected hub-side
+// from the scrub_status transition in telemetry.
 func (s *Scheduler) runScrubTask(ctx context.Context, task agentdb.ScheduledTask) error {
 	result, err := s.engine.StartScrub(ctx, task.Target)
 	if err != nil {
@@ -191,7 +259,17 @@ func (s *Scheduler) runScrubTask(ctx context.Context, task agentdb.ScheduledTask
 	}
 
 	s.logger.Info("scrub started", "pool", task.Target)
-	go s.collector.RequestFlush()
+
+	now := time.Now()
+	s.emitEvent(agent.AgentEvent{
+		ID:        fmt.Sprintf("scrub-start-%d-%d", task.ID, now.UnixMilli()),
+		Type:      "scrub_task_started",
+		Severity:  "info",
+		Message:   fmt.Sprintf("scrub started on pool %s", task.Target),
+		Timestamp: now.UTC().Format(time.RFC3339),
+	})
+
+	go s.requestFlush()
 	return nil
 }
 
@@ -299,7 +377,7 @@ func (s *Scheduler) runReplicationTask(ctx context.Context, task agentdb.Schedul
 
 	// 5. Apply retention on source (always local).
 	if task.Retention > 0 {
-		if err := s.applyRetention(ctx, task); err != nil {
+		if _, err := s.applyRetention(ctx, task); err != nil {
 			s.logger.Error("replication: source retention failed", "error", err)
 		}
 	}
@@ -327,7 +405,7 @@ func (s *Scheduler) runReplicationTask(ctx context.Context, task agentdb.Schedul
 		}
 	}
 
-	go s.collector.RequestFlush()
+	go s.requestFlush()
 	return nil
 }
 
@@ -454,14 +532,15 @@ func (s *Scheduler) applyRetentionOnDataset(ctx context.Context, dataset, prefix
 }
 
 // applyRetention deletes the oldest snapshots matching the task prefix until
-// only `task.Retention` snapshots remain.
-func (s *Scheduler) applyRetention(ctx context.Context, task agentdb.ScheduledTask) error {
+// only `task.Retention` snapshots remain. Returns the number of snapshots
+// actually destroyed so the caller can emit a `retention_cleanup_completed`
+// event only when real work happened.
+func (s *Scheduler) applyRetention(ctx context.Context, task agentdb.ScheduledTask) (int, error) {
 	snapshots, err := s.engine.ListSnapshots(ctx)
 	if err != nil {
-		return fmt.Errorf("list snapshots for retention: %w", err)
+		return 0, fmt.Errorf("list snapshots for retention: %w", err)
 	}
 
-	// Filter to snapshots matching this task's dataset and prefix
 	var matching []agent.SnapshotInfo
 	for _, snap := range snapshots {
 		if snap.Dataset == task.Target && strings.HasPrefix(snap.SnapName, task.Prefix+"-") {
@@ -470,15 +549,15 @@ func (s *Scheduler) applyRetention(ctx context.Context, task agentdb.ScheduledTa
 	}
 
 	if len(matching) <= task.Retention {
-		return nil
+		return 0, nil
 	}
 
-	// Sort by creation ascending (oldest first)
 	sort.Slice(matching, func(i, j int) bool {
 		return matching[i].Creation < matching[j].Creation
 	})
 
 	toDelete := matching[:len(matching)-task.Retention]
+	deleted := 0
 	for _, snap := range toDelete {
 		result, err := s.engine.DestroySnapshot(ctx, snap.FullName)
 		if err != nil {
@@ -486,7 +565,8 @@ func (s *Scheduler) applyRetention(ctx context.Context, task agentdb.ScheduledTa
 			continue
 		}
 		s.logger.Info("retention: deleted snapshot", "snapshot", snap.FullName)
+		deleted++
 	}
 
-	return nil
+	return deleted, nil
 }

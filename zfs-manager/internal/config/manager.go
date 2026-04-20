@@ -20,9 +20,8 @@ type ManagerListen struct {
 }
 
 type ManagerVigil struct {
-	ServerURL    string `yaml:"server_url"`
-	Token        string `yaml:"token"`
-	ServerPubkey string `yaml:"server_pubkey"`
+	ServerURL string `yaml:"server_url"`
+	Token     string `yaml:"token"`
 }
 
 type ManagerData struct {
@@ -76,9 +75,6 @@ func applyManagerEnvOverrides(cfg *ManagerConfig) {
 	}
 	if v := os.Getenv("VIGIL_TOKEN"); v != "" {
 		cfg.Vigil.Token = v
-	}
-	if v := os.Getenv("VIGIL_SERVER_PUBKEY"); v != "" {
-		cfg.Vigil.ServerPubkey = v
 	}
 	if v := os.Getenv("VIGIL_ZFS_MANAGER_DATA_REGISTRY_PATH"); v != "" {
 		cfg.Data.RegistryPath = v

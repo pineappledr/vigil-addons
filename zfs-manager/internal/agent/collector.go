@@ -88,6 +88,19 @@ func (c *Collector) EmitEvent(event AgentEvent) {
 	c.RequestFlush()
 }
 
+// LastEvent returns the most recently emitted AgentEvent, or nil if none.
+// Exposed for cross-package tests (e.g. the scheduler asserting that a
+// scheduled task run produced the expected notification event).
+func (c *Collector) LastEvent() *AgentEvent {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.lastEvent == nil {
+		return nil
+	}
+	evt := *c.lastEvent
+	return &evt
+}
+
 // Refresh queries all ZFS state and updates the cache.
 func (c *Collector) Refresh(ctx context.Context) {
 	pools, err := c.engine.ListPools(ctx)

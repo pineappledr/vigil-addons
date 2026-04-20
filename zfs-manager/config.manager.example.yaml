@@ -19,12 +19,6 @@ vigil:
   # One-time registration token generated in the Vigil UI → New Add-on.
   token: ""
 
-  # Base64-encoded Ed25519 public key from the Vigil server.
-  # Used to verify command signatures on write operations.
-  # If empty, signature verification is disabled (not recommended for production).
-  # Override with: VIGIL_SERVER_PUBKEY
-  server_pubkey: ""
-
 # ── Data Persistence ────────────────────────────────────────────────
 data:
   # JSON file where the Agent registry is persisted.

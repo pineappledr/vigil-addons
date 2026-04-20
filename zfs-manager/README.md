@@ -288,7 +288,6 @@ All values can be set via environment variables (prefix: `VIGIL_ZFS_MANAGER_`) o
 | `VIGIL_ZFS_MANAGER_LISTEN_PORT` | `listen.port` | `9500` | HTTP port the manager listens on |
 | `VIGIL_URL` | `vigil.server_url` | `http://vigil.local:9080` | Vigil server URL |
 | `VIGIL_TOKEN` | `vigil.token` | — | Add-on registration token from Vigil UI |
-| `VIGIL_SERVER_PUBKEY` | `vigil.server_pubkey` | — | Base64-encoded Ed25519 public key for command signature verification |
 | `VIGIL_ZFS_MANAGER_DATA_REGISTRY_PATH` | `data.registry_path` | `/data/agents.json` | Agent registry file path |
 | `VIGIL_ZFS_MANAGER_LOGGING_LEVEL` | `logging.level` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 

@@ -351,6 +351,7 @@
                 "label": "Start Scrub",
                 "icon": "refresh-cw",
                 "safety_tier": "green",
+                "visible_when": { "field": "scrub_status", "not_in": ["in_progress", "paused", "resilvering"] },
                 "action": {
                   "method": "POST",
                   "endpoint": "/api/scrub/start",
@@ -373,6 +374,7 @@
                 "label": "Pause Scrub",
                 "icon": "pause",
                 "safety_tier": "yellow",
+                "visible_when": { "field": "scrub_status", "starts_with": "in_progress" },
                 "action": {
                   "method": "POST",
                   "endpoint": "/api/scrub/pause",
@@ -391,10 +393,34 @@
                 }
               },
               {
+                "id": "resume-scrub",
+                "label": "Resume Scrub",
+                "icon": "play",
+                "safety_tier": "green",
+                "visible_when": { "field": "scrub_status", "equals": "paused" },
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/scrub/pause",
+                  "body_map": { "pool": "row.name" },
+                  "preview": {
+                    "endpoint": "/api/preview",
+                    "body": { "action": "scrub", "scrub_op": "pause" },
+                    "body_map": { "pool": "row.name" }
+                  }
+                },
+                "confirm": {
+                  "title": "Resume Scrub",
+                  "message": "Resume the paused scrub on pool {row.name}?",
+                  "show_command": true,
+                  "button_label": "Resume"
+                }
+              },
+              {
                 "id": "cancel-scrub",
                 "label": "Cancel Scrub",
                 "icon": "x-circle",
                 "safety_tier": "yellow",
+                "visible_when": { "field": "scrub_status", "in": ["paused", "in_progress"] },
                 "action": {
                   "method": "POST",
                   "endpoint": "/api/scrub/cancel",

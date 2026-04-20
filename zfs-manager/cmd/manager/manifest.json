@@ -1537,11 +1537,11 @@
                       "label": "Retention",
                       "type": "select",
                       "options": [
-                        { "value": "0",  "label": "Unlimited (no auto-delete)" },
-                        { "value": "24", "label": "Keep last 24 snapshots" },
-                        { "value": "7",  "label": "Keep last 7 snapshots" },
-                        { "value": "4",  "label": "Keep last 4 snapshots" },
-                        { "value": "12", "label": "Keep last 12 snapshots" }
+                        { "value": 0,  "label": "Unlimited (no auto-delete)" },
+                        { "value": 24, "label": "Keep last 24 snapshots" },
+                        { "value": 7,  "label": "Keep last 7 snapshots" },
+                        { "value": 4,  "label": "Keep last 4 snapshots" },
+                        { "value": 12, "label": "Keep last 12 snapshots" }
                       ],
                       "allow_custom": true,
                       "custom_label": "Custom count",
@@ -1826,10 +1826,10 @@
                       "label": "Retention",
                       "type": "select",
                       "options": [
-                        { "value": "0",  "label": "Unlimited (no auto-delete)" },
-                        { "value": "24", "label": "Keep last 24 snapshots" },
-                        { "value": "7",  "label": "Keep last 7 snapshots" },
-                        { "value": "4",  "label": "Keep last 4 snapshots" }
+                        { "value": 0,  "label": "Unlimited (no auto-delete)" },
+                        { "value": 24, "label": "Keep last 24 snapshots" },
+                        { "value": 7,  "label": "Keep last 7 snapshots" },
+                        { "value": 4,  "label": "Keep last 4 snapshots" }
                       ],
                       "allow_custom": true,
                       "custom_label": "Custom count",
@@ -2030,10 +2030,10 @@
                       "label": "Retention",
                       "type": "select",
                       "options": [
-                        { "value": "0",  "label": "Unlimited (no auto-delete)" },
-                        { "value": "24", "label": "Keep last 24 snapshots" },
-                        { "value": "7",  "label": "Keep last 7 snapshots" },
-                        { "value": "4",  "label": "Keep last 4 snapshots" }
+                        { "value": 0,  "label": "Unlimited (no auto-delete)" },
+                        { "value": 24, "label": "Keep last 24 snapshots" },
+                        { "value": 7,  "label": "Keep last 7 snapshots" },
+                        { "value": 4,  "label": "Keep last 4 snapshots" }
                       ],
                       "allow_custom": true,
                       "custom_label": "Custom count",
@@ -2161,10 +2161,10 @@
                           "label": "Source Retention",
                           "type": "select",
                           "options": [
-                            { "value": "0",  "label": "Unlimited (no auto-delete)" },
-                            { "value": "24", "label": "Keep last 24 snapshots" },
-                            { "value": "7",  "label": "Keep last 7 snapshots" },
-                            { "value": "4",  "label": "Keep last 4 snapshots" }
+                            { "value": 0,  "label": "Unlimited (no auto-delete)" },
+                            { "value": 24, "label": "Keep last 24 snapshots" },
+                            { "value": 7,  "label": "Keep last 7 snapshots" },
+                            { "value": 4,  "label": "Keep last 4 snapshots" }
                           ],
                           "allow_custom": true,
                           "custom_label": "Custom count",

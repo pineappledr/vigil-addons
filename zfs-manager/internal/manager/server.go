@@ -419,7 +419,11 @@ func (s *Server) proxyToAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	// Long timeout because destructive ZFS operations (zpool create, scrub,
+	// resilver kickoff, large replication send) can run for minutes. A short
+	// cap here would cancel the context and SIGKILL the agent's zpool child.
+	// Upstream vigil-core proxy uses the same 5-minute ceiling.
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 
 	// #nosec G107 G704 -- targetURL is built from a PSK-authenticated agent

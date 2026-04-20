@@ -62,6 +62,21 @@
             },
             "expandable": true,
             "expand_key": "vdevs",
+            "child_columns": [
+              { "key": "name",   "label": "Vdev" },
+              { "key": "type",   "label": "Type" },
+              { "key": "health", "label": "Health", "badge": {
+                "ONLINE":   "success",
+                "DEGRADED": "warning",
+                "FAULTED":  "danger",
+                "OFFLINE":  "muted",
+                "UNAVAIL":  "danger",
+                "REMOVED":  "danger"
+              }},
+              { "key": "read",  "label": "READ",  "format": "error_count" },
+              { "key": "write", "label": "WRITE", "format": "error_count" },
+              { "key": "cksum", "label": "CKSUM", "format": "error_count" }
+            ],
             "toolbar_actions": [
               {
                 "id": "create-pool",
@@ -1099,6 +1114,21 @@
             "default_sort": { "key": "name", "direction": "asc" },
             "expandable": true,
             "expand_key": "vdevs",
+            "child_columns": [
+              { "key": "name",   "label": "Vdev" },
+              { "key": "type",   "label": "Type" },
+              { "key": "health", "label": "Health", "badge": {
+                "ONLINE":   "success",
+                "DEGRADED": "warning",
+                "FAULTED":  "danger",
+                "OFFLINE":  "muted",
+                "UNAVAIL":  "danger",
+                "REMOVED":  "danger"
+              }},
+              { "key": "read",  "label": "READ",  "format": "error_count" },
+              { "key": "write", "label": "WRITE", "format": "error_count" },
+              { "key": "cksum", "label": "CKSUM", "format": "error_count" }
+            ],
             "row_actions": [
               {
                 "id": "clear-errors",
@@ -1461,6 +1491,7 @@
                       ],
                       "allow_custom": true,
                       "custom_label": "Custom (cron expression)",
+                      "custom_input_type": "cron",
                       "value_from": "row.schedule",
                       "required": true,
                       "hint": "Standard 5-field cron expression (minute hour day month weekday)"
@@ -1548,6 +1579,7 @@
                       ],
                       "allow_custom": true,
                       "custom_label": "Custom (cron expression)",
+                      "custom_input_type": "cron",
                       "required": true,
                       "hint": "Standard 5-field cron expression"
                     },
@@ -1615,6 +1647,7 @@
                       ],
                       "allow_custom": true,
                       "custom_label": "Custom (cron expression)",
+                      "custom_input_type": "cron",
                       "required": true,
                       "hint": "Standard 5-field cron expression"
                     }
@@ -1837,6 +1870,7 @@
                       ],
                       "allow_custom": true,
                       "custom_label": "Custom (cron expression)",
+                      "custom_input_type": "cron",
                       "value_from": "row.schedule",
                       "required": true
                     },
@@ -2042,6 +2076,7 @@
                       ],
                       "allow_custom": true,
                       "custom_label": "Custom (cron expression)",
+                      "custom_input_type": "cron",
                       "required": true
                     },
                     {
@@ -2155,7 +2190,31 @@
                           "type": "text",
                           "placeholder": "backup-target",
                           "required": true,
-                          "hint": "Identifier (letters, digits, '-', '_') for the Ed25519 keypair. Fetch the public key with `GET /api/replication/keys/<name>/public` after creation and append it to ~/.ssh/authorized_keys on the remote user."
+                          "hint": "Identifier (letters, digits, '-', '_') for the Ed25519 keypair. The public key appears below once you enter a name — append it to ~/.ssh/authorized_keys on the remote user."
+                        },
+                        {
+                          "key": "ssh_public_key",
+                          "type": "remote_value",
+                          "label": "Public Key (add this to the remote host's authorized_keys)",
+                          "depends_on": "ssh_key_name",
+                          "endpoint": "/api/replication/keys/{form.ssh_key_name}/public",
+                          "method": "GET",
+                          "validate_regex": "^[A-Za-z0-9_-]{1,64}$",
+                          "value_path": "public_key",
+                          "copy_button": true,
+                          "rows": 3,
+                          "placeholder": "Enter an SSH Key Name above to generate and display the public key",
+                          "hint": "Paste this single line into ~/.ssh/authorized_keys on the remote user account, then click Test Connection below."
+                        },
+                        {
+                          "key": "test_connection",
+                          "type": "test_button",
+                          "label": "Verify SSH Access",
+                          "button_label": "Test Connection",
+                          "endpoint": "/api/replication/test-connection",
+                          "method": "POST",
+                          "require_fields": ["dest_host", "dest_user", "ssh_key_name", "dest_target"],
+                          "hint": "Pins the remote host key on first use and runs `zfs list` on the destination dataset to confirm the SSH user has receive permission. Copy the public key to ~/.ssh/authorized_keys first."
                         }
                       ]
                     },
@@ -2174,6 +2233,7 @@
                           ],
                           "allow_custom": true,
                           "custom_label": "Custom (cron expression)",
+                          "custom_input_type": "cron",
                           "required": true
                         }
                       ]

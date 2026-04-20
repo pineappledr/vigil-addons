@@ -85,8 +85,8 @@ func (s *Server) handleCreateReplicationTask(w http.ResponseWriter, r *http.Requ
 		addonutil.WriteError(w, http.StatusBadRequest, "source and destination must be different")
 		return
 	}
-	if req.Schedule == "" {
-		addonutil.WriteError(w, http.StatusBadRequest, "schedule is required")
+	if err := validateCron(req.Schedule); err != nil {
+		addonutil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.Prefix == "" {
@@ -213,6 +213,11 @@ func (s *Server) handleUpdateReplicationTask(w http.ResponseWriter, r *http.Requ
 	var req updateReplicationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		addonutil.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := validateCron(req.Schedule); err != nil {
+		addonutil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 

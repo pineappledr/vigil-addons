@@ -704,6 +704,52 @@ Long-running operations surface in the table via `progress_indicator`:
 
 When any row's `field` matches (exact or prefix — `"in_progress (35% done)"` counts), a pulsing dot appears next to the value and the table auto-refreshes on the interval until no row is busy.
 
+### Async actions (in-modal progress overlay)
+
+When an action takes more than a few seconds and the agent cannot return a final result synchronously, declare `"async": true` on the action. The submit handler keeps the modal open and swaps its body for a progress overlay that polls the job state.
+
+```jsonc
+"action": {
+  "method":   "POST",
+  "endpoint": "/api/pool/scrub",
+  "async":    true,
+  // Defaults shown; all optional.
+  "poll_endpoint":         "/api/jobs/{job_id}",
+  "poll_interval_seconds": 2,
+  "cancel_endpoint":       "/api/jobs/{job_id}",
+  "cancel_method":         "DELETE",
+  "cancelable":            true
+}
+```
+
+**Agent contract:**
+
+1. The action handler returns `200 OK` with `{"job_id": "..."}` — any extra fields are ignored by the overlay but still available via `{job_id}` / `{form.X}` interpolation in the `poll_endpoint` and `cancel_endpoint` templates.
+2. The poll endpoint returns `200 OK` with this shape (all fields optional except `status`):
+
+   ```jsonc
+   {
+     "status":           "pending|running|completed|failed|cancelled",
+     "phase":            "SMART extended",        // short label
+     "phase_detail":     "drive sda — 42%",        // optional longer line
+     "progress_percent": 42.5,                      // 0..100
+     "message":          "optional multi-line log tail",
+     "fail_reason":      "...",                     // only on status=failed
+     "elapsed_sec":      90,
+     "eta_sec":          180
+   }
+   ```
+
+3. The cancel endpoint receives the configured `cancel_method` (default `DELETE`) at the interpolated `cancel_endpoint`. The overlay does not mark the job cancelled locally — the next poll's `status: "cancelled"` drives the terminal branch.
+
+**Terminal statuses** (overlay stops polling, switches the primary button to "Close", and toasts): `completed`, `failed`, `cancelled`, plus the defensive aliases `succeeded`, `success`, `done`, `error`, `canceled`.
+
+**Cancel button:**
+- Hidden when `cancelable: false` or `cancel_endpoint: false`.
+- Disabled during the in-flight cancel request, with transient errors rendered inline (the poll loop continues running).
+
+A 404 from the poll endpoint is treated as `completed` — some agents GC jobs shortly after they finish.
+
 ### Bulk actions
 
 Opt in with `selectable: true` and `key_field: "unique-field"` on the table config. A checkbox column appears, and `bulk_actions` buttons reveal in a bar when at least one row is selected.

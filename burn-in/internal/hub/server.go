@@ -57,6 +57,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
 	s.mux.HandleFunc("POST /api/execute", s.router.HandleExecute)
 	s.mux.HandleFunc("GET /api/jobs/history", s.router.HandleJobHistory)
+	s.mux.HandleFunc("GET /api/jobs/{id}", s.router.HandleJobStatus)
 	s.mux.HandleFunc("DELETE /api/jobs/{id}", s.router.HandleCancelJob)
 	s.mux.HandleFunc("GET /api/logs/history", s.handleLogHistory)
 	s.mux.HandleFunc("GET /api/chart/history", s.handleChartHistory)

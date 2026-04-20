@@ -1113,8 +1113,8 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		addonutil.WriteError(w, http.StatusBadRequest, "target is required")
 		return
 	}
-	if req.Schedule == "" {
-		addonutil.WriteError(w, http.StatusBadRequest, "schedule is required")
+	if err := validateCron(req.Schedule); err != nil {
+		addonutil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.Prefix == "" {
@@ -1180,6 +1180,11 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	var req updateTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		addonutil.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := validateCron(req.Schedule); err != nil {
+		addonutil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 

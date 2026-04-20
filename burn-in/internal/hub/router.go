@@ -345,6 +345,62 @@ func (cr *CommandRouter) HandleCancelJob(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// HandleJobStatus is the HTTP handler for GET /api/jobs/{id}. The hub does
+// not track job→agent mapping, so it queries every registered agent and
+// returns the first 200 OK body. This matches HandleCancelJob's broadcast
+// pattern. Returns 404 only when no agent owns the id.
+func (cr *CommandRouter) HandleJobStatus(w http.ResponseWriter, r *http.Request) {
+	jobID := r.PathValue("id")
+	if jobID == "" {
+		addonutil.WriteJSON(w, http.StatusBadRequest, addonutil.ErrorResponse{Error: "job id is required"})
+		return
+	}
+
+	agents := cr.registry.List()
+	if len(agents) == 0 {
+		addonutil.WriteJSON(w, http.StatusNotFound, addonutil.ErrorResponse{Error: "no agents registered"})
+		return
+	}
+
+	for _, agent := range agents {
+		if agent.AdvertiseAddr == "" {
+			continue
+		}
+
+		raw := fmt.Sprintf("http://%s%s%s", agent.AdvertiseAddr, agentJobPath, url.PathEscape(jobID))
+		validated, err := validateAgentURL(raw)
+		if err != nil {
+			cr.logger.Warn("invalid job status target URL", "agent_id", agent.AgentID, "error", err)
+			continue
+		}
+
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, validated, nil) // #nosec
+		if err != nil {
+			continue
+		}
+
+		resp, err := cr.httpClient.Do(req) // #nosec
+		if err != nil {
+			cr.logger.Debug("job status fetch failed", "agent_id", agent.AgentID, "error", err)
+			continue
+		}
+
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxPayloadSize))
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(respBody)
+			return
+		}
+	}
+
+	addonutil.WriteJSON(w, http.StatusNotFound, addonutil.ErrorResponse{
+		Error: fmt.Sprintf("job %q not found on any agent", jobID),
+	})
+}
+
 func (cr *CommandRouter) forwardToAgent(ctx context.Context, advertiseAddr string, payload []byte) (*http.Response, error) {
 	raw := fmt.Sprintf("http://%s%s", advertiseAddr, agentExecutePath)
 	validated, err := validateAgentURL(raw)

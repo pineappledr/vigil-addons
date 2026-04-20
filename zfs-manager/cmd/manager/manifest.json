@@ -563,6 +563,7 @@
             ],
             "sortable": true,
             "filterable": true,
+            "tree": { "key": "name", "separator": "/" },
             "default_sort": { "key": "name", "direction": "asc" },
             "row_actions": [
               {
@@ -2266,7 +2267,8 @@
               "ports": ["9600:9600"],
               "volumes": [
                 "zfs-agent-data:/data",
-                "/dev/zfs:/dev/zfs",
+                "/dev:/dev",
+                "/run/udev:/run/udev:ro",
                 "/sbin/zpool:/sbin/zpool:ro",
                 "/sbin/zfs:/sbin/zfs:ro",
                 "/lib:/lib:ro",

@@ -132,12 +132,15 @@ When running the Agent in Docker, the host's ZFS binaries and libraries must be 
 
 | Mount | Purpose |
 |-------|---------|
-| `/dev/zfs:/dev/zfs` | Kernel ZFS device node |
+| `/dev:/dev` | **Required for `zpool create`** — exposes partition nodes the kernel creates on new disks |
+| `/run/udev:/run/udev:ro` | Lets `zpool`/`blkid` resolve newly-created partitions without racing |
 | `/sbin/zpool:/sbin/zpool:ro` | ZFS pool management binary |
 | `/sbin/zfs:/sbin/zfs:ro` | ZFS dataset/snapshot binary |
 | `/lib:/lib:ro` | Shared libraries required by `zpool`/`zfs` |
 | `/lib64:/lib64:ro` | 64-bit shared libraries |
 | `/usr/lib:/usr/lib:ro` | Additional shared libraries |
+
+> Mounting full `/dev` replaces the older single `/dev/zfs:/dev/zfs` mount — the latter exposes only the kernel ZFS device node, which is sufficient for read operations on existing pools but **not** for pool creation (`zpool create` needs to see new partition nodes like `/dev/sdb1` immediately after writing the partition table).
 
 > **Why `privileged: true`?** ZFS operations interact directly with kernel modules and block devices. Without privileged mode, `zpool` and `zfs` commands will fail with permission errors.
 
@@ -215,7 +218,8 @@ services:
       TZ: America/New_York
     volumes:
       - zfs-agent-data:/data
-      - /dev/zfs:/dev/zfs
+      - /dev:/dev           # full /dev so zpool can read partition nodes it creates (/dev/sdb1 …)
+      - /run/udev:/run/udev:ro   # lets zpool/blkid resolve newly-created partitions via udev
       - /sbin/zpool:/sbin/zpool:ro
       - /sbin/zfs:/sbin/zfs:ro
       - /lib:/lib:ro
@@ -225,6 +229,8 @@ services:
 volumes:
   zfs-agent-data:
 ```
+
+> **Why `/dev:/dev` and `/run/udev`?** `zpool create` rewrites the partition table on each disk. The kernel creates new partition nodes (e.g. `/dev/sdb1`) that only appear inside the container if `/dev` is bind-mounted. Without `/run/udev`, `blkid` can't resolve them fast enough and you get `Error preparing/labeling disk: ENODEV (19)`.
 
 #### Docker (Proxmox / Ubuntu / Debian — glibc hosts)
 

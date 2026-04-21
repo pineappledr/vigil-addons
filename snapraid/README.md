@@ -109,7 +109,22 @@ This gives the OS a proper directory entry to swap inodes during `rename()`.
 
 #### Hub
 
-Deploy the Hub on any host that can reach both the Vigil Server and your Agent(s):
+The Hub **requires a YAML config file** — it will not start without one. Copy the example and fill in the two required fields before bringing the container up:
+
+```bash
+cp config.hub.example.yaml config.hub.yaml
+```
+
+Edit `config.hub.yaml`:
+
+```yaml
+vigil:
+  server_url: "http://vigil-server:9080"      # your Vigil server
+  token: "your-addon-token-here"              # from Vigil UI → Add-ons → Add Add-on
+  server_pubkey: "your-server-public-key"     # shown in the same dialog
+```
+
+Then deploy the Hub:
 
 ```yaml
 services:
@@ -119,20 +134,18 @@ services:
     restart: unless-stopped
     ports:
       - "9300:9300"
+    command: ["-config", "/etc/snapraid-hub/config.hub.yaml"]
     environment:
-      VIGIL_URL: http://vigil-server:9080
-      VIGIL_TOKEN: your-addon-token-here
-      VIGIL_SERVER_PUBKEY: your-server-public-key
-      VIGIL_SNAPRAID_HUB_DATA_REGISTRY_PATH: "/data"
       TZ: ${TZ:-UTC}
     volumes:
       - hub-data:/data
+      - ./config.hub.yaml:/etc/snapraid-hub/config.hub.yaml:ro
 
 volumes:
   hub-data:
 ```
 
-> **Tip:** You can also use a YAML config file instead of environment variables. Mount `config.hub.yaml` and pass `-config /etc/snapraid-hub/config.hub.yaml`. See [config.hub.example.yaml](config.hub.example.yaml) for all options.
+> **Tip:** Environment variables (`VIGIL_URL`, `VIGIL_TOKEN`, `VIGIL_SERVER_PUBKEY`, `VIGIL_SNAPRAID_HUB_*`) override any field in the YAML — useful for keeping secrets out of the file — but the file itself must still exist at the mounted path. See [config.hub.example.yaml](config.hub.example.yaml) for every option.
 
 #### Agent (via Deploy Wizard)
 

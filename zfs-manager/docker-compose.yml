@@ -1,0 +1,90 @@
+# ZFS Manager Add-on for Vigil
+#
+# ──────────────────────────────────────────────────────────────────────
+#  QUICK START
+# ──────────────────────────────────────────────────────────────────────
+#
+#   1. In Vigil UI → Add-ons → Add Add-on, generate a registration token
+#      and copy VIGIL_URL, VIGIL_TOKEN, VIGIL_SERVER_PUBKEY into the
+#      vigil-zfs-manager service below.
+#
+#   2. Start the manager first so it generates its PSK:
+#
+#        docker compose up -d vigil-zfs-manager
+#        docker exec vigil-zfs-manager cat /data/hub.psk
+#
+#      (Or skip this — the Vigil UI → ZFS Manager → Agents → "Add ZFS
+#      Agent" deploy wizard auto-fills the PSK.)
+#
+#   3. Set VIGIL_ZFS_AGENT_HUB_PSK and VIGIL_ZFS_AGENT_ADVERTISE_ADDR
+#      below, then start the agent:
+#
+#        docker compose up -d vigil-zfs-agent
+#
+# ──────────────────────────────────────────────────────────────────────
+#  IMAGE VARIANTS
+# ──────────────────────────────────────────────────────────────────────
+#   Manager: :latest    (Alpine)
+#   Agent:   :latest          — Alpine, for musl hosts
+#            :latest-debian   — Debian, for Proxmox / Ubuntu / Debian
+#                               hosts where host ZFS is compiled against
+#                               glibc. Avoids dynamic linker errors when
+#                               the agent calls the mounted host binaries.
+#
+#   Neither component requires a YAML config file — env vars alone are
+#   sufficient. A config.manager.yaml / config.agent.yaml file can be
+#   mounted instead if you prefer; see README → Configuration Reference.
+# ──────────────────────────────────────────────────────────────────────
+
+services:
+  vigil-zfs-manager:
+    container_name: vigil-zfs-manager
+    image: ghcr.io/pineappledr/vigil-addons-zfs-manager:latest
+    restart: unless-stopped
+    ports:
+      - "9500:9500"
+    environment:
+      VIGIL_URL: http://vigil-server:9080
+      VIGIL_TOKEN: your-addon-token-here
+      VIGIL_SERVER_PUBKEY: your-server-public-key
+      VIGIL_ZFS_MANAGER_DATA_REGISTRY_PATH: /data/agents.json
+      TZ: ${TZ:-UTC}
+    volumes:
+      - zfs-manager-data:/data
+
+  vigil-zfs-agent:
+    container_name: vigil-zfs-agent
+    # ─── Alpine (default). For Proxmox/Ubuntu/Debian hosts, use -debian: ─
+    # image: ghcr.io/pineappledr/vigil-addons-zfs-agent:latest-debian
+    image: ghcr.io/pineappledr/vigil-addons-zfs-agent:latest
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "9600:9600"
+    environment:
+      VIGIL_ZFS_AGENT_HUB_URL: http://vigil-zfs-manager:9500
+      VIGIL_ZFS_AGENT_HUB_PSK: "paste-from-docker-exec-vigil-zfs-manager-cat-data-hub.psk"
+      VIGIL_ZFS_AGENT_ID: nas-01
+      VIGIL_ZFS_AGENT_ADVERTISE_ADDR: http://192.168.1.100:9600   # host LAN IP:port the Manager uses
+      VIGIL_ZFS_AGENT_LISTEN_PORT: "9600"
+      TZ: ${TZ:-UTC}
+    volumes:
+      - zfs-agent-data:/data
+
+      # ─── Kernel + udev ─── full /dev so zpool can see partition nodes
+      # it creates (e.g. /dev/sdb1). /run/udev lets blkid resolve them.
+      - /dev:/dev
+      - /run/udev:/run/udev:ro
+
+      # ─── Host ZFS binaries (read-only) ───
+      - /sbin/zpool:/sbin/zpool:ro
+      - /sbin/zfs:/sbin/zfs:ro
+
+      # ─── Host shared libraries the binaries link against ───
+      - /lib:/lib:ro
+      - /lib64:/lib64:ro
+      - /usr/lib:/usr/lib:ro
+
+volumes:
+  zfs-manager-data:
+  zfs-agent-data:

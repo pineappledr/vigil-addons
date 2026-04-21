@@ -43,9 +43,9 @@ Vigil add-ons follow a fully decoupled architecture. The Vigil server and each a
 
 | Add-on | Description | Status | Documentation |
 | ------ | ----------- | ------ | ------------- |
-| **Disk Burn-in & Pre-clear** | Production-grade drive qualification tool with SMART testing, destructive badblocks, automated GPT partitioning, and ext4 formatting. | Stable | [burn-in/README.md](burn-in/README.md) |
-| **SnapRAID** | Full lifecycle management of local SnapRAID arrays — native Go scheduling engine, safety gates, job history, and real-time log streaming. Replaces `snapraid-runner` and cron wrappers. | Stable | [snapraid/README.md](snapraid/README.md) |
-| **ZFS Manager** | Visual ZFS pool, dataset, and snapshot management for Proxmox, Debian, Ubuntu, and bare-metal Linux hosts. Multi-agent: one manager, many ZFS hosts. | Phase 1 (v0.1.0) | [zfs-manager/README.md](zfs-manager/README.md) |
+| **Disk Burn-in & Pre-clear** | Production-grade drive qualification tool with SMART testing, destructive badblocks, automated GPT partitioning, and ext4 formatting. | Stable (v2.0.0) | [burn-in/README.md](burn-in/README.md) |
+| **SnapRAID** | Full lifecycle management of local SnapRAID arrays — native Go scheduling engine, safety gates, job history, and real-time log streaming. Replaces `snapraid-runner` and cron wrappers. | Stable (v2.0.0) | [snapraid/README.md](snapraid/README.md) |
+| **ZFS Manager** | Visual ZFS pool, dataset, and snapshot management for Proxmox, Debian, Ubuntu, and bare-metal Linux hosts. Multi-agent: one manager, many ZFS hosts. | Stable (v2.0.0) | [zfs-manager/README.md](zfs-manager/README.md) |
 
 ---
 

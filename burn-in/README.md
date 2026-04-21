@@ -2,6 +2,7 @@
 
 A production-grade drive qualification daemon for the [Vigil](https://github.com/pineappledr/vigil) monitoring platform. Designed for homelabs, NAS builders, and data hoarders who need to stress-test and prepare drives before trusting them with data.
 
+[![Release](https://img.shields.io/badge/Release-v2.0.0-8b5cf6)](https://github.com/pineappledr/vigil-addons/releases/tag/v2.0.0)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/Platform-linux%2Famd64%20%7C%20linux%2Farm64-lightgrey)](https://github.com/pineappledr/vigil-addons)
 

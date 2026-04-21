@@ -1,18 +1,38 @@
 # SnapRAID Add-on for Vigil
 #
-# Requirements:
-#   - Vigil Server running and reachable (default: http://<vigil-server>:9080)
-#   - SnapRAID installed on the Agent host (apt install snapraid)
-#   - A valid /etc/snapraid.conf (test with: snapraid status)
-#   - All data and parity disks mounted and accessible
-#   - Docker (optional) for container pause/stop during sync
+# ──────────────────────────────────────────────────────────────────────
+#  ONE-TIME SETUP (required before `docker compose up`)
+# ──────────────────────────────────────────────────────────────────────
 #
-# Setup:
-#   1. In Vigil UI, go to Extensions > Add-ons > Add Add-on
-#   2. Fill in the name/URL and generate a registration token
-#   3. Set the token in config.hub.yaml (vigil.token)
-#   4. Start the Hub — it registers and opens a WebSocket to Vigil
-#   5. Deploy the Agent via the deploy wizard or this compose file
+#   1. Copy the Hub example config and set the two required fields:
+#
+#        cp config.hub.example.yaml config.hub.yaml
+#
+#      Then edit config.hub.yaml and fill in:
+#        vigil.server_url : URL of your Vigil Server   (e.g. http://vigil.local:9080)
+#        vigil.token      : add-on registration token  (Vigil UI → Add-ons → Add Add-on)
+#        vigil.server_pubkey : base64 Ed25519 key      (shown in the Add Add-on dialog)
+#
+#      The Hub REQUIRES a config file — it will not start without one.
+#      Environment variables (VIGIL_URL, VIGIL_TOKEN, VIGIL_SERVER_PUBKEY,
+#      VIGIL_SNAPRAID_HUB_*) can override any field, but the file itself
+#      must exist at the mounted path.
+#
+#   2. Make sure /etc/snapraid.conf exists on the Agent host and
+#      `snapraid status` works there (apt install snapraid).
+#
+#   3. Start the Hub first so it can register with Vigil and generate
+#      its agent PSK, then start the Agent:
+#
+#        docker compose up -d snapraid-hub
+#        docker exec snapraid-hub cat /data/hub.psk   # copy this value
+#        # paste into VIGIL_SNAPRAID_AGENT_HUB_PSK below, then:
+#        docker compose up -d snapraid-agent
+#
+#      (Or use the Vigil UI → SnapRAID → Agents → "Add SnapRAID Agent"
+#      deploy wizard, which pre-fills the PSK for you.)
+#
+# ──────────────────────────────────────────────────────────────────────
 
 services:
   snapraid-hub:
@@ -23,7 +43,9 @@ services:
       - "9300:9300"
     command: ["-config", "/etc/snapraid-hub/config.hub.yaml"]
     volumes:
+      # Persistent Hub state: agent registry + generated hub.psk
       - hub-data:/data
+      # REQUIRED — created in step 1 above
       - ./config.hub.yaml:/etc/snapraid-hub/config.hub.yaml:ro
 
   snapraid-agent:
@@ -33,9 +55,11 @@ services:
     privileged: true
     ports:
       - "9400:9400"
+    # The Agent runs on environment variables only — no YAML file required.
+    # (A config.agent.yaml mount is also supported; see README → Configuration.)
     environment:
       VIGIL_SNAPRAID_AGENT_HUB_URL: http://snapraid-hub:9300
-      # VIGIL_SNAPRAID_AGENT_HUB_TOKEN: <from Hub deploy wizard>
+      VIGIL_SNAPRAID_AGENT_HUB_PSK: "paste-from-docker-exec-Snapraid-Hub-cat-data-hub.psk"
       VIGIL_SNAPRAID_AGENT_ID: snapraid-agent-01
       VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR: http://snapraid-agent:9400
       VIGIL_SNAPRAID_AGENT_LISTEN_PORT: 9400

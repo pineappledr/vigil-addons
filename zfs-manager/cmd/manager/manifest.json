@@ -1,6 +1,6 @@
 {
   "name": "ZFS Manager",
-  "version": "0.6.0-dev",
+  "version": "2.0.0",
   "description": "ZFS pool, dataset, and snapshot management for homelab servers",
   "author": "Vigil Add-ons",
   "docker_image": "ghcr.io/pineappledr/vigil-addons-zfs-manager:latest",

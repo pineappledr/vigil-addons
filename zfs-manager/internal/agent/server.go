@@ -23,7 +23,7 @@ import (
 
 // SchedulerReloader can reload cron schedules after task changes.
 type SchedulerReloader interface {
-	Reload(ctx context.Context) error
+	Reload() error
 	NextRunTimes() map[int64]time.Time
 }
 
@@ -1183,7 +1183,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("created scheduled task", "task_id", id, "type", req.TaskType, "target", req.Target)
 
 	// Reload scheduler to pick up the new task
-	if err := s.scheduler.Reload(r.Context()); err != nil {
+	if err := s.scheduler.Reload(); err != nil {
 		s.logger.Error("scheduler reload failed", "error", err)
 	}
 
@@ -1245,7 +1245,7 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Info("updated scheduled task", "task_id", id)
 
-	if err := s.scheduler.Reload(r.Context()); err != nil {
+	if err := s.scheduler.Reload(); err != nil {
 		s.logger.Error("scheduler reload failed", "error", err)
 	}
 
@@ -1266,7 +1266,7 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Info("deleted scheduled task", "task_id", id)
 
-	if err := s.scheduler.Reload(r.Context()); err != nil {
+	if err := s.scheduler.Reload(); err != nil {
 		s.logger.Error("scheduler reload failed", "error", err)
 	}
 

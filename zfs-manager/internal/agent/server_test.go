@@ -2,7 +2,6 @@ package agent
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -23,7 +22,7 @@ type mockScheduler struct {
 	nextRuns     map[int64]time.Time
 }
 
-func (m *mockScheduler) Reload(_ context.Context) error {
+func (m *mockScheduler) Reload() error {
 	m.reloadCalled++
 	return nil
 }

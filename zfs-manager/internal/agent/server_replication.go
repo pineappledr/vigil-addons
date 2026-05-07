@@ -162,7 +162,7 @@ func (s *Server) handleCreateReplicationTask(w http.ResponseWriter, r *http.Requ
 
 	s.logger.Info("created replication task", "task_id", id, "source", req.Target, "dest", req.DestTarget)
 
-	if err := s.scheduler.Reload(r.Context()); err != nil {
+	if err := s.scheduler.Reload(); err != nil {
 		s.logger.Error("scheduler reload failed", "error", err)
 	}
 
@@ -290,7 +290,7 @@ func (s *Server) handleUpdateReplicationTask(w http.ResponseWriter, r *http.Requ
 
 	s.logger.Info("updated replication task", "task_id", id)
 
-	if err := s.scheduler.Reload(r.Context()); err != nil {
+	if err := s.scheduler.Reload(); err != nil {
 		s.logger.Error("scheduler reload failed", "error", err)
 	}
 
@@ -321,7 +321,7 @@ func (s *Server) handleDeleteReplicationTask(w http.ResponseWriter, r *http.Requ
 
 	s.logger.Info("deleted replication task", "task_id", id)
 
-	if err := s.scheduler.Reload(r.Context()); err != nil {
+	if err := s.scheduler.Reload(); err != nil {
 		s.logger.Error("scheduler reload failed", "error", err)
 	}
 

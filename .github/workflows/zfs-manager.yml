@@ -20,7 +20,7 @@ env:
   REGISTRY: ghcr.io
   MANAGER_IMAGE: ghcr.io/pineappledr/vigil-addons-zfs-manager
   AGENT_IMAGE: ghcr.io/pineappledr/vigil-addons-zfs-agent
-  GO_VERSION: '1.26.2'
+  GO_VERSION: '1.26.3'
   WORKDIR: zfs-manager
   # Opt every JavaScript action in this workflow (including transitive ones
   # like actions/cache pulled in by setup-go and docker/build-push-action)
@@ -468,7 +468,11 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/zfs-manager-v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "is_prerelease=${{ contains(github.ref, '-') }}" >> $GITHUB_OUTPUT
+          if [[ "$VERSION" == *-* ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v6

@@ -31,6 +31,21 @@ hub:
   # deploy-wizard UI. Set via VIGIL_SNAPRAID_AGENT_HUB_PSK env var.
   psk: ""
 
+# ── Identity ────────────────────────────────────────────────────────
+identity:
+  # Human-readable name shown in the Hub's Registered Agents table.
+  # Defaults to the OS hostname, which in Docker is a random container
+  # hex ID — always set this to something meaningful.
+  # Override with: VIGIL_SNAPRAID_AGENT_ID
+  agent_id: ""
+
+  # URL the Hub uses to reach this agent for commands. Required in
+  # Docker deployments — without it the agent advertises its container
+  # hostname, which is not routable from the Hub.
+  # Format: http://<host-lan-ip>:<listen-port>
+  # Override with: VIGIL_SNAPRAID_AGENT_ADVERTISE_ADDR
+  advertise_addr: ""
+
 # ── SnapRAID Paths ──────────────────────────────────────────────────
 snapraid:
   # Path to the snapraid binary. Leave empty to auto-detect from PATH.

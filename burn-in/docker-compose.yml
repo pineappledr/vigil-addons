@@ -1,0 +1,57 @@
+# Burn-in & Pre-clear Add-on for Vigil
+#
+# Requirements:
+#   - Vigil Server running and reachable (default: http://<vigil-server>:9080)
+#   - Drives to test must be visible as block devices under /dev/ on the Agent host
+#   - Agent runs privileged to access smartctl, badblocks, sgdisk, mkfs.ext4
+#
+# Setup:
+#   1. In Vigil UI, go to Add-ons > Add Add-on, select the Burn-In Hub preset
+#   2. Copy the VIGIL_URL, VIGIL_TOKEN, and VIGIL_SERVER_PUBKEY into this file
+#   3. Start the Hub — it registers and opens a WebSocket to Vigil
+#   4. In the Burn-In add-on's Agents tab, click "Copy docker compose" to get
+#      the agent block with BURNIN_HUB_PSK pre-filled, or read it from
+#      /var/lib/vigil-hub/hub.psk inside the hub container
+
+services:
+  burnin-hub:
+    container_name: Burnin-Hub
+    image: ghcr.io/pineappledr/vigil-addons-burnin-hub:latest
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    environment:
+      VIGIL_URL: http://vigil-server:9080
+      VIGIL_TOKEN: <from Add Add-on dialog>
+      VIGIL_SERVER_PUBKEY: <from Add Add-on dialog>
+      BURNIN_HUB_LISTEN: ":9100"
+      BURNIN_HUB_DATA_DIR: /data
+      TZ: ${TZ:-UTC}
+    volumes:
+      - hub-data:/data
+
+  burnin-agent:
+    container_name: Burnin-Agent
+    image: ghcr.io/pineappledr/vigil-addons-burnin-agent:latest
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "9200:9200"
+    environment:
+      BURNIN_HUB_URL: http://burnin-hub:9100
+      BURNIN_HUB_PSK: <from Hub deploy wizard or /data/hub.psk>
+      BURNIN_AGENT_ID: burnin-agent-01
+      # BURNIN_AGENT_ADVERTISE_ADDR: 192.168.1.100:9200   # host LAN IP:port the Hub uses to reach this agent
+      BURNIN_AGENT_LISTEN: ":9200"
+      BURNIN_AGENT_LOG_DIR: /var/lib/vigil-agent/logs
+      TZ: ${TZ:-UTC}
+    volumes:
+      # ─── Raw device access — required for smartctl, badblocks, sgdisk ───
+      - /dev:/dev
+
+      # ─── Per-job log files (burnin-{model}_{serial}_{timestamp}.log) ───
+      - agent-logs:/var/lib/vigil-agent/logs
+
+volumes:
+  hub-data:
+  agent-logs:

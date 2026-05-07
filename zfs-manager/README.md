@@ -2,6 +2,7 @@
 
 Visual ZFS pool, dataset, and snapshot management for homelab servers running Proxmox, Debian, Ubuntu, or any bare-metal Linux host with ZFS. Replaces the ZFS management panel you lost when you migrated away from TrueNAS.
 
+[![Release](https://img.shields.io/badge/Release-v2.0.0-8b5cf6)](https://github.com/pineappledr/vigil-addons/releases)
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/Platform-linux%2Famd64%20%7C%20linux%2Farm64-lightgrey)](https://github.com/pineappledr/vigil-addons)
 
@@ -157,6 +158,8 @@ When running the Agent in Docker, the host's ZFS binaries and libraries must be 
 ---
 
 ## Deployment
+
+> **Quick start:** a ready-to-use [`docker-compose.yml`](docker-compose.yml) with both services is shipped alongside this README. Copy it, fill in `VIGIL_URL` / `VIGIL_TOKEN` / `VIGIL_SERVER_PUBKEY` and the agent's `VIGIL_ZFS_AGENT_HUB_PSK` + `VIGIL_ZFS_AGENT_ADVERTISE_ADDR`, then `docker compose up -d`. The walkthrough below explains what each step does.
 
 ### 1. Register in Vigil
 

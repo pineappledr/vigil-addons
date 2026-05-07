@@ -23,6 +23,11 @@ type Scheduler struct {
 	db        *sql.DB
 	logger    *slog.Logger
 
+	// parentCtx is the long-lived context (typically the agent appCtx) that
+	// scheduled jobs run under. Captured in Start and reused on Reload so we
+	// never tie a cron job's lifetime to an HTTP request context.
+	parentCtx context.Context
+
 	// jobMu serializes scheduled job execution.
 	jobMu sync.Mutex
 }
@@ -39,14 +44,17 @@ func New(engine *agent.Engine, collector *agent.Collector, database *sql.DB, log
 }
 
 // Start loads all enabled tasks from the DB and registers them with cron.
+// ctx is captured as the long-lived parent context for all scheduled jobs;
+// it must outlive every job invocation (typically the agent's appCtx).
 func (s *Scheduler) Start(ctx context.Context) error {
+	s.parentCtx = ctx
 	tasks, err := agentdb.ListEnabledTasks(s.db)
 	if err != nil {
 		return fmt.Errorf("load tasks: %w", err)
 	}
 
 	for _, task := range tasks {
-		if err := s.registerTask(ctx, task); err != nil {
+		if err := s.registerTask(task); err != nil {
 			s.logger.Error("failed to register task", "task_id", task.ID, "error", err)
 		}
 	}
@@ -61,11 +69,17 @@ func (s *Scheduler) Stop() context.Context {
 	return s.cron.Stop()
 }
 
-// Reload stops, clears, and re-registers all enabled tasks.
-func (s *Scheduler) Reload(ctx context.Context) error {
+// Reload stops, clears, and re-registers all enabled tasks. It reuses the
+// long-lived parent context captured by Start — callers must NOT pass an
+// HTTP request context here, since cron jobs fire long after the request
+// completes and would otherwise see ctx.Err() == context.Canceled.
+func (s *Scheduler) Reload() error {
+	if s.parentCtx == nil {
+		return fmt.Errorf("scheduler not started")
+	}
 	<-s.cron.Stop().Done()
 	s.cron = cron.New(cron.WithSeconds(), cron.WithLocation(time.Local))
-	return s.Start(ctx)
+	return s.Start(s.parentCtx)
 }
 
 // NextRunTimes returns the next scheduled run time for each task ID.
@@ -80,14 +94,13 @@ func (s *Scheduler) NextRunTimes() map[int64]time.Time {
 }
 
 // registerTask adds a single task to the cron scheduler.
-func (s *Scheduler) registerTask(ctx context.Context, task agentdb.ScheduledTask) error {
+func (s *Scheduler) registerTask(task agentdb.ScheduledTask) error {
 	// robfig/cron/v3 with WithSeconds() expects 6-field; prepend "0 " for seconds.
 	expr := "0 " + task.Schedule
 	job := &taskJob{
 		scheduler: s,
 		taskID:    task.ID,
 		task:      task,
-		ctx:       ctx,
 	}
 	_, err := s.cron.AddJob(expr, job)
 	if err != nil {
@@ -97,32 +110,67 @@ func (s *Scheduler) registerTask(ctx context.Context, task agentdb.ScheduledTask
 	return nil
 }
 
-// taskJob implements cron.Job for a scheduled task.
+// taskJob implements cron.Job for a scheduled task. The job pulls its context
+// from scheduler.parentCtx at fire time so it always uses the live, long-lived
+// agent context — never a stale request context.
 type taskJob struct {
 	scheduler *Scheduler
 	taskID    int64
 	task      agentdb.ScheduledTask
-	ctx       context.Context
 }
 
 func (j *taskJob) Run() {
-	j.scheduler.executeTask(j.ctx, j.task)
+	j.scheduler.executeTask(j.scheduler.parentCtx, j.task)
 }
 
-// executeTask runs a snapshot or scrub task.
+// RunNow executes a scheduled task immediately as a manual run, recording it
+// in job_history with trigger='manual'. Returns once the run is dispatched —
+// the actual work happens in a goroutine and waits if a scheduled job is
+// currently running (unlike scheduled fires, which skip on contention).
+func (s *Scheduler) RunNow(taskID int64) error {
+	task, err := agentdb.GetTask(s.db, taskID)
+	if err != nil {
+		return fmt.Errorf("load task %d: %w", taskID, err)
+	}
+	if task == nil {
+		return fmt.Errorf("task %d not found", taskID)
+	}
+	if s.parentCtx == nil {
+		return fmt.Errorf("scheduler not started")
+	}
+	go s.executeTaskTriggered(s.parentCtx, *task, "manual")
+	return nil
+}
+
+// executeTask is the cron entry point — uses TryLock so a slow scheduled job
+// doesn't pile up if its next fire arrives before it finishes.
 func (s *Scheduler) executeTask(ctx context.Context, task agentdb.ScheduledTask) {
 	if !s.jobMu.TryLock() {
 		s.logger.Warn("scheduled task skipped: previous job still running", "task_id", task.ID)
 		return
 	}
 	defer s.jobMu.Unlock()
+	s.runJob(ctx, task, "scheduled")
+}
 
+// executeTaskTriggered is the manual-run entry point. Unlike executeTask it
+// blocks on jobMu instead of skipping, so a user-clicked "Run Now" reliably
+// runs (after any in-flight scheduled job finishes).
+func (s *Scheduler) executeTaskTriggered(ctx context.Context, task agentdb.ScheduledTask, trigger string) {
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
+	s.runJob(ctx, task, trigger)
+}
+
+// runJob executes the dispatch + bookkeeping for one task run. Caller is
+// responsible for jobMu. trigger is recorded in job_history.
+func (s *Scheduler) runJob(ctx context.Context, task agentdb.ScheduledTask, trigger string) {
 	taskID := task.ID
-	jobID, _ := agentdb.InsertJob(s.db, &taskID, task.TaskType, "scheduled")
+	jobID, _ := agentdb.InsertJob(s.db, &taskID, task.TaskType, trigger)
 
-	s.logger.Info("executing scheduled task", "task_id", task.ID, "type", task.TaskType, "target", task.Target)
+	s.logger.Info("executing task", "task_id", task.ID, "type", task.TaskType, "target", task.Target, "trigger", trigger)
 	source := fmt.Sprintf("scheduler:%s", task.TaskType)
-	s.emitLog(source, "info", fmt.Sprintf("starting %s on %s (task #%d)", task.TaskType, task.Target, task.ID))
+	s.emitLog(source, "info", fmt.Sprintf("starting %s on %s (task #%d, %s)", task.TaskType, task.Target, task.ID, trigger))
 
 	var err error
 	switch task.TaskType {
@@ -137,7 +185,7 @@ func (s *Scheduler) executeTask(ctx context.Context, task agentdb.ScheduledTask)
 	}
 
 	if err != nil {
-		s.logger.Error("scheduled task failed", "task_id", task.ID, "error", err)
+		s.logger.Error("task failed", "task_id", task.ID, "trigger", trigger, "error", err)
 		agentdb.CompleteJob(s.db, jobID, "error", err.Error())
 		s.emitFailureEvent(task, err)
 		s.emitLog(source, "error", fmt.Sprintf("task #%d failed: %s", task.ID, err))
@@ -145,7 +193,7 @@ func (s *Scheduler) executeTask(ctx context.Context, task agentdb.ScheduledTask)
 	}
 
 	agentdb.CompleteJob(s.db, jobID, "success", "")
-	s.logger.Info("scheduled task completed", "task_id", task.ID)
+	s.logger.Info("task completed", "task_id", task.ID, "trigger", trigger)
 	s.emitLog(source, "info", fmt.Sprintf("task #%d on %s completed", task.ID, task.Target))
 }
 

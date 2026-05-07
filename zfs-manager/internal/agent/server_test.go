@@ -34,6 +34,8 @@ func (m *mockScheduler) NextRunTimes() map[int64]time.Time {
 	return m.nextRuns
 }
 
+func (m *mockScheduler) RunNow(_ int64) error { return nil }
+
 func testSetup(t *testing.T) (*Server, *mockScheduler, *sql.DB) {
 	t.Helper()
 

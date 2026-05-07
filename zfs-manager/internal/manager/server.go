@@ -162,7 +162,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/tasks/{id}", req(s.proxyToAgent))
 	s.mux.HandleFunc("DELETE /api/tasks/{id}", req(s.proxyToAgent))
 	s.mux.HandleFunc("GET /api/tasks/{id}/history", req(s.proxyToAgent))
+	s.mux.HandleFunc("POST /api/tasks/{id}/run", req(s.proxyToAgent))
 	s.mux.HandleFunc("GET /api/jobs", req(s.proxyToAgent))
+	s.mux.HandleFunc("GET /api/logs/history", req(s.proxyToAgent))
 	s.mux.HandleFunc("GET /api/retention", req(s.proxyToAgent))
 	s.mux.HandleFunc("POST /api/retention/cleanup", req(s.proxyToAgent))
 

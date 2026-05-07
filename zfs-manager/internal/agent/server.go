@@ -25,6 +25,7 @@ import (
 type SchedulerReloader interface {
 	Reload() error
 	NextRunTimes() map[int64]time.Time
+	RunNow(taskID int64) error
 }
 
 // Server is the Agent HTTP server.
@@ -140,7 +141,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/tasks/{id}", req(s.handleUpdateTask))
 	s.mux.HandleFunc("DELETE /api/tasks/{id}", req(s.handleDeleteTask))
 	s.mux.HandleFunc("GET /api/tasks/{id}/history", req(s.handleTaskHistory))
+	s.mux.HandleFunc("POST /api/tasks/{id}/run", req(s.handleRunTask))
 	s.mux.HandleFunc("GET /api/jobs", req(s.handleJobHistory))
+	s.mux.HandleFunc("GET /api/logs/history", req(s.handleLogHistory))
 	s.mux.HandleFunc("GET /api/retention", req(s.handleRetentionStats))
 	s.mux.HandleFunc("POST /api/retention/cleanup", req(s.handleRetentionCleanup))
 
@@ -1273,6 +1276,42 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 	addonutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// handleRunTask triggers a snapshot or scrub task to run immediately as a
+// manual run, bypassing the cron schedule. Replication tasks have their own
+// dedicated /api/replication/tasks/{id}/run endpoint with extra dest checks.
+func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		addonutil.WriteError(w, http.StatusBadRequest, "invalid task id")
+		return
+	}
+
+	task, err := agentdb.GetTask(s.db, id)
+	if err != nil {
+		addonutil.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if task == nil {
+		addonutil.WriteError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if task.TaskType == "replication" {
+		addonutil.WriteError(w, http.StatusBadRequest, "use /api/replication/tasks/{id}/run for replication tasks")
+		return
+	}
+
+	if err := s.scheduler.RunNow(id); err != nil {
+		addonutil.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.logger.Info("manual task run dispatched", "task_id", id, "type", task.TaskType, "target", task.Target)
+	addonutil.WriteJSON(w, http.StatusAccepted, map[string]string{
+		"status": "started",
+		"hint":   "check Job History — the run is in progress",
+	})
+}
+
 func (s *Server) handleTaskHistory(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -1301,6 +1340,105 @@ func (s *Server) handleJobHistory(w http.ResponseWriter, _ *http.Request) {
 		jobs = []agentdb.JobRecord{}
 	}
 	addonutil.WriteJSON(w, http.StatusOK, jobs)
+}
+
+// LogEntry is one rendered line for the dashboard log-viewer.
+type LogEntry struct {
+	Timestamp string `json:"timestamp"`
+	Level     string `json:"level"`
+	Source    string `json:"source"`
+	Message   string `json:"message"`
+}
+
+// handleLogHistory turns recent job_history rows into a flat sequence of log
+// lines for the Live Output panel. This is a REST-polled fallback so the panel
+// works even when the SSE log-frame pipeline (agent → manager → vigil → SSE)
+// drops a message — historically the source of empty Live Output complaints.
+//
+// Each completed job emits two lines (start + end). Running jobs emit only the
+// start. Optional ?time_range=5m|15m|1h|6h|24h trims to recent activity.
+func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
+	var cutoff time.Time
+	switch r.URL.Query().Get("time_range") {
+	case "5m":
+		cutoff = time.Now().UTC().Add(-5 * time.Minute)
+	case "15m":
+		cutoff = time.Now().UTC().Add(-15 * time.Minute)
+	case "1h":
+		cutoff = time.Now().UTC().Add(-1 * time.Hour)
+	case "6h":
+		cutoff = time.Now().UTC().Add(-6 * time.Hour)
+	case "24h":
+		cutoff = time.Now().UTC().Add(-24 * time.Hour)
+	}
+
+	jobs, err := agentdb.RecentJobs(s.db, 200)
+	if err != nil {
+		addonutil.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	const sqliteTimeFmt = "2006-01-02 15:04:05"
+	entries := []LogEntry{}
+	for _, j := range jobs {
+		startT, errStart := time.Parse(sqliteTimeFmt, j.StartedAt)
+		if errStart == nil && !cutoff.IsZero() && startT.Before(cutoff) {
+			continue
+		}
+
+		taskRef := ""
+		if j.TaskID != nil {
+			taskRef = fmt.Sprintf(" task #%d", *j.TaskID)
+		}
+
+		startTs := j.StartedAt
+		if errStart == nil {
+			startTs = startT.UTC().Format(time.RFC3339)
+		}
+		entries = append(entries, LogEntry{
+			Timestamp: startTs,
+			Level:     "info",
+			Source:    j.JobType,
+			Message:   fmt.Sprintf("%s%s started (%s)", j.JobType, taskRef, j.Trigger),
+		})
+
+		if j.Status == "running" || j.FinishedAt == "" {
+			continue
+		}
+
+		level := "info"
+		verb := "completed"
+		if j.Status == "error" {
+			level = "error"
+			verb = "failed"
+		}
+		msg := fmt.Sprintf("%s%s %s", j.JobType, taskRef, verb)
+		if j.DurationSecs > 0 {
+			msg += fmt.Sprintf(" in %ds", j.DurationSecs)
+		}
+		if j.Message != "" {
+			msg += ": " + j.Message
+		}
+
+		endTs := j.FinishedAt
+		if t, err := time.Parse(sqliteTimeFmt, j.FinishedAt); err == nil {
+			endTs = t.UTC().Format(time.RFC3339)
+		}
+		entries = append(entries, LogEntry{
+			Timestamp: endTs,
+			Level:     level,
+			Source:    j.JobType,
+			Message:   msg,
+		})
+	}
+
+	// Ascending order so the log viewer reads top-to-bottom by time
+	// (auto-scroll keeps the most recent in view).
+	sort.Slice(entries, func(i, k int) bool {
+		return entries[i].Timestamp < entries[k].Timestamp
+	})
+
+	addonutil.WriteJSON(w, http.StatusOK, entries)
 }
 
 // --- Phase 3: Retention Stats ---

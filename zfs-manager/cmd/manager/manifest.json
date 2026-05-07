@@ -1458,6 +1458,21 @@
             "default_sort": { "key": "id", "direction": "asc" },
             "row_actions": [
               {
+                "id": "run-task-now",
+                "label": "Run Now",
+                "icon": "play",
+                "safety_tier": "yellow",
+                "action": {
+                  "method": "POST",
+                  "endpoint": "/api/tasks/{row.id}/run"
+                },
+                "confirm": {
+                  "title": "Run Task Now",
+                  "message": "Trigger a manual {row.task_type} on {row.target}? This runs immediately and is recorded in Job History as a manual run.",
+                  "button_label": "Run Now"
+                }
+              },
+              {
                 "id": "task-history",
                 "label": "History",
                 "icon": "history",
@@ -2501,7 +2516,21 @@
           "type": "log-viewer",
           "title": "Live Output",
           "config": {
-            "auto_scroll": true
+            "auto_scroll": true,
+            "max_lines": 500,
+            "show_timestamp": true,
+            "show_source": true,
+            "source": "log_history",
+            "time_filter": {
+              "default": "1h",
+              "options": [
+                { "value": "5m",  "label": "Last 5 Min" },
+                { "value": "15m", "label": "Last 15 Min" },
+                { "value": "1h",  "label": "Last 1 Hour" },
+                { "value": "6h",  "label": "Last 6 Hours" },
+                { "value": "24h", "label": "Last 24 Hours" }
+              ]
+            }
           }
         }
       ]

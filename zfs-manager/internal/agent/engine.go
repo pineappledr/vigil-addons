@@ -438,6 +438,33 @@ func (e *Engine) CancelScrub(ctx context.Context, pool string) (*CommandResult, 
 
 // --- Phase 4: Disk & Pool Operations ---
 
+// parentDiskName returns the parent block device name for a partition, or
+// the input unchanged for a whole disk.
+//
+//	sda1       → sda          (sd*/hd*/vd*/xvd*: strip trailing digit run)
+//	nvme0n1p1  → nvme0n1      (nvme: strip "pN" suffix)
+//	mmcblk0p1  → mmcblk0      (mmc:  strip "pN" suffix)
+//	sda        → sda          (no change)
+//	nvme0n1    → nvme0n1      (no change)
+func parentDiskName(name string) string {
+	for _, prefix := range []string{"nvme", "mmcblk", "loop"} {
+		if strings.HasPrefix(name, prefix) {
+			if i := strings.LastIndexByte(name, 'p'); i > 0 {
+				tail := name[i+1:]
+				if tail != "" && tail[0] >= '0' && tail[0] <= '9' {
+					return name[:i]
+				}
+			}
+			return name
+		}
+	}
+	i := len(name)
+	for i > 0 && name[i-1] >= '0' && name[i-1] <= '9' {
+		i--
+	}
+	return name[:i]
+}
+
 // AvailableDisk describes a block device that is not part of any ZFS pool.
 type AvailableDisk struct {
 	Name   string `json:"name"`
@@ -451,19 +478,29 @@ type AvailableDisk struct {
 // ListAvailableDisks returns block devices not currently used by any ZFS pool.
 // It cross-references lsblk output with disks found in zpool status.
 func (e *Engine) ListAvailableDisks(ctx context.Context) ([]AvailableDisk, error) {
-	// Get all disks/partitions currently in ZFS pools
+	// Get all disks/partitions currently in ZFS pools. When a vdev member is
+	// a partition (e.g. sda2), we ALSO mark the parent whole-disk (sda) as
+	// in-use — otherwise lsblk's top-level entry for the parent disk shows
+	// up as "unused" even though it's hosting an active pool member.
 	poolDisks := make(map[string]bool)
+	addPoolMember := func(name string) {
+		if name == "" {
+			return
+		}
+		poolDisks[name] = true
+		if parent := parentDiskName(name); parent != "" && parent != name {
+			poolDisks[parent] = true
+		}
+	}
 	pools, err := e.ListPools(ctx)
 	if err == nil {
 		for _, pool := range pools {
 			for _, vdev := range pool.Vdevs {
 				for _, disk := range vdev.Disks {
-					// Normalize: strip /dev/ prefix and partition suffixes for matching
-					poolDisks[disk.Name] = true
+					addPoolMember(disk.Name)
 				}
-				// Single-disk vdevs have the disk as the vdev name
 				if vdev.Type == "disk" {
-					poolDisks[vdev.Name] = true
+					addPoolMember(vdev.Name)
 				}
 			}
 		}

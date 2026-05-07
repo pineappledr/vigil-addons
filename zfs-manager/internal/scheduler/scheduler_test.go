@@ -136,7 +136,7 @@ func TestReload(t *testing.T) {
 		Enabled: true, Prefix: "auto",
 	})
 
-	if err := s.Reload(context.Background()); err != nil {
+	if err := s.Reload(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
 

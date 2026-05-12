@@ -172,6 +172,20 @@ func (s *Scheduler) runJob(ctx context.Context, task agentdb.ScheduledTask, trig
 	source := fmt.Sprintf("scheduler:%s", task.TaskType)
 	s.emitLog(source, "info", fmt.Sprintf("starting %s on %s (task #%d, %s)", task.TaskType, task.Target, task.ID, trigger))
 
+	// Announce job start as a standard Vigil "job_started" notification so it
+	// maps onto the built-in Add-on/Job notification rules. Flush immediately
+	// so this event isn't overwritten by the completion event in the same
+	// telemetry frame (Collector keeps only the last_event).
+	startMsg := fmt.Sprintf("%s %s on %s started", trigger, task.TaskType, task.Target)
+	s.emitEvent(agent.AgentEvent{
+		ID:        fmt.Sprintf("job-start-%d-%d", task.ID, time.Now().UnixMilli()),
+		Type:      jobStartedEventType(trigger),
+		Severity:  "info",
+		Message:   startMsg,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+	s.requestFlush()
+
 	var err error
 	switch task.TaskType {
 	case "snapshot":
@@ -189,12 +203,45 @@ func (s *Scheduler) runJob(ctx context.Context, task agentdb.ScheduledTask, trig
 		agentdb.CompleteJob(s.db, jobID, "error", err.Error())
 		s.emitFailureEvent(task, err)
 		s.emitLog(source, "error", fmt.Sprintf("task #%d failed: %s", task.ID, err))
+		s.requestFlush()
 		return
 	}
 
 	agentdb.CompleteJob(s.db, jobID, "success", "")
 	s.logger.Info("task completed", "task_id", task.ID, "trigger", trigger)
 	s.emitLog(source, "info", fmt.Sprintf("task #%d on %s completed", task.ID, task.Target))
+	s.emitEvent(agent.AgentEvent{
+		ID:        fmt.Sprintf("job-done-%d-%d", task.ID, time.Now().UnixMilli()),
+		Type:      jobCompleteEventType(trigger),
+		Severity:  "info",
+		Message:   fmt.Sprintf("%s %s on %s completed", trigger, task.TaskType, task.Target),
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+	s.requestFlush()
+}
+
+// jobStartedEventType maps a trigger to the Vigil event type for a job start.
+func jobStartedEventType(trigger string) string {
+	switch trigger {
+	case "manual":
+		return "manual_job_started"
+	case "scheduled":
+		return "scheduled_job_started"
+	default:
+		return "job_started"
+	}
+}
+
+// jobCompleteEventType maps a trigger to the Vigil event type for a job finish.
+func jobCompleteEventType(trigger string) string {
+	switch trigger {
+	case "manual":
+		return "manual_job_complete"
+	case "scheduled":
+		return "scheduled_job_complete"
+	default:
+		return "job_complete"
+	}
 }
 
 // emitEvent is a nil-safe wrapper around Collector.EmitEvent so scheduler
@@ -224,42 +271,36 @@ func (s *Scheduler) emitLog(source, level, message string) {
 	s.collector.EmitLogLine(source, level, message)
 }
 
-// emitFailureEvent maps a scheduled task failure onto a typed agent event.
-// Snapshot / scrub failures surface as "*_task_failed" with critical severity;
-// replication failures keep their existing richer message (source → dest).
+// emitFailureEvent maps a scheduled task failure onto the standard Vigil
+// "job_failed" notification (critical), keeping a task-type-specific message
+// so the alert text still says what failed.
 func (s *Scheduler) emitFailureEvent(task agentdb.ScheduledTask, err error) {
 	now := time.Now()
 	ts := now.UTC().Format(time.RFC3339)
+
+	var msg string
 	switch task.TaskType {
 	case "snapshot":
-		s.emitEvent(agent.AgentEvent{
-			ID:        fmt.Sprintf("snap-fail-%d-%d", task.ID, now.UnixMilli()),
-			Type:      "snapshot_task_failed",
-			Severity:  "critical",
-			Message:   fmt.Sprintf("snapshot of %s failed: %s", task.Target, err),
-			Timestamp: ts,
-		})
+		msg = fmt.Sprintf("snapshot of %s failed: %s", task.Target, err)
 	case "scrub":
-		s.emitEvent(agent.AgentEvent{
-			ID:        fmt.Sprintf("scrub-fail-%d-%d", task.ID, now.UnixMilli()),
-			Type:      "scrub_task_failed",
-			Severity:  "critical",
-			Message:   fmt.Sprintf("scrub of %s failed: %s", task.Target, err),
-			Timestamp: ts,
-		})
+		msg = fmt.Sprintf("scrub of %s failed: %s", task.Target, err)
 	case "replication":
 		dest := ""
 		if task.DestTarget != nil {
 			dest = *task.DestTarget
 		}
-		s.emitEvent(agent.AgentEvent{
-			ID:        fmt.Sprintf("repl-fail-%d-%d", task.ID, now.UnixMilli()),
-			Type:      "replication_failed",
-			Severity:  "critical",
-			Message:   fmt.Sprintf("replication %s → %s failed: %s", task.Target, dest, err),
-			Timestamp: ts,
-		})
+		msg = fmt.Sprintf("replication %s → %s failed: %s", task.Target, dest, err)
+	default:
+		msg = fmt.Sprintf("%s task on %s failed: %s", task.TaskType, task.Target, err)
 	}
+
+	s.emitEvent(agent.AgentEvent{
+		ID:        fmt.Sprintf("job-fail-%d-%d", task.ID, now.UnixMilli()),
+		Type:      "job_failed",
+		Severity:  "critical",
+		Message:   msg,
+		Timestamp: ts,
+	})
 }
 
 // runSnapshotTask takes a snapshot and applies retention.

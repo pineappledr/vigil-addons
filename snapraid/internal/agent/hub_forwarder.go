@@ -92,7 +92,12 @@ func StartHubForwarder(ctx context.Context, collector *Collector, hubURL, psk, a
 		resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			logger.Warn("hub telemetry forward returned non-OK", "status", resp.StatusCode)
+			if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+				logger.Warn("hub telemetry forward rejected — pre-shared key mismatch (see registration log for fix)",
+					"status", resp.StatusCode, "configured_psk", pskHint(psk))
+			} else {
+				logger.Warn("hub telemetry forward returned non-OK", "status", resp.StatusCode)
+			}
 		}
 	}
 

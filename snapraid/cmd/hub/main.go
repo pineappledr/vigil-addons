@@ -136,6 +136,9 @@ func main() {
 
 			go telemetry.Run(ctx)
 
+			// Watch agent liveness and alert on online/offline transitions.
+			go aggregator.MonitorAgentLiveness(ctx)
+
 			select {
 			case <-telemetry.Ready():
 				logger.Info("upstream telemetry pipeline ready")

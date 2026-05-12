@@ -80,16 +80,37 @@ func (s *Server) getPSK() string {
 	return s.psk
 }
 
+// pskHint returns a short, non-secret identifier for a PSK: the first and
+// last four characters. Used in diagnostic logs so a mismatch can be traced
+// without leaking the key.
+func pskHint(psk string) string {
+	if len(psk) < 8 {
+		return "<empty or too short>"
+	}
+	return psk[:4] + "…" + psk[len(psk)-4:]
+}
+
 // requirePSK is middleware that validates the Authorization: Bearer <psk> header.
 func (s *Server) requirePSK(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		if !strings.HasPrefix(auth, "Bearer ") {
+			s.logger.Warn("rejected request: missing or malformed Authorization header",
+				"path", r.URL.Path, "remote_addr", r.RemoteAddr)
 			addonutil.WriteJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing or invalid authorization header"})
 			return
 		}
-		if strings.TrimPrefix(auth, "Bearer ") != s.getPSK() {
-			addonutil.WriteJSON(w, http.StatusForbidden, map[string]string{"error": "invalid pre-shared key"})
+		presented := strings.TrimPrefix(auth, "Bearer ")
+		if presented != s.getPSK() {
+			s.logger.Warn("rejected request: pre-shared key mismatch — the agent's hub_psk does not match this hub's PSK; re-run the deploy wizard or copy the PSK from the hub's PSK file into the agent config",
+				"path", r.URL.Path,
+				"remote_addr", r.RemoteAddr,
+				"expected_psk", pskHint(s.getPSK()),
+				"presented_psk", pskHint(presented),
+				"hub_psk_path", PSKPath(s.cfg.Data.RegistryPath))
+			addonutil.WriteJSON(w, http.StatusForbidden, map[string]string{
+				"error": "invalid pre-shared key: the agent's configured hub_psk does not match this hub",
+			})
 			return
 		}
 		next(w, r)

@@ -76,6 +76,7 @@ type Aggregator struct {
 	lastEventIDs      map[string]string      // agent_id → last forwarded event ID
 	lastGateMessages  map[string]string      // agent_id → last gate_failed message (dedup)
 	smartAlerted      map[string]bool        // "agent:disk" → already alerted
+	agentOnline       map[string]bool        // agent_id → last-known online state (liveness monitor)
 
 	// Cached latest telemetry per agent for API serving.
 	latestPayloads map[string]json.RawMessage // agent_id → raw payload
@@ -92,6 +93,7 @@ func NewAggregator(registry *Registry, upstream chan<- []byte, logger *slog.Logg
 		lastEventIDs:    make(map[string]string),
 		lastGateMessages: make(map[string]string),
 		smartAlerted:    make(map[string]bool),
+		agentOnline:     make(map[string]bool),
 		latestPayloads:  make(map[string]json.RawMessage),
 	}
 }

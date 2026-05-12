@@ -189,3 +189,29 @@ func TestIsResilvering(t *testing.T) {
 		}
 	}
 }
+
+func TestNotificationIcon(t *testing.T) {
+	cases := []struct {
+		eventType string
+		severity  string
+		want      string
+	}{
+		{"scheduled_job_started", "info", "▶️"},
+		{"job_complete", "info", "✅"},
+		{"scrub_completed", "info", "✅"},
+		{"job_failed", "critical", "❌"},
+		{"replication_succeeded", "info", "🔄"},
+		{"retention_cleanup_completed", "info", "🧹"},
+		{"pool_expansion_completed", "info", "➕"},
+		{"pool_degraded", "warning", "⚠️"},
+		{"some_unknown_event", "warning", "⚠️"},
+		{"some_unknown_event", "critical", "❌"},
+		{"some_unknown_event", "info", "ℹ️"},
+		{"some_unknown_event", "", "ℹ️"},
+	}
+	for _, c := range cases {
+		if got := notificationIcon(c.eventType, c.severity); got != c.want {
+			t.Errorf("notificationIcon(%q, %q) = %q, want %q", c.eventType, c.severity, got, c.want)
+		}
+	}
+}

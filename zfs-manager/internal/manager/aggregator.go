@@ -301,12 +301,49 @@ func (a *Aggregator) EmitLogLine(payload map[string]string) {
 	}
 }
 
-// emitNotification looks up the agent hostname from the registry and sends a
-// typed notification frame upstream.
+// notificationIcon returns the emoji prefix for a notification, keyed by event
+// type with a severity-based fallback. Mirrors the SnapRAID add-on's convention
+// so ZFS Manager notifications read consistently in the Vigil UI.
+func notificationIcon(eventType, severity string) string {
+	switch eventType {
+	case "job_started", "manual_job_started", "scheduled_job_started",
+		"scrub_task_started", "drive_replacement_started":
+		return "▶️"
+	case "job_complete", "manual_job_complete", "scheduled_job_complete",
+		"snapshot_task_succeeded", "scrub_completed", "resilver_completed":
+		return "✅"
+	case "job_failed":
+		return "❌"
+	case "replication_succeeded":
+		return "🔄"
+	case "retention_cleanup_completed":
+		return "🧹"
+	case "pool_expansion_completed":
+		return "➕"
+	case "pool_degraded", "pool_faulted", "device_failed":
+		return "⚠️"
+	}
+	switch severity {
+	case "critical":
+		return "❌"
+	case "warning":
+		return "⚠️"
+	default:
+		return "ℹ️"
+	}
+}
+
+// emitNotification looks up the agent hostname from the registry, prefixes the
+// message with a status icon, and sends a typed notification frame upstream.
 func (a *Aggregator) emitNotification(tc *vigilclient.TelemetryClient, agentID, eventType, severity, message string) {
 	hostname := agentID
 	if entry := a.registry.Get(agentID); entry != nil && entry.Hostname != "" {
 		hostname = entry.Hostname
+	}
+
+	msg := message
+	if icon := notificationIcon(eventType, severity); icon != "" && !strings.HasPrefix(strings.TrimSpace(msg), icon) {
+		msg = icon + " " + msg
 	}
 
 	n := vigilclient.NotificationPayload{
@@ -314,7 +351,7 @@ func (a *Aggregator) emitNotification(tc *vigilclient.TelemetryClient, agentID, 
 		Severity:  severity,
 		Source:    "zfs-manager",
 		Host:      hostname,
-		Message:   message,
+		Message:   msg,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 

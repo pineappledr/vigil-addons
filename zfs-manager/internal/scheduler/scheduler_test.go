@@ -184,8 +184,10 @@ func TestEmitFailureEvent_Snapshot(t *testing.T) {
 	if evt == nil {
 		t.Fatal("expected LastEvent to be set")
 	}
-	if evt.Type != "snapshot_task_failed" {
-		t.Errorf("type = %q, want snapshot_task_failed", evt.Type)
+	// All scheduled-task failures map to the standard Vigil "job_failed" event
+	// so they hook into the built-in Add-on/Job notification rule.
+	if evt.Type != "job_failed" {
+		t.Errorf("type = %q, want job_failed", evt.Type)
 	}
 	if evt.Severity != "critical" {
 		t.Errorf("severity = %q, want critical", evt.Severity)
@@ -200,8 +202,11 @@ func TestEmitFailureEvent_Scrub(t *testing.T) {
 	s.emitFailureEvent(agentdb.ScheduledTask{ID: 8, TaskType: "scrub", Target: "tank"},
 		errNewf("pool is suspended"))
 	evt := coll.LastEvent()
-	if evt == nil || evt.Type != "scrub_task_failed" {
-		t.Fatalf("want scrub_task_failed, got %+v", evt)
+	if evt == nil || evt.Type != "job_failed" {
+		t.Fatalf("want job_failed, got %+v", evt)
+	}
+	if !strings.Contains(evt.Message, "scrub") || !strings.Contains(evt.Message, "tank") {
+		t.Errorf("scrub failure message should mention scrub and pool, got %q", evt.Message)
 	}
 }
 
@@ -212,20 +217,41 @@ func TestEmitFailureEvent_ReplicationCarriesDest(t *testing.T) {
 		ID: 9, TaskType: "replication", Target: "tank/data", DestTarget: &dest,
 	}, errNewf("ssh: connection refused"))
 	evt := coll.LastEvent()
-	if evt == nil || evt.Type != "replication_failed" {
-		t.Fatalf("want replication_failed, got %+v", evt)
+	if evt == nil || evt.Type != "job_failed" {
+		t.Fatalf("want job_failed, got %+v", evt)
 	}
 	if !strings.Contains(evt.Message, "tank/data") || !strings.Contains(evt.Message, "backup/tank") {
 		t.Errorf("replication failure should name source and dest, got %q", evt.Message)
 	}
 }
 
-func TestEmitFailureEvent_UnknownTaskTypeEmitsNothing(t *testing.T) {
+func TestEmitFailureEvent_UnknownTaskTypeStillEmitsJobFailed(t *testing.T) {
 	s, coll := newSchedulerWithCollector(t)
 	s.emitFailureEvent(agentdb.ScheduledTask{ID: 1, TaskType: "mystery", Target: "tank"},
 		errNewf("unknown"))
-	if evt := coll.LastEvent(); evt != nil {
-		t.Errorf("expected no event for unknown task type, got %+v", evt)
+	evt := coll.LastEvent()
+	if evt == nil || evt.Type != "job_failed" {
+		t.Fatalf("want job_failed for unknown task type, got %+v", evt)
+	}
+}
+
+func TestJobEventTypeMapping(t *testing.T) {
+	cases := []struct {
+		trigger      string
+		wantStarted  string
+		wantComplete string
+	}{
+		{"manual", "manual_job_started", "manual_job_complete"},
+		{"scheduled", "scheduled_job_started", "scheduled_job_complete"},
+		{"other", "job_started", "job_complete"},
+	}
+	for _, c := range cases {
+		if got := jobStartedEventType(c.trigger); got != c.wantStarted {
+			t.Errorf("jobStartedEventType(%q) = %q, want %q", c.trigger, got, c.wantStarted)
+		}
+		if got := jobCompleteEventType(c.trigger); got != c.wantComplete {
+			t.Errorf("jobCompleteEventType(%q) = %q, want %q", c.trigger, got, c.wantComplete)
+		}
 	}
 }
 

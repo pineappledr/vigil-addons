@@ -365,13 +365,39 @@ func itoa(n int) string {
 
 // abortWithStatus records a gate failure and emits a notification with a
 // current snapraid status summary appended.
+// maxNotificationBytes caps a gate_failed notification body. A notification is
+// a headline, not a data dump: on a big diff the snapraid status summary can run
+// tens of KB, which previously blew past the hub's websocket read limit and the
+// alert was silently dropped (1009 message-too-big). The full status stays in
+// the agent logs; the notification carries the reason + a bounded summary.
+const maxNotificationBytes = 8 * 1024
+
 func (p *Pipeline) abortWithStatus(ctx context.Context, gateType, reason string) {
 	p.recordGateFailure(gateType, reason)
 	msg := "⚠️ Maintenance aborted: " + reason
 	if summary := p.fetchStatusSummary(ctx); summary != "" {
-		msg += "\n\n" + summary
+		msg += "\n\n" + truncateForNotification(summary, maxNotificationBytes)
 	}
 	p.emit("gate_failed", "warning", msg)
+}
+
+// truncateForNotification clamps s to at most n bytes, cutting on a line
+// boundary where possible and appending a clear marker so the reader knows the
+// full detail is in the logs.
+func truncateForNotification(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	const marker = "\n… (truncated — see agent logs for full status)"
+	cut := n - len(marker)
+	if cut < 0 {
+		cut = 0
+	}
+	s = s[:cut]
+	if i := strings.LastIndexByte(s, '\n'); i > 0 {
+		s = s[:i]
+	}
+	return s + marker
 }
 
 // fetchStatusSummary runs snapraid status and returns a formatted summary.

@@ -343,3 +343,35 @@ func TestParseScrubInfo(t *testing.T) {
 		})
 	}
 }
+
+func TestDevPathToName(t *testing.T) {
+	cases := map[string]string{
+		"/dev/sda2": "sda2",
+		"/dev/sda":  "sda",
+		"sda2":      "sda2", // already bare
+		"":          "",
+	}
+	for in, want := range cases {
+		if got := devPathToName(in); got != want {
+			t.Errorf("devPathToName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestParentDiskName_PartitionAndGUID(t *testing.T) {
+	cases := map[string]string{
+		"sda2":      "sda",       // partition -> parent disk
+		"sda":       "sda",       // whole disk unchanged
+		"nvme0n1p3": "nvme0n1",   // nvme partition -> parent
+		"nvme0n1":   "nvme0n1",   // nvme whole disk unchanged
+		"mmcblk0p1": "mmcblk0",   // mmc partition -> parent
+		// A by-partuuid GUID has no kernel parent; stripping trailing digits
+		// must NOT fabricate one (this is why -p output can't be relied on).
+		"79b85ece-9d17-4299-8dc9-97ba419af8ae": "79b85ece-9d17-4299-8dc9-97ba419af8ae",
+	}
+	for in, want := range cases {
+		if got := parentDiskName(in); got != want {
+			t.Errorf("parentDiskName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

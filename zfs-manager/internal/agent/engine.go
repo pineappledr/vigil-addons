@@ -506,6 +506,17 @@ func (e *Engine) ListAvailableDisks(ctx context.Context) ([]AvailableDisk, error
 		}
 	}
 
+	// `zpool status -p` (used by ListPools) prints vdev members by their
+	// /dev/disk/by-partuuid GUID when a pool is built on partitions added by
+	// path (the common case: `zpool create … /dev/sdaN` stores a partuuid).
+	// Those GUIDs can't be mapped back to a kernel name (sda) by stripping
+	// digits, so the parent whole-disk never gets marked in-use and shows up
+	// as a phantom "unused drive". Resolve members to real /dev paths with
+	// `zpool status -LP` and mark both the partition and its parent disk.
+	for _, name := range e.poolMembersByPath(ctx) {
+		addPoolMember(name)
+	}
+
 	// List all block devices via lsblk
 	out, err := e.run(ctx, "lsblk", "-Jbno", "NAME,PATH,SIZE,MODEL,SERIAL,TYPE")
 	if err != nil {
@@ -539,6 +550,16 @@ func (e *Engine) ListAvailableDisks(ctx context.Context) ([]AvailableDisk, error
 		if poolDisks[dev.Name] {
 			continue
 		}
+		// Skip partitions whose parent disk is already a pool member — a disk
+		// hosting an active pool partition (e.g. sda2) often also carries
+		// leftover partitions from a previous install (e.g. an mdraid sda1).
+		// Those siblings are not free space and must not be offered for a new
+		// pool.
+		if dev.Type == "part" {
+			if parent := parentDiskName(dev.Name); parent != dev.Name && poolDisks[parent] {
+				continue
+			}
+		}
 		var size uint64
 		switch v := dev.Size.(type) {
 		case float64:
@@ -556,6 +577,48 @@ func (e *Engine) ListAvailableDisks(ctx context.Context) ([]AvailableDisk, error
 		})
 	}
 	return available, nil
+}
+
+// poolMembersByPath returns the kernel device names (e.g. "sda2") of every
+// vdev member across all pools, resolved via `zpool status -LP` which prints
+// real /dev paths instead of the by-partuuid GUIDs that `zpool status -p`
+// shows. Best-effort: returns nil on any error so the caller still works from
+// the GUID-based topology it already gathered.
+func (e *Engine) poolMembersByPath(ctx context.Context) []string {
+	names := e.poolNames(ctx)
+	var members []string
+	for _, pool := range names {
+		out, err := e.runZpool(ctx, "status", "-LP", pool)
+		if err != nil {
+			e.logger.Debug("zpool status -LP failed", "pool", pool, "error", err)
+			continue
+		}
+		for _, vdev := range parseVdevTopology(out) {
+			for _, disk := range vdev.Disks {
+				members = append(members, devPathToName(disk.Name))
+			}
+			if vdev.Type == "disk" {
+				members = append(members, devPathToName(vdev.Name))
+			}
+		}
+	}
+	return members
+}
+
+// poolNames returns just the names of the imported pools, without the extra
+// per-pool `zpool status` calls that ListPools makes.
+func (e *Engine) poolNames(ctx context.Context) []string {
+	out, err := e.runZpool(ctx, "list", "-Hp", "-o", "name")
+	if err != nil {
+		return nil
+	}
+	return splitLines(out)
+}
+
+// devPathToName strips a leading "/dev/" so a path like "/dev/sda2" becomes
+// the bare kernel name "sda2" that lsblk reports. Non-path inputs pass through.
+func devPathToName(s string) string {
+	return strings.TrimPrefix(s, "/dev/")
 }
 
 // ReplaceDevice initiates a drive replacement in a pool.

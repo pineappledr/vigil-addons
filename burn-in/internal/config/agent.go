@@ -11,8 +11,8 @@ import (
 
 // AgentConfig holds all configuration for the burn-in agent.
 type AgentConfig struct {
-	Hub   AgentHubConfig   `json:"hub"`
-	Agent AgentNodeConfig  `json:"agent"`
+	Hub   AgentHubConfig  `json:"hub"`
+	Agent AgentNodeConfig `json:"agent"`
 }
 
 type AgentHubConfig struct {
@@ -46,7 +46,19 @@ func LoadAgentConfig() (*AgentConfig, error) {
 	}
 
 	if path := os.Getenv("BURNIN_CONFIG_FILE"); path != "" {
-		data, err := os.ReadFile(filepath.Clean(path))
+		// Validación INLINE (ver la nota en hub.go: gosec no sigue la
+		// comprobación a través de una función auxiliar).
+		// El ".." se comprueba ANTES de limpiar (ver la nota en hub.go).
+		if strings.Contains(path, "..") {
+			return nil, fmt.Errorf("config path must not contain %q: %q", "..", path)
+		}
+		clean := filepath.Clean(path)
+		if !filepath.IsAbs(clean) {
+			return nil, fmt.Errorf("config path must be absolute: %q", path)
+		}
+		// #nosec G703 -- ver la nota en hub.go: `clean` está validada; el aviso
+		// es por el origen del dato, no por falta de comprobación.
+		data, err := os.ReadFile(clean)
 		if err != nil {
 			return nil, fmt.Errorf("reading config file: %w", err)
 		}

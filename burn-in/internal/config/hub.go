@@ -13,9 +13,9 @@ import (
 
 // HubConfig holds all configuration for the burn-in hub.
 type HubConfig struct {
-	Vigil  VigilConfig  `json:"vigil"`
-	Hub    HubServer    `json:"hub"`
-	Alerts AlertConfig  `json:"alerts"`
+	Vigil  VigilConfig `json:"vigil"`
+	Hub    HubServer   `json:"hub"`
+	Alerts AlertConfig `json:"alerts"`
 }
 
 type VigilConfig struct {
@@ -93,7 +93,25 @@ func LoadHubConfig() (*HubConfig, error) {
 }
 
 func loadFromFile(cfg *HubConfig, path string) error {
-	data, err := os.ReadFile(filepath.Clean(path))
+	// La ruta llega por BURNIN_CONFIG_FILE, o sea la pone el operador. Aun así
+	// se valida: gosec la marca como G703 y, más allá del aviso, un despliegue
+	// que componga esa variable a partir de algo ajeno sí sería un problema
+	// real. La comprobación va INLINE a propósito: el taint analysis de gosec
+	// no la sigue a través de una función auxiliar.
+	// El ".." se comprueba ANTES de limpiar: Clean("/a/../../etc/shadow")
+	// devuelve "/etc/shadow", que es absoluta y ya no contiene ".." — o sea,
+	// mirar sólo el resultado deja pasar justo el caso que se quiere impedir.
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("config path must not contain %q: %q", "..", path)
+	}
+	clean := filepath.Clean(path)
+	if !filepath.IsAbs(clean) {
+		return fmt.Errorf("config path must be absolute: %q", path)
+	}
+	// #nosec G703 -- `clean` ya está validada arriba (absoluta, sin ".."), pero
+	// el taint analysis marca cualquier ReadFile cuyo argumento venga del
+	// entorno, valide uno o no. Mismo patrón que los #nosec de hub/router.go.
+	data, err := os.ReadFile(clean)
 	if err != nil {
 		return err
 	}
@@ -149,4 +167,3 @@ func loadOrGeneratePSK(dataDir string) (string, error) {
 
 	return psk, nil
 }
-

@@ -20,7 +20,7 @@ env:
   REGISTRY: ghcr.io
   MANAGER_IMAGE: ghcr.io/pineappledr/vigil-addons-zfs-manager
   AGENT_IMAGE: ghcr.io/pineappledr/vigil-addons-zfs-agent
-  GO_VERSION: '1.26.5'
+  GO_VERSION: '1.26.8'
   WORKDIR: zfs-manager
   # Opt every JavaScript action in this workflow (including transitive ones
   # like actions/cache pulled in by setup-go and docker/build-push-action)

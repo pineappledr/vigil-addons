@@ -1008,8 +1008,24 @@ func parseScrubInfo(statusOutput string) (lastScrub, scrubStatus string) {
 				scrubStatus = "canceled"
 			} else if strings.Contains(rest, "scrub paused") {
 				scrubStatus = "paused"
-			} else if strings.Contains(rest, "resilver") {
+			} else if strings.Contains(rest, "resilver in progress") {
 				scrubStatus = "resilvering"
+			} else if strings.Contains(rest, "resilvered") {
+				// "resilvered 111G in 00:43:00 with 0 errors on Wed Sep  2 11:31:38 2026"
+				// A finished resilver, not a running one: the substring "resilver"
+				// also matches "resilvered", so this must be checked separately or
+				// the pool reads as resilvering forever.
+				if idx := strings.Index(rest, " on "); idx != -1 {
+					dateStr := strings.TrimSpace(rest[idx+4:])
+					if t, err := time.Parse("Mon Jan  2 15:04:05 2006", dateStr); err == nil {
+						lastScrub = t.UTC().Format(time.RFC3339)
+					} else if t, err := time.Parse("Mon Jan 2 15:04:05 2006", dateStr); err == nil {
+						lastScrub = t.UTC().Format(time.RFC3339)
+					} else {
+						lastScrub = dateStr
+					}
+				}
+				scrubStatus = "completed"
 			} else if strings.Contains(rest, "none requested") {
 				scrubStatus = "none"
 			}

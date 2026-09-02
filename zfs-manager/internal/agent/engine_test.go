@@ -330,6 +330,20 @@ func TestParseScrubInfo(t *testing.T) {
 			input:      "  scan: scrub paused since Mon Apr  7 03:00:00 2026",
 			wantStatus: "paused",
 		},
+		{
+			name:       "resilver_in_progress",
+			input:      "  scan: resilver in progress since Wed Sep  2 10:48:38 2026\n\t111G scanned at 43.2M/s, 2.96G issued at 11.5M/s, 3.46T total\n\t2.97G resilvered, 0.08% done",
+			wantStatus: "resilvering",
+		},
+		{
+			// Regression: "resilvered" contains the substring "resilver", so a
+			// finished resilver was reported as still running -- Brain's pool
+			// showed "Resilver 0%" for hours after it completed.
+			name:       "resilver_completed",
+			input:      "  scan: resilvered 111G in 00:43:00 with 0 errors on Wed Sep  2 11:31:38 2026",
+			wantLast:   "2026-09-02T11:31:38Z",
+			wantStatus: "completed",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

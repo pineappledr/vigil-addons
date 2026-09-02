@@ -1,6 +1,6 @@
 {
   "name": "SnapRAID",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "SnapRAID array management and automation",
   "author": "Vigil Add-ons",
   "docker_image": "ghcr.io/pineappledr/vigil-addons-snapraid-hub:latest",

@@ -20,7 +20,7 @@ env:
   REGISTRY: ghcr.io
   HUB_IMAGE: ghcr.io/pineappledr/vigil-addons-snapraid-hub
   AGENT_IMAGE: ghcr.io/pineappledr/vigil-addons-snapraid-agent
-  GO_VERSION: '1.26.5'
+  GO_VERSION: '1.26.8'
   WORKDIR: snapraid
   # Opt every JavaScript action in this workflow (including transitive ones
   # like actions/cache pulled in by setup-go and docker/build-push-action)

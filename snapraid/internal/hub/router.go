@@ -22,6 +22,29 @@ type CommandRouter struct {
 	registry *Registry
 	client   *http.Client
 	logger   *slog.Logger
+	// psk returns the hub's current pre-shared key. Agents require it on the
+	// endpoints that change the array (execute, abort, config).
+	psk func() string
+}
+
+// SetPSKSource sets where the router reads the PSK it presents to agents.
+func (cr *CommandRouter) SetPSKSource(psk func() string) {
+	cr.psk = psk
+}
+
+// post sends an authenticated POST to an agent.
+func (cr *CommandRouter) post(url string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodPost, url, body) // #nosec G704 -- url is a registered agent
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cr.psk != nil {
+		if k := cr.psk(); k != "" {
+			req.Header.Set("Authorization", "Bearer "+k)
+		}
+	}
+	return cr.client.Do(req)
 }
 
 // NewCommandRouter creates a CommandRouter wired to the Agent registry.
@@ -78,7 +101,7 @@ func (cr *CommandRouter) postAgent(agent *AgentEntry, path string, body []byte, 
 		bodyReader = bytes.NewReader(body)
 	}
 
-	resp, err := cr.client.Post(url, "application/json", bodyReader)
+	resp, err := cr.post(url, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("forward to agent %s: %w", agentID, err)
 	}
@@ -162,7 +185,7 @@ func (cr *CommandRouter) RouteConfigUpdate(agentID string, configPayload []byte)
 	url := fmt.Sprintf("%s/api/config", agent.Address)
 	cr.logger.Info("routing config update to agent", "agent_id", agentID, "url", url)
 
-	resp, err := cr.client.Post(url, "application/json", bytes.NewReader(configPayload))
+	resp, err := cr.post(url, bytes.NewReader(configPayload))
 	if err != nil {
 		return fmt.Errorf("forward config to agent %s: %w", agentID, err)
 	}

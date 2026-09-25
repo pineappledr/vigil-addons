@@ -39,6 +39,9 @@ func NewServer(cfg *config.HubConfig, registry *Registry, aggregator *Aggregator
 		logger:      logger,
 		psk:         psk,
 	}
+	if router != nil {
+		router.SetPSKSource(s.getPSK)
+	}
 	s.routes()
 	return s
 }

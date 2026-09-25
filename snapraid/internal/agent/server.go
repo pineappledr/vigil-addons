@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -47,16 +49,23 @@ func NewServer(cfg *config.AgentConfig, eng *engine.Engine, database *sql.DB, co
 		mux:      http.NewServeMux(),
 		logger:   logger,
 	}
+	if cfg.Hub.PSK == "" {
+		logger.Warn("no hub PSK configured: /api/execute, /api/abort and POST /api/config are open to anyone who can reach this port")
+	}
 	s.routes()
 	return s
 }
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
-	s.mux.HandleFunc("POST /api/execute", s.handleExecute)
-	s.mux.HandleFunc("POST /api/abort", s.handleAbort)
+	// The three endpoints that CHANGE the array (run sync/fix/scrub, abort a
+	// job, rewrite the config — e.g. the max_deleted gate) require the hub PSK.
+	// They were open to the whole LAN: anyone could run `fix` or raise the
+	// deletion threshold and then `sync`, cementing a loss into the parity.
+	s.mux.HandleFunc("POST /api/execute", s.requirePSK(s.handleExecute))
+	s.mux.HandleFunc("POST /api/abort", s.requirePSK(s.handleAbort))
 	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
-	s.mux.HandleFunc("POST /api/config", s.handleConfig)
+	s.mux.HandleFunc("POST /api/config", s.requirePSK(s.handleConfig))
 	s.mux.HandleFunc("GET /api/jobs", s.handleJobs)
 	s.mux.HandleFunc("GET /api/jobs/history", s.handleJobHistory)
 	s.mux.HandleFunc("GET /api/jobs/{id}", s.handleJobDetail)
@@ -70,6 +79,27 @@ func (s *Server) routes() {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprint(w, `{"status":"ok"}`)
+}
+
+// requirePSK allows the request only with `Authorization: Bearer <hub PSK>`,
+// the same key the agent uses to talk to its hub. An agent with no PSK
+// configured (standalone, no hub) stays open, as before, and says so at startup.
+func (s *Server) requirePSK(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		psk := s.cfg.Hub.PSK
+		if psk == "" {
+			next(w, r)
+			return
+		}
+		auth := r.Header.Get("Authorization")
+		presented, hasBearer := strings.CutPrefix(auth, "Bearer ")
+		if !hasBearer || subtle.ConstantTimeCompare([]byte(presented), []byte(psk)) != 1 {
+			s.logger.Warn("rejected unauthenticated request", "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+			addonutil.WriteJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing or invalid pre-shared key"})
+			return
+		}
+		next(w, r)
+	}
 }
 
 // ExecuteRequest is the payload for POST /api/execute.

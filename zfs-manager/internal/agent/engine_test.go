@@ -374,11 +374,11 @@ func TestDevPathToName(t *testing.T) {
 
 func TestParentDiskName_PartitionAndGUID(t *testing.T) {
 	cases := map[string]string{
-		"sda2":      "sda",       // partition -> parent disk
-		"sda":       "sda",       // whole disk unchanged
-		"nvme0n1p3": "nvme0n1",   // nvme partition -> parent
-		"nvme0n1":   "nvme0n1",   // nvme whole disk unchanged
-		"mmcblk0p1": "mmcblk0",   // mmc partition -> parent
+		"sda2":      "sda",     // partition -> parent disk
+		"sda":       "sda",     // whole disk unchanged
+		"nvme0n1p3": "nvme0n1", // nvme partition -> parent
+		"nvme0n1":   "nvme0n1", // nvme whole disk unchanged
+		"mmcblk0p1": "mmcblk0", // mmc partition -> parent
 		// A by-partuuid GUID has no kernel parent; stripping trailing digits
 		// must NOT fabricate one (this is why -p output can't be relied on).
 		"79b85ece-9d17-4299-8dc9-97ba419af8ae": "79b85ece-9d17-4299-8dc9-97ba419af8ae",
@@ -389,3 +389,33 @@ func TestParentDiskName_PartitionAndGUID(t *testing.T) {
 		}
 	}
 }
+
+func TestParseScrubResult(t *testing.T) {
+	cases := []struct {
+		name, input, wantRepaired string
+		wantErrors                *int
+	}{
+		{"clean", "  scan: scrub repaired 0B in 01:23:45 with 0 errors on Sun Apr  6 02:00:01 2026", "0B", intp(0)},
+		{"found errors", "  scan: scrub repaired 12K in 03:00:01 with 3 errors on Sun Apr  6 02:00:01 2026", "12K", intp(3)},
+		{"none requested", "  scan: none requested", "", nil},
+		{"in progress", "  scan: scrub in progress since Mon Apr  7 02:00:01 2026\n\t0B repaired, 38.93% done", "", nil},
+		{"canceled", "  scan: scrub canceled on Mon Apr  7 03:00:00 2026", "", nil},
+		{"resilvered", "  scan: resilvered 111G in 00:43:00 with 0 errors on Wed Sep  2 11:31:38 2026", "", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rep, errs := parseScrubResult(tc.input)
+			if rep != tc.wantRepaired {
+				t.Errorf("repaired = %q, want %q", rep, tc.wantRepaired)
+			}
+			switch {
+			case tc.wantErrors == nil && errs != nil:
+				t.Errorf("errors = %d, want nil (unknown must not read as a number)", *errs)
+			case tc.wantErrors != nil && (errs == nil || *errs != *tc.wantErrors):
+				t.Errorf("errors = %v, want %d", errs, *tc.wantErrors)
+			}
+		})
+	}
+}
+
+func intp(n int) *int { return &n }

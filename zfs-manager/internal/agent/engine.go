@@ -90,16 +90,20 @@ func (e *Engine) Capabilities() Capabilities {
 
 // PoolInfo is the telemetry payload for a single pool.
 type PoolInfo struct {
-	Name        string     `json:"name"`
-	Health      string     `json:"health"`
-	Size        uint64     `json:"size"`
-	Alloc       uint64     `json:"alloc"`
-	Free        uint64     `json:"free"`
-	Frag        int        `json:"frag"`
-	Dedup       float64    `json:"dedup"`
-	LastScrub   string     `json:"last_scrub"`
-	ScrubStatus string     `json:"scrub_status"`
-	Vdevs       []VdevInfo `json:"vdevs,omitempty"`
+	Name        string  `json:"name"`
+	Health      string  `json:"health"`
+	Size        uint64  `json:"size"`
+	Alloc       uint64  `json:"alloc"`
+	Free        uint64  `json:"free"`
+	Frag        int     `json:"frag"`
+	Dedup       float64 `json:"dedup"`
+	LastScrub   string  `json:"last_scrub"`
+	ScrubStatus string  `json:"scrub_status"`
+	// Result of the last COMPLETED scrub, from "scrub repaired <X> in … with <N> errors".
+	// Nil/empty when there is none: callers must not read a missing value as "0 errors".
+	ScrubRepaired string     `json:"scrub_repaired,omitempty"`
+	ScrubErrors   *int       `json:"scrub_errors,omitempty"`
+	Vdevs         []VdevInfo `json:"vdevs,omitempty"`
 }
 
 // VdevInfo describes a vdev in a pool topology.
@@ -175,6 +179,7 @@ func (e *Engine) ListPools(ctx context.Context) ([]PoolInfo, error) {
 		scrubOut, err := e.runZpool(ctx, "status", "-p", pool.Name)
 		if err == nil {
 			pool.LastScrub, pool.ScrubStatus = parseScrubInfo(scrubOut)
+			pool.ScrubRepaired, pool.ScrubErrors = parseScrubResult(scrubOut)
 			pool.Vdevs = parseVdevTopology(scrubOut)
 		}
 
@@ -971,6 +976,28 @@ func exitCode(err error) int {
 		return exitErr.ExitCode()
 	}
 	return -1
+}
+
+// parseScrubResult extracts what the last completed scrub found, from
+// "scan: scrub repaired 0B in 01:23:45 with 0 errors on …". It returns ("", nil)
+// when there is no completed scrub (none requested, in progress, canceled,
+// resilver) so that "unknown" is never reported as "0 errors" — clearing
+// device error counters is only safe after a scrub that verifiably found none.
+func parseScrubResult(statusOutput string) (repaired string, errors *int) {
+	for _, line := range strings.Split(statusOutput, "\n") {
+		f := strings.Fields(strings.TrimSpace(line))
+		// scan: scrub repaired <X> in <T> with <N> errors on …
+		if len(f) < 9 || f[0] != "scan:" || f[1] != "scrub" || f[2] != "repaired" ||
+			f[4] != "in" || f[6] != "with" || f[8] != "errors" {
+			continue
+		}
+		n, err := strconv.Atoi(f[7])
+		if err != nil {
+			return f[3], nil
+		}
+		return f[3], &n
+	}
+	return "", nil
 }
 
 // parseScrubInfo extracts last scrub date and current scrub status from zpool status output.

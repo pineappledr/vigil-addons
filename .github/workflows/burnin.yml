@@ -21,7 +21,7 @@ env:
   HUB_IMAGE: ghcr.io/pineappledr/vigil-addons-burnin-hub
   AGENT_IMAGE: ghcr.io/pineappledr/vigil-addons-burnin-agent
   AGENT_IMAGE_DEBIAN: ghcr.io/pineappledr/vigil-addons-burnin-agent-debian
-  GO_VERSION: '1.26.8'
+  GO_VERSION: '1.26.10'
   WORKDIR: burn-in
   # Opt every JavaScript action in this workflow (including transitive ones
   # like actions/cache pulled in by setup-go and docker/build-push-action)
@@ -163,7 +163,11 @@ jobs:
     name: PR Preview
     needs: [test, security]
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    # Skip preview-image builds for PRs from forks: GitHub forces GITHUB_TOKEN to
+    # read-only on fork PRs, so the push to ghcr.io fails with
+    # "denied: installation not allowed to Write organization package".
+    # Test/Lint/Security still run on fork PRs to validate the code.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
       packages: write
